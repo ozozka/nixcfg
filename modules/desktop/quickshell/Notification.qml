@@ -130,8 +130,8 @@ Scope {
 
         Image {
           id: notificationImage
-          width: 36
-          height: 36
+          width: card.theme.dimM
+          height: card.theme.dimM
           visible: source.toString().length > 0
           source: card.imageSource()
           fillMode: Image.PreserveAspectCrop
@@ -139,7 +139,8 @@ Scope {
         }
 
         Text {
-          width: parent.width - (notificationImage.visible ? 36 + parent.spacing : 0)
+          width: parent.width - (notificationImage.visible ? notificationImage.width + parent.spacing : 0)
+                 - arrivalTime.width - parent.spacing
           color: card.theme.colF
           font.family: "sans-serif"
           font.pointSize: card.theme.fontSizeM
@@ -153,6 +154,15 @@ Scope {
 
           text: "<b>" + escapeHeading(card.notification?.appName ?? "") + "</b> - " + escapeHeading(card.notification
                                                                                                     ?.summary ?? "")
+        }
+
+        Text {
+          id: arrivalTime
+          text: Qt.formatDateTime(card.notificationState.receivedAt, "HH:mm")
+          color: card.theme.colM
+          font.family: "monospace"
+          font.pointSize: card.theme.fontSizeM
+          horizontalAlignment: Text.AlignRight
         }
       }
 
@@ -194,7 +204,8 @@ Scope {
       onNotification: notification => {
         notification.tracked = true;
         const state = stateComponent.createObject(store, {
-                                                    notification: notification
+                                                    notification: notification,
+                                                    receivedAt: new Date()
                                                   });
         store.promote(state);
       }
@@ -205,6 +216,7 @@ Scope {
       QtObject {
         id: state
         required property var notification
+        required property date receivedAt
         property bool refreshPending: false
 
         function refresh() {
