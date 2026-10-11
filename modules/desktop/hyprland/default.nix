@@ -12,7 +12,7 @@ in
   imports = [ ../../options.nix ];
 
   options.ozozka.mod.desktop.hypr = {
-    mirrorIntegrated = lib.mkEnableOption "mirrorIntegrated";
+    mirrorIntegratedMonitor = lib.mkEnableOption "mirrorIntegrated";
   };
 
   config = {
@@ -40,7 +40,7 @@ in
         "xdg/hypr/hyprland.lua".source = ./hyprland.lua;
         "xdg/hypr/options.lua".text = ''
           return {
-            monitor = ${if cfg.mod.desktop.hypr.mirrorIntegrated then "3" else "1"},
+            monitor = ${if cfg.mod.desktop.hypr.mirrorIntegratedMonitor then "3" else "1"},
             keyboard = {
               layout = '${cfg.keyboard.layout}',
               options = '${cfg.keyboard.options}',

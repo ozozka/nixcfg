@@ -25,13 +25,15 @@ inputs.nixpkgs.lib.nixosSystem {
       networking.hostName = "ouz";
 
       specialisation = {
-        # Uses integrated gpu and laptop monitor
         mobile = {
           inheritParentConfig = true;
           configuration = {
             system.nixos.tags = [ "mobile" ];
 
-            # my.desktop.external = lib.mkForce false;
+            ozozka.mod = {
+              desktop.hypr.mirrorIntegratedMonitor = true;
+              hardware.nvidia.integratedGpuPrimary = true;
+            };
           };
         };
       };
