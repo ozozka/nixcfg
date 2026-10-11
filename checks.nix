@@ -29,10 +29,7 @@ in
               fsType = lib.mkDefault "ext4";
             };
 
-            boot.loader.grub = {
-              enable = lib.mkDefault true;
-              device = lib.mkDefault "nodev";
-            };
+            boot.loader.systemd-boot.enable = lib.mkDefault true;
           }
         ];
       };
