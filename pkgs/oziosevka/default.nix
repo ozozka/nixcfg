@@ -23,6 +23,7 @@ pkgs.iosevka.override {
     capital-g = "toothless-rounded-serifless-hooked"
     capital-m = "flat-bottom-serifless"
     capital-w = "straight-flat-top-serifless"
+    a = "single-storey-serifless"
     f = "flat-hook-serifless"
     g = "single-storey-serifless"
     i = "hooky"
@@ -92,7 +93,7 @@ pkgs.iosevka.override {
     css = 800
 
     [buildPlans.IosevkaOziosevka.widths.Normal]
-    shape = 600
+    shape = 500
     menu = 5
     css = "normal"
 
