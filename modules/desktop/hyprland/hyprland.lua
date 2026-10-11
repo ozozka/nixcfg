@@ -149,7 +149,14 @@ local mainMod = "SUPER"
 
 hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd "qs ipc call lock lock")
 hl.bind(mainMod .. " + A", hl.dsp.exec_cmd "qs ipc call menu toggle")
-hl.bind(mainMod .. " + P", hl.dsp.exec_cmd "grim")
+hl.bind(
+  mainMod .. " + P",
+  hl.dsp.exec_cmd [[sh -c 'geometry=$(slurp) || exit; dir="$HOME/Pictures/Screenshots"; mkdir -p "$dir" && file="$dir/$(date +%Y-%m-%d_%H-%M-%S_%N).png" && grim -g "$geometry" "$file" && wl-copy --type image/png < "$file"']]
+)
+hl.bind(
+  mainMod .. " + SHIFT + P",
+  hl.dsp.exec_cmd [[sh -c 'dir="$HOME/Pictures/Screenshots"; mkdir -p "$dir" && file="$dir/$(date +%Y-%m-%d_%H-%M-%S_%N).png" && grim "$file" && wl-copy --type image/png < "$file"']]
+)
 hl.bind(mainMod .. " + W", hl.dsp.exec_cmd "thunar")
 hl.bind(mainMod .. " + E", hl.dsp.exec_cmd "emacsclient -c")
 hl.bind(mainMod .. " + Return", hl.dsp.exec_cmd "alacritty")

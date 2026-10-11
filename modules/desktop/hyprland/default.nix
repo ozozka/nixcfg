@@ -25,6 +25,12 @@ in
     };
 
     environment = {
+      systemPackages = with pkgs; [
+        grim
+        slurp
+        wl-clipboard
+      ];
+
       loginShellInit = ''
         if [ -z "$DISPLAY" ] \
           && [ -z "$WAYLAND_DISPLAY" ] \
