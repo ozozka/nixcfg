@@ -19,6 +19,11 @@ in
       "nvidia-settings"
     ];
 
+    nix.settings = {
+      substituters = [ "https://cache.nixos-cuda.org" ];
+      trusted-public-keys = [ "cache.nixos-cuda.org:74DUi4Ye579gUqzH4ziL9IyiJBlDpMRn9MBN8oNan9M=" ];
+    };
+
     services = {
       xserver.videoDrivers = [ "nvidia" ];
       udev.extraRules = ''
@@ -39,11 +44,10 @@ in
         package = config.boot.kernelPackages.nvidiaPackages.latest;
         open = true;
         nvidiaSettings = true;
-        # forceFullCompositionPipeline = true;
         nvidiaPersistenced = !cfg.integratedGpuPrimary;
         modesetting.enable = true;
         powerManagement = {
-          enable = false;
+          enable = true;
           finegrained = cfg.integratedGpuPrimary;
         };
         prime = {
@@ -57,13 +61,7 @@ in
       };
     };
 
-    nix.settings = {
-      substituters = [ "https://cache.nixos-cuda.org" ];
-      trusted-public-keys = [ "cache.nixos-cuda.org:74DUi4Ye579gUqzH4ziL9IyiJBlDpMRn9MBN8oNan9M=" ];
-    };
-
     systemd.services.nvidia-uvm = {
-      enable = !cfg.integratedGpuPrimary;
       description = "Load NVIDIA UVM module for CUDA";
       wantedBy = [ "multi-user.target" ];
       after = [ "systemd-modules-load.service" ];
@@ -75,10 +73,6 @@ in
     };
 
     environment.sessionVariables = {
-      # LIBVA_DRIVER_NAME = nvidia
-      # GBM_BACKEND = nvidia-drm
-      # __GLX_VENDOR_LIBRARY_NAME = nvidia
-      # NVD_BACKEND = direct
       AQ_DRM_DEVICES =
         if cfg.integratedGpuPrimary then
           "/dev/dri/by-driver/intel-card:/dev/dri/by-driver/nvidia-card"
