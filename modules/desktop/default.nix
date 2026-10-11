@@ -106,6 +106,7 @@ in
     systemPackages = with pkgs; [
       mpv
       vanilla-dmz
+      playerctl
       wl-clipboard
     ];
   };

@@ -60,7 +60,6 @@ local monitors = {
     hl.monitor {
       output = outs.hdmi.internal,
       disabled = false,
-      -- mode = "1920x1080@165",
       position = "auto",
       scale = 1,
       mirror = outs.hdmi.external,
@@ -75,16 +74,15 @@ monitors[1]()
 hl.config {
   general = {
     border_size = 0,
-    gaps_in = 6,
-    gaps_out = 12,
+    gaps_in = 0,
+    gaps_out = 0,
     allow_tearing = false,
   },
   decoration = {
     rounding = 0,
-    inactive_opacity = 0.92,
-    -- dim_inactive = true,
-    -- dim_strength = 0.36,
-    -- dim_special = 0.36,
+    dim_inactive = true,
+    dim_strength = 0.24,
+    dim_special = 0.24,
     blur = { enabled = false },
     shadow = { enabled = false },
   },
@@ -117,7 +115,7 @@ hl.config {
     -- vrr = 1,
     -- vfr = true,
     close_special_on_empty = true,
-    render_unfocused_fps = 15,
+    render_unfocused_fps = 30,
   },
   binds = {
     scroll_event_delay = 0,
@@ -136,50 +134,6 @@ hl.config {
     new_status = "master",
     orientation = "right",
   },
-}
-
-hl.curve("easeOutQuint", { type = "bezier", points = { { 0.23, 1 }, { 0.32, 1 } } })
-hl.curve("easeInOutCubic", { type = "bezier", points = { { 0.65, 0.05 }, { 0.36, 1 } } })
-hl.curve("linear", { type = "bezier", points = { { 0, 0 }, { 1, 1 } } })
-hl.curve("almostLinear", { type = "bezier", points = { { 0.5, 0.5 }, { 0.75, 1 } } })
-hl.curve("quick", { type = "bezier", points = { { 0.15, 0 }, { 0.1, 1 } } })
-hl.curve("easy", { type = "spring", mass = 1, stiffness = 71.2633, dampening = 15.8273644 })
-
-hl.animation { leaf = "global", enabled = true, speed = 1.0, bezier = "default" }
-hl.animation { leaf = "border", enabled = true, speed = 1.0, bezier = "easeOutQuint" }
-hl.animation { leaf = "windows", enabled = true, speed = 1.0, spring = "easy" }
-hl.animation { leaf = "windowsIn", enabled = true, speed = 1.0, spring = "easy", style = "popin 87%" }
-hl.animation { leaf = "windowsOut", enabled = true, speed = 1.0, bezier = "linear", style = "popin 87%" }
-hl.animation { leaf = "fadeIn", enabled = true, speed = 1.0, bezier = "almostLinear" }
-hl.animation { leaf = "fadeOut", enabled = true, speed = 1.0, bezier = "almostLinear" }
-hl.animation { leaf = "fade", enabled = true, speed = 1.0, bezier = "quick" }
-hl.animation { leaf = "layers", enabled = true, speed = 1.0, bezier = "easeOutQuint" }
-hl.animation { leaf = "layersIn", enabled = true, speed = 1.0, bezier = "easeOutQuint", style = "fade" }
-hl.animation { leaf = "layersOut", enabled = true, speed = 1.0, bezier = "linear", style = "fade" }
-hl.animation { leaf = "fadeLayersIn", enabled = true, speed = 1.0, bezier = "almostLinear" }
-hl.animation { leaf = "fadeLayersOut", enabled = true, speed = 1.0, bezier = "almostLinear" }
-hl.animation { leaf = "workspaces", enabled = false }
-hl.animation { leaf = "zoomFactor", enabled = true, speed = 7, bezier = "quick" }
-
-hl.workspace_rule { workspace = "w[tv1]", gaps_out = 0, gaps_in = 0 }
-hl.workspace_rule { workspace = "f[1]", gaps_out = 0, gaps_in = 0 }
-hl.window_rule {
-  name = "no-gaps-wtv1",
-  match = { float = false, workspace = "w[tv1]" },
-  border_size = 0,
-  rounding = 0,
-}
-hl.window_rule {
-  name = "no-gaps-f1",
-  match = { float = false, workspace = "f[1]" },
-  border_size = 0,
-  rounding = 0,
-}
-
-hl.gesture {
-  fingers = 3,
-  direction = "horizontal",
-  action = "workspace",
 }
 
 hl.window_rule {
@@ -281,7 +235,6 @@ hl.window_rule {
 hl.window_rule {
   name = "move-hyprland-run",
   match = { class = "hyprland-run" },
-
   move = "20 monitor_h-120",
   float = true,
 }
