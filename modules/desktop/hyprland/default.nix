@@ -1,32 +1,57 @@
-{ pkgs, ... }:
-
 {
-  programs = {
-    hyprland = {
-      enable = true;
-      withUWSM = true;
-      xwayland.enable = true;
-    };
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+
+let
+  cfg = config.ozozka;
+in
+{
+  imports = [ ../../options.nix ];
+
+  options.ozozka.mod.desktop.hypr = {
+    mirrorIntegrated = lib.mkEnableOption "mirrorIntegrated";
   };
 
-  environment = {
-    loginShellInit = ''
-      if [ -z "$DISPLAY" ] \
-        && [ -z "$WAYLAND_DISPLAY" ] \
-        && [ "$(tty)" = "/dev/tty1" ] \
-        && uwsm check may-start \
-      ; then
-        exec uwsm start hyprland.desktop
-      fi
-    '';
-
-    etc = {
-      "xdg/hypr/stubs".source = "${pkgs.hyprland}/share/hypr/stubs";
-      "xdg/hypr/hyprland.lua".source = ./hyprland.lua;
+  config = {
+    programs = {
+      hyprland = {
+        enable = true;
+        withUWSM = true;
+        xwayland.enable = true;
+      };
     };
 
-    sessionVariables = {
-      NIXOS_OZONE_WL = "1";
+    environment = {
+      loginShellInit = ''
+        if [ -z "$DISPLAY" ] \
+          && [ -z "$WAYLAND_DISPLAY" ] \
+          && [ "$(tty)" = "/dev/tty1" ] \
+          && uwsm check may-start \
+        ; then
+          exec uwsm start hyprland.desktop
+        fi
+      '';
+
+      etc = {
+        "xdg/hypr/stubs".source = "${pkgs.hyprland}/share/hypr/stubs";
+        "xdg/hypr/hyprland.lua".source = ./hyprland.lua;
+        "xdg/hypr/options.lua".text = ''
+          return {
+            monitor = ${if cfg.mod.desktop.hypr.mirrorIntegrated then "3" else "1"},
+            keyboard = {
+              layout = '${cfg.keyboard.layout}',
+              options = '${cfg.keyboard.options}',
+            },
+          }
+        '';
+      };
+
+      sessionVariables = {
+        NIXOS_OZONE_WL = "1";
+      };
     };
   };
 }

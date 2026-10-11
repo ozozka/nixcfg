@@ -1,6 +1,11 @@
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 
+let
+  cfg = config.ozozka;
+in
 {
+  imports = [ ../options.nix ];
+
   environment = {
     systemPackages = with pkgs; [ gh ];
 
@@ -20,8 +25,8 @@
       pull.rebase = true;
       push.autoSetupRemote = true;
       user = {
-        name = "Oğuzhan Özkaya";
-        email = "ozkaya.ogzhn@gmail.com";
+        name = cfg.user.fullname;
+        email = cfg.user.email;
       };
 
       alias = {

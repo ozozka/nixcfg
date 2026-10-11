@@ -1,12 +1,12 @@
 { config, pkgs, ... }:
 
 let
-  theme = config.ozozka.theme;
+  cfg = config.ozozka;
 in
 {
   imports = [
     ../../home.nix
-    ../../theme.nix
+    ../../options.nix
   ];
 
   environment.systemPackages = with pkgs; [
@@ -68,89 +68,29 @@ in
         ;;; Commentary:
         ;;; Code:
 
-        (defgroup my-theme nil
-          "Options for my theme."
-          :group 'faces)
+        (defgroup my-options nil "Options for my theme." :group 'convenience)
 
-        (defcustom my-theme-col-p "#${theme.colors.tokens.p}"
-          "Primary color."
-          :type 'color
-          :group 'my-theme)
+        (defcustom my-user-fullname "${cfg.user.fullname}" "User full name." :type 'string :group 'my-options)
+        (defcustom my-user-email "${cfg.user.email}" "User email." :type 'string :group 'my-options)
 
-        (defcustom my-theme-col-s "#${theme.colors.tokens.s}"
-          "Secondary color."
-          :type 'color
-          :group 'my-theme)
+        (defcustom my-theme-col-p "#${cfg.col.p.hex}" "Primary color." :type 'color :group 'my-options)
+        (defcustom my-theme-col-s "#${cfg.col.s.hex}" "Secondary color." :type 'color :group 'my-options)
+        (defcustom my-theme-col-f "#${cfg.col.f.hex}" "Foreground color." :type 'color :group 'my-options)
+        (defcustom my-theme-col-m "#${cfg.col.m.hex}" "Muted foreground color." :type 'color :group 'my-options)
+        (defcustom my-theme-col-o "#${cfg.col.o.hex}" "Overlay/background accent color." :type 'color :group 'my-options)
+        (defcustom my-theme-col-b "#${cfg.col.b.hex}" "Background color." :type 'color :group 'my-options)
 
-        (defcustom my-theme-col-f "#${theme.colors.tokens.f}"
-          "Foreground color."
-          :type 'color
-          :group 'my-theme)
+        (defcustom my-theme-fonts-mono "${cfg.font.mono.name}" "Monospace font family." :type 'string :group 'my-options)
+        (defcustom my-theme-fonts-serif "${cfg.font.serif.name}" "Serif font family." :type 'string :group 'my-options)
+        (defcustom my-theme-fonts-sans "${cfg.font.sans.name}" "Sans-serif font family." :type 'string :group 'my-options)
+        (defcustom my-theme-fonts-emoji "${cfg.font.emoji.name}" "Emoji font family." :type 'string :group 'my-options)
 
-        (defcustom my-theme-col-m "#${theme.colors.tokens.m}"
-          "Muted foreground color."
-          :type 'color
-          :group 'my-theme)
-
-        (defcustom my-theme-col-o "#${theme.colors.tokens.o}"
-          "Overlay/background accent color."
-          :type 'color
-          :group 'my-theme)
-
-        (defcustom my-theme-col-b "#${theme.colors.tokens.b}"
-          "Background color."
-          :type 'color
-          :group 'my-theme)
-
-        (defcustom my-theme-fonts-mono "${theme.fonts.mono}"
-          "Monospace font family."
-          :type 'string
-          :group 'my-theme)
-
-        (defcustom my-theme-fonts-serif "${theme.fonts.serif}"
-          "Serif font family."
-          :type 'string
-          :group 'my-theme)
-
-        (defcustom my-theme-fonts-sans "${theme.fonts.sans}"
-          "Sans-serif font family."
-          :type 'string
-          :group 'my-theme)
-
-        (defcustom my-theme-fonts-emoji "${theme.fonts.emoji}"
-          "Emoji font family."
-          :type 'string
-          :group 'my-theme)
-
-        (defcustom my-theme-font-size-t ${toString theme.font-size.t}
-          "Base font height."
-          :type 'integer
-          :group 'my-theme)
-
-        (defcustom my-theme-font-size-s ${toString theme.font-size.s}
-          "Heading font height."
-          :type 'integer
-          :group 'my-theme)
-
-        (defcustom my-theme-font-size-m ${toString theme.font-size.m}
-          "Title font height."
-          :type 'integer
-          :group 'my-theme)
-
-        (defcustom my-theme-font-size-l ${toString theme.font-size.l}
-          "Base font height."
-          :type 'integer
-          :group 'my-theme)
-
-        (defcustom my-theme-font-size-x ${toString theme.font-size.x}
-          "Heading font height."
-          :type 'integer
-          :group 'my-theme)
-
-        (defcustom my-theme-font-size-h ${toString theme.font-size.h}
-          "Title font height."
-          :type 'integer
-          :group 'my-theme)
+        (defcustom my-theme-font-size-t ${toString (cfg.fontSize.t * 10)} "Tiny font height." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-s ${toString (cfg.fontSize.s * 10)} "Small font height." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-m ${toString (cfg.fontSize.m * 10)} "Medium font height." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-l ${toString (cfg.fontSize.l * 10)} "Large font height." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-x ${toString (cfg.fontSize.x * 10)} "Extra font height." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-h ${toString (cfg.fontSize.h * 10)} "Huge font height." :type 'integer :group 'my-options)
 
         (provide 'my-options)
         ;;; my-options.el ends here

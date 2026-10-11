@@ -6,14 +6,11 @@
 }:
 
 let
-  theme = config.ozozka.theme;
-
-  cursor-theme = "DMZ-White";
-  cursor-size = 24;
+  cfg = config.ozozka;
 in
 {
   imports = [
-    ../theme.nix
+    ../options.nix
 
     ./hyprland
     ./quickshell
@@ -43,12 +40,12 @@ in
     dconf.profiles.user.databases = [
       {
         settings."org/gnome/desktop/interface" = {
-          inherit cursor-theme;
-          cursor-size = lib.gvariant.mkInt32 cursor-size;
-          color-scheme = if theme.colors.variant == "light" then "prefer-light" else "prefer-dark";
-          font-name = theme.fonts.sans + " " + (toString (theme.font-size.m / 10));
-          document-font-name = theme.fonts.serif + " " + (toString (theme.font-size.m / 10));
-          monospace-font-name = theme.fonts.mono + " " + (toString (theme.font-size.m / 10));
+          cursor-theme = cfg.cursor.name;
+          cursor-size = lib.gvariant.mkInt32 cfg.cursor.size;
+          color-scheme = if cfg.col.isDark then "prefer-dark" else "prefer-light";
+          font-name = cfg.font.sans.name + " " + (toString cfg.fontSize.m);
+          document-font-name = cfg.font.serif.name + " " + (toString cfg.fontSize.m);
+          monospace-font-name = cfg.font.mono.name + " " + (toString cfg.fontSize.m);
         };
 
         locks = [
@@ -65,22 +62,28 @@ in
 
   fonts = {
     enableDefaultPackages = false;
-    packages = with pkgs; [
-      noto-fonts-color-emoji
-      ozozka.spectral
-      ozozka.manuale
-      source-sans
-      inter
-      ozozka.oziosevka
+    packages = with cfg.font; [
+      emoji.pkg
+      serifa.pkg
+      serif.pkg
+      sansa.pkg
+      sans.pkg
+      mono.pkg
     ];
 
     fontconfig = {
       enable = true;
       defaultFonts = {
-        emoji = [ theme.fonts.emoji ];
-        serif = [ theme.fonts.serif ];
-        sansSerif = [ theme.fonts.sans ];
-        monospace = [ theme.fonts.mono ];
+        emoji = [ cfg.font.emoji.name ];
+        serif = [
+          cfg.font.serif.name
+          cfg.font.serifa.name
+        ];
+        sansSerif = [
+          cfg.font.sans.name
+          cfg.font.sansa.name
+        ];
+        monospace = [ cfg.font.mono.name ];
       };
 
       useEmbeddedBitmaps = false;
@@ -99,13 +102,13 @@ in
 
   environment = {
     sessionVariables = {
-      XCURSOR_THEME = cursor-theme;
-      XCURSOR_SIZE = toString cursor-size;
+      XCURSOR_THEME = cfg.cursor.name;
+      XCURSOR_SIZE = toString cfg.cursor.size;
     };
 
     systemPackages = with pkgs; [
       mpv
-      vanilla-dmz
+      cfg.cursor.pkg
       playerctl
       wl-clipboard
     ];

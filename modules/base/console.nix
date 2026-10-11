@@ -1,10 +1,10 @@
 { pkgs, config, ... }:
 
 let
-  col = config.ozozka.theme.colors;
+  cfg = config.ozozka;
 in
 {
-  imports = [ ../theme.nix ];
+  imports = [ ../options.nix ];
 
   console = {
     enable = true;
@@ -14,23 +14,22 @@ in
     packages = with pkgs; [ terminus_font ];
 
     colors = [
-      col.tokens.ansi0
-      col.tokens.ansi1
-      col.tokens.ansi2
-      col.tokens.ansi3
-      col.tokens.ansi4
-      col.tokens.ansi5
-      col.tokens.ansi6
-      col.tokens.ansi7
-
-      col.tokens.ansi8
-      col.tokens.ansi9
-      col.tokens.ansiA
-      col.tokens.ansiB
-      col.tokens.ansiC
-      col.tokens.ansiD
-      col.tokens.ansiE
-      col.tokens.ansiF
+      cfg.ansi16.a0
+      cfg.ansi16.a1
+      cfg.ansi16.a2
+      cfg.ansi16.a3
+      cfg.ansi16.a4
+      cfg.ansi16.a5
+      cfg.ansi16.a6
+      cfg.ansi16.a7
+      cfg.ansi16.a8
+      cfg.ansi16.a9
+      cfg.ansi16.aA
+      cfg.ansi16.aB
+      cfg.ansi16.aC
+      cfg.ansi16.aD
+      cfg.ansi16.aE
+      cfg.ansi16.aF
     ];
   };
 }

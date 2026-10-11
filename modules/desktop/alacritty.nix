@@ -1,12 +1,12 @@
 { pkgs, config, ... }:
 
 let
-  col = config.ozozka.theme.colors;
+  cfg = config.ozozka;
   settingsFormat = pkgs.formats.toml { };
   hex = v: "#" + v;
 in
 {
-  imports = [ ../theme.nix ];
+  imports = [ ../options.nix ];
 
   environment = {
     systemPackages = with pkgs; [ alacritty ];
@@ -27,48 +27,48 @@ in
 
       font = {
         normal = {
-          family = config.ozozka.theme.fonts.mono;
+          family = cfg.font.mono.name;
           style = "Regular";
         };
-        size = config.ozozka.theme.font-size.m / 10;
+        size = cfg.fontSize.m;
         offset = {
           x = 0;
-          y = config.ozozka.theme.dim.t;
+          y = cfg.dim.t;
         };
       };
 
       colors = {
         primary = {
-          foreground = hex col.tokens.f;
-          background = hex col.tokens.b;
+          foreground = hex cfg.col.f.hex;
+          background = hex cfg.col.b.hex;
         };
         cursor = {
-          text = hex col.tokens.b;
-          cursor = hex col.tokens.f;
+          text = hex cfg.col.b.hex;
+          cursor = hex cfg.col.f.hex;
         };
         selection = {
           text = "CellForeground";
-          background = hex col.tokens.o;
+          background = hex cfg.col.o.hex;
         };
         normal = {
-          black = hex col.tokens.ansi0;
-          red = hex col.tokens.ansi1;
-          green = hex col.tokens.ansi2;
-          yellow = hex col.tokens.ansi3;
-          blue = hex col.tokens.ansi4;
-          magenta = hex col.tokens.ansi5;
-          cyan = hex col.tokens.ansi6;
-          white = hex col.tokens.ansi7;
+          black = hex cfg.ansi16.a0;
+          red = hex cfg.ansi16.a1;
+          green = hex cfg.ansi16.a2;
+          yellow = hex cfg.ansi16.a3;
+          blue = hex cfg.ansi16.a4;
+          magenta = hex cfg.ansi16.a5;
+          cyan = hex cfg.ansi16.a6;
+          white = hex cfg.ansi16.a7;
         };
         bright = {
-          black = hex col.tokens.ansi8;
-          red = hex col.tokens.ansi9;
-          green = hex col.tokens.ansiA;
-          yellow = hex col.tokens.ansiB;
-          blue = hex col.tokens.ansiC;
-          magenta = hex col.tokens.ansiD;
-          cyan = hex col.tokens.ansiE;
-          white = hex col.tokens.ansiF;
+          black = hex cfg.ansi16.a8;
+          red = hex cfg.ansi16.a9;
+          green = hex cfg.ansi16.aA;
+          yellow = hex cfg.ansi16.aB;
+          blue = hex cfg.ansi16.aC;
+          magenta = hex cfg.ansi16.aD;
+          cyan = hex cfg.ansi16.aE;
+          white = hex cfg.ansi16.aF;
         };
       };
 

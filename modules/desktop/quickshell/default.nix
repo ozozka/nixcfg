@@ -1,10 +1,10 @@
 { config, pkgs, ... }:
 
 let
-  theme = config.ozozka.theme;
+  cfg = config.ozozka;
 in
 {
-  imports = [ ../../theme.nix ];
+  imports = [ ../../options.nix ];
 
   environment = {
     systemPackages = with pkgs; [
@@ -25,28 +25,28 @@ in
         import QtQuick
 
         QtObject {
-          readonly property color colP: ${builtins.toJSON "#${theme.colors.tokens.p}"}
-          readonly property color colS: ${builtins.toJSON "#${theme.colors.tokens.s}"}
-          readonly property color colF: ${builtins.toJSON "#${theme.colors.tokens.f}"}
-          readonly property color colM: ${builtins.toJSON "#${theme.colors.tokens.m}"}
-          readonly property color colO: ${builtins.toJSON "#${theme.colors.tokens.o}"}
-          readonly property color colB: ${builtins.toJSON "#${theme.colors.tokens.b}"}
+          readonly property color colP: ${builtins.toJSON "#${cfg.col.p.hex}"}
+          readonly property color colS: ${builtins.toJSON "#${cfg.col.s.hex}"}
+          readonly property color colF: ${builtins.toJSON "#${cfg.col.f.hex}"}
+          readonly property color colM: ${builtins.toJSON "#${cfg.col.m.hex}"}
+          readonly property color colO: ${builtins.toJSON "#${cfg.col.o.hex}"}
+          readonly property color colB: ${builtins.toJSON "#${cfg.col.b.hex}"}
 
-          readonly property real fontSizeT: ${toString (theme.font-size.t / 10.0)}
-          readonly property real fontSizeS: ${toString (theme.font-size.s / 10.0)}
-          readonly property real fontSizeM: ${toString (theme.font-size.m / 10.0)}
-          readonly property real fontSizeL: ${toString (theme.font-size.l / 10.0)}
-          readonly property real fontSizeX: ${toString (theme.font-size.x / 10.0)}
-          readonly property real fontSizeH: ${toString (theme.font-size.h / 10.0)}
+          readonly property real fontSizeT: ${toString cfg.fontSize.t}
+          readonly property real fontSizeS: ${toString cfg.fontSize.s}
+          readonly property real fontSizeM: ${toString cfg.fontSize.m}
+          readonly property real fontSizeL: ${toString cfg.fontSize.l}
+          readonly property real fontSizeX: ${toString cfg.fontSize.x}
+          readonly property real fontSizeH: ${toString cfg.fontSize.h}
 
-          readonly property int dimT: ${toString theme.dim.t}
-          readonly property int dimS: ${toString theme.dim.s}
-          readonly property int dimM: ${toString theme.dim.m}
-          readonly property int dimL: ${toString theme.dim.l}
-          readonly property int dimX: ${toString theme.dim.x}
-          readonly property int dimH: ${toString theme.dim.h}
+          readonly property int dimT: ${toString cfg.dim.t}
+          readonly property int dimS: ${toString cfg.dim.s}
+          readonly property int dimM: ${toString cfg.dim.m}
+          readonly property int dimL: ${toString cfg.dim.l}
+          readonly property int dimX: ${toString cfg.dim.x}
+          readonly property int dimH: ${toString cfg.dim.h}
 
-          readonly property string wallpaper: ${builtins.toJSON (toString theme.wallpaper)}
+          readonly property string wallpaper: ${builtins.toJSON (toString cfg.wallpaper)}
         }
       '';
     };

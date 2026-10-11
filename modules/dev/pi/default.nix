@@ -1,13 +1,13 @@
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 
 let
-  # theme = config.ozozka.theme;
+  cfg = config.ozozka;
   settingsFormat = pkgs.formats.json { };
 in
 {
   imports = [
     ../../home.nix
-    ../../theme.nix
+    ../../options.nix
   ];
 
   environment.systemPackages = with pkgs; [ pi-coding-agent ];
@@ -42,7 +42,7 @@ in
         quietStartup = true;
         tuiMode = "regular";
         editorPaddingX = 0;
-        outputPad = 1;
+        outputPad = 0;
         autocompleteMaxVisible = 6;
         showHardwareCursor = true;
         terminal = {
@@ -65,14 +65,14 @@ in
 
       "themes/ozozka.json" = settingsFormat.generate "ozozka.json" {
         name = "ozozka";
-        appearance = "dark";
+        appearance = if cfg.col.isDark then "dark" else "light";
         vars = {
-          primary = 6;
-          secondary = 1;
-          text = 15;
-          muted = 7;
-          overlay = 8;
-          bg = 0;
+          primary = cfg.col.p.ansi;
+          secondary = cfg.col.s.ansi;
+          text = cfg.col.f.ansi;
+          muted = cfg.col.m.ansi;
+          overlay = cfg.col.o.ansi;
+          bg = cfg.col.b.ansi;
         };
         colors = {
           accent = "primary";

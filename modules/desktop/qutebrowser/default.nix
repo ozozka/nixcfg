@@ -1,12 +1,12 @@
 { config, pkgs, ... }:
 
 let
-  theme = config.ozozka.theme;
+  cfg = config.ozozka;
 in
 {
   imports = [
     ../../home.nix
-    ../../theme.nix
+    ../../options.nix
   ];
 
   environment.systemPackages = with pkgs; [ qutebrowser ];
@@ -15,31 +15,32 @@ in
     ".config/qutebrowser" = {
       "config.py" = ./config.py;
       "theme.py" = pkgs.writeText "theme.py" ''
-        COL_P = "#${theme.colors.tokens.p}"
-        COL_S = "#${theme.colors.tokens.s}"
-        COL_F = "#${theme.colors.tokens.f}"
-        COL_M = "#${theme.colors.tokens.m}"
-        COL_O = "#${theme.colors.tokens.o}"
-        COL_B = "#${theme.colors.tokens.b}"
+        IS_DARK = ${if cfg.col.isDark then "True" else "False"}
+        COL_P = "#${cfg.col.p.hex}"
+        COL_S = "#${cfg.col.s.hex}"
+        COL_F = "#${cfg.col.f.hex}"
+        COL_M = "#${cfg.col.m.hex}"
+        COL_O = "#${cfg.col.o.hex}"
+        COL_B = "#${cfg.col.b.hex}"
 
-        FONTS_EMOJI = "${theme.fonts.emoji}"
-        FONTS_SANS = "${theme.fonts.sans}"
-        FONTS_SERIF = "${theme.fonts.serif}"
-        FONTS_MONO = "${theme.fonts.mono}"
+        FONTS_EMOJI = "${cfg.font.emoji.name}"
+        FONTS_SANS = "${cfg.font.sans.name}"
+        FONTS_SERIF = "${cfg.font.serif.name}"
+        FONTS_MONO = "${cfg.font.mono.name}"
 
-        FONT_SIZE_T = int(${toString (theme.font-size.t / 10.0)})
-        FONT_SIZE_S = int(${toString (theme.font-size.s / 10.0)})
-        FONT_SIZE_M = int(${toString (theme.font-size.m / 10.0)})
-        FONT_SIZE_L = int(${toString (theme.font-size.l / 10.0)})
-        FONT_SIZE_X = int(${toString (theme.font-size.x / 10.0)})
-        FONT_SIZE_H = int(${toString (theme.font-size.h / 10.0)})
+        FONT_SIZE_T = int(${toString cfg.fontSize.t})
+        FONT_SIZE_S = int(${toString cfg.fontSize.s})
+        FONT_SIZE_M = int(${toString cfg.fontSize.m})
+        FONT_SIZE_L = int(${toString cfg.fontSize.l})
+        FONT_SIZE_X = int(${toString cfg.fontSize.x})
+        FONT_SIZE_H = int(${toString cfg.fontSize.h})
 
-        DIM_T = ${toString theme.dim.t}
-        DIM_S = ${toString theme.dim.s}
-        DIM_M = ${toString theme.dim.m}
-        DIM_L = ${toString theme.dim.l}
-        DIM_X = ${toString theme.dim.x}
-        DIM_H = ${toString theme.dim.h}
+        DIM_T = ${toString cfg.dim.t}
+        DIM_S = ${toString cfg.dim.s}
+        DIM_M = ${toString cfg.dim.m}
+        DIM_L = ${toString cfg.dim.l}
+        DIM_X = ${toString cfg.dim.x}
+        DIM_H = ${toString cfg.dim.h}
       '';
     };
   };

@@ -74,12 +74,12 @@
   :ensure nil
   :custom
   (message-send-mail-function #'smtpmail-send-it)
-  (user-mail-address "ozkaya.ogzhn@gmail.com")
-  (user-full-name "Oğuzhan Özkaya")
+  (user-mail-address my-user-email)
+  (user-full-name my-user-fullname)
   (smtpmail-smtp-server "smtp.gmail.com")
   (smtpmail-smtp-service 465)
   (smtpmail-stream-type 'ssl)
-  (smtpmail-smtp-user "ozkaya.ogzhn@gmail.com"))
+  (smtpmail-smtp-user my-user-email))
 
 (use-package message
   :ensure nil

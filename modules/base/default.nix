@@ -1,7 +1,12 @@
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 
+let
+  cfg = config.ozozka;
+in
 {
   imports = [
+    ../options.nix
+
     ./nvim
     ./console.nix
     ./git.nix
@@ -79,8 +84,8 @@
     # fwupd.enable = true; # Firmware/bios updates.
 
     xserver.xkb = {
-      layout = "us,tr";
-      options = "caps:swapescape,grp:win_space_toggle";
+      layout = cfg.keyboard.layout;
+      options = cfg.keyboard.options;
     };
   };
 

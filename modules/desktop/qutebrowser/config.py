@@ -319,7 +319,7 @@ c.fonts.web.family.standard = theme.FONTS_SANS
 
 c.colors.webpage.bg = ""  # Background color for webpages
 c.colors.webpage.darkmode.enabled = False
-c.colors.webpage.preferred_color_scheme = "dark"  # auto, light, dark
+c.colors.webpage.preferred_color_scheme = "dark" if theme.IS_DARK else "light"
 
 c.colors.completion.category.bg = theme.COL_O
 c.colors.completion.category.border.bottom = theme.COL_B

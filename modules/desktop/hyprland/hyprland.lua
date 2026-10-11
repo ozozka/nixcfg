@@ -1,3 +1,5 @@
+local options = require "options"
+
 local outs = {
   hdmi = {
     internal = "eDP-1",
@@ -67,7 +69,7 @@ local monitors = {
   end,
 }
 
-monitors[1]()
+monitors[options.monitor]()
 
 -- hl.permission("/usr/(bin|local/bin)/grim", "screencopy", "allow")
 
@@ -88,10 +90,10 @@ hl.config {
   },
   animations = { enabled = false },
   input = {
-    kb_layout = "us,tr",
+    kb_layout = options.keyboard.layout,
     kb_variant = "",
     kb_model = "",
-    kb_options = "caps:swapescape,grp:win_space_toggle",
+    kb_options = options.keyboard.options,
     kb_rules = "",
     -- resolve_binds_by_sym
     repeat_rate = 60,
