@@ -58,13 +58,36 @@ pkgs.treefmt.withConfig {
         options = [ "format" ];
       };
 
+      biome = {
+        command = lib.getExe pkgs.biome;
+        includes = [
+          "*.js"
+          "*.jsx"
+          "*.mjs"
+          "*.cjs"
+          "*.ts"
+          "*.tsx"
+          "*.mts"
+          "*.cts"
+          "*.json"
+          "*.jsonc"
+          "*.css"
+        ];
+        options = [
+          "check"
+          "--write"
+          "--indent-style=space"
+          "--indent-width=2"
+          "--javascript-formatter-quote-style=double"
+          "--semicolons=always"
+          "--trailing-commas=all"
+        ];
+      };
+
       prettier = {
         command = lib.getExe pkgs.prettier;
         includes = [
           "*.html"
-          "*.css"
-          "*.js"
-          "*.ts"
           "*.md"
         ];
         options = [
