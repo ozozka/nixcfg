@@ -200,6 +200,10 @@
   (keymap-set term-raw-map "C-S-v" #'term-paste)
   (keymap-set term-raw-map "<escape>" (lambda () (interactive) (term-send-raw-string "\e")))
   (keymap-set term-raw-map "S-<return>" (lambda () (interactive) (term-send-raw-string "\026\n")))
+  (keymap-set term-raw-map "C-c d" (keymap-lookup global-map "C-c d"))
+  (keymap-set term-raw-map "C-c z" (keymap-lookup global-map "C-c z"))
+  (keymap-set term-raw-map "C-c f" (keymap-lookup global-map "C-c f"))
+  (keymap-set term-raw-map "C-c k" (keymap-lookup global-map "C-c k"))
   (dotimes (number 10)
     (let ((key (format "M-%d" number)))
       (keymap-set term-raw-map key
