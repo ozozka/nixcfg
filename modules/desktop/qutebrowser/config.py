@@ -4,7 +4,14 @@
 ## qute://settings/
 
 
+from typing import TYPE_CHECKING, Any
+
 import theme
+
+if TYPE_CHECKING:
+    # Qutebrowser injects these globals when loading this configuration.
+    c: Any = None
+    config: Any = None
 
 c.auto_save.session = True
 # c.backend = 'webengine'
