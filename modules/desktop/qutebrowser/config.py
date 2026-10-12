@@ -328,7 +328,7 @@ c.colors.webpage.bg = ""  # Background color for webpages
 c.colors.webpage.darkmode.enabled = False
 c.colors.webpage.preferred_color_scheme = "dark" if theme.IS_DARK else "light"
 
-c.colors.completion.category.bg = theme.COL_O
+c.colors.completion.category.bg = theme.COL_B
 c.colors.completion.category.border.bottom = theme.COL_B
 c.colors.completion.category.border.top = theme.COL_B
 c.colors.completion.category.fg = theme.COL_F
