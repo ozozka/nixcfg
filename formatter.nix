@@ -52,6 +52,16 @@ pkgs.treefmt.withConfig {
         ];
       };
 
+      ruff-check = {
+        command = lib.getExe pkgs.ruff;
+        includes = [ "*.py" ];
+        options = [
+          "check"
+          "--fix"
+        ];
+        priority = -1;
+      };
+
       ruff-format = {
         command = lib.getExe pkgs.ruff;
         includes = [ "*.py" ];
