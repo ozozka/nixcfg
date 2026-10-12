@@ -1,11 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import {
-  createWriteToolDefinition,
-  generateUnifiedPatch,
-} from "@earendil-works/pi-coding-agent";
 import type {
   ExtensionAPI,
   ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import {
+  createWriteToolDefinition,
+  generateUnifiedPatch,
 } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "session-metrics";
@@ -361,7 +361,7 @@ export default function (pi: ExtensionAPI) {
     saveWindows(
       ["primary", "secondary"].map((name) => {
         const window = record(limits[name]);
-        if (!window) return;
+        if (!window) return undefined;
         return readWindow(
           window.used_percent,
           window.window_minutes ?? window.limit_window_minutes,
