@@ -21,7 +21,7 @@
   ("C-c d" . project-dired)
   ("C-c v" . project-vc-dir)
   ("C-c b" . ibuffer)
-  ("C-c z" . (lambda () (interactive) (ansi-term (getenv "SHELL") nil)))
+  ("C-c z" . (lambda () (interactive) (ansi-term (getenv "SHELL") "bash")))
   ("C-c =" . count-words)
   ("C-c w" . whitespace-cleanup)
   ("C-c t" . toggle-frame-tab-bar)
@@ -45,6 +45,11 @@
   (blink-cursor-mode -1)
   (window-divider-mode -1)
   (fringe-mode '(0 . 0))
+  (add-to-list
+   'display-buffer-alist
+   '((derived-mode . (vc-dir-mode dired-mode ibuffer-mode term-mode))
+     (display-buffer-same-window)
+     (inhibit-same-window . nil)))
 
   :custom
   (void-text-area-pointer 'arrow)
@@ -71,6 +76,7 @@
   (make-backup-files nil)
   (auto-save-default nil)
   (custom-file (expand-file-name "custom.el" user-emacs-directory))
+  ;; (display-buffer-base-action '((display-buffer-same-window) (inhibit-same-window . nil)))
 
   (mode-line-format
    '("%e"
@@ -108,6 +114,11 @@
      mode-line-misc-info
      (project-mode-line project-mode-line-format)
      mode-line-end-spaces)))
+
+  (use-package uniquify
+    :ensure nil
+    :custom
+    (uniquify-buffer-name-style 'forward))
 
 (use-package tab-line
   :ensure nil
@@ -206,8 +217,7 @@
   (keymap-set term-raw-map "C-c k" (keymap-lookup global-map "C-c k"))
   (dotimes (number 10)
     (let ((key (format "M-%d" number)))
-      (keymap-set term-raw-map key
-                  (keymap-lookup global-map key)))))
+      (keymap-set term-raw-map key (keymap-lookup global-map key)))))
 
 (use-package compile
   :ensure nil
