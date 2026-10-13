@@ -77,7 +77,6 @@
   (make-backup-files nil)
   (auto-save-default nil)
   (custom-file (expand-file-name "custom.el" user-emacs-directory))
-  ;; (display-buffer-base-action '((display-buffer-same-window) (inhibit-same-window . nil)))
 
   (mode-line-format
    '("%e"
@@ -130,7 +129,7 @@
   (tab-line-right-button nil)
   (tab-line-separator "")
   (tab-line-switch-cycling t)
-  (tab-line-tab-name-truncated-max 16)
+  (tab-line-tab-name-truncated-max 24)
   (tab-line-tab-name-function
    (lambda (buffer &optional buffers)
      (format " %d %s "
@@ -173,7 +172,7 @@
 (use-package vc
   :ensure nil
   :custom
-  (vc-dir-auto-hide-up-to-date 'revert))
+  (vc-dir-auto-hide-up-to-date t))
 
 (use-package ibuffer
   :ensure nil
@@ -215,8 +214,8 @@
   (keymap-set term-raw-map "C-c d" (keymap-lookup global-map "C-c d"))
   (keymap-set term-raw-map "C-c z" (keymap-lookup global-map "C-c z"))
   (keymap-set term-raw-map "C-c f" (keymap-lookup global-map "C-c f"))
-  (keymap-set term-raw-map "C-c q" (keymap-lookup global-map "C-c k"))
-  (keymap-set term-raw-map "C-c k" (keymap-lookup global-map "C-c q"))
+  (keymap-set term-raw-map "C-c q" (keymap-lookup global-map "C-c q"))
+  (keymap-set term-raw-map "C-c k" (keymap-lookup global-map "C-c k"))
   (dotimes (number 10)
     (let ((key (format "M-%d" number)))
       (keymap-set term-raw-map key (keymap-lookup global-map key)))))
