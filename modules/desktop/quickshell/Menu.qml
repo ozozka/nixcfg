@@ -239,7 +239,16 @@ Scope {
               Text {
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
-                text: `▰ ${Math.round(menuModule.lib.battery.percentage)}% · ${menuModule.lib.battery.status}`
+
+                function formatRemaining(seconds) {
+                  if (seconds <= 0)
+                    return "";
+                  return `${String(Math.floor(seconds / 60))}m`;
+                }
+
+                text: `▰ %${Math.round(menuModule.lib.battery.percentage)} · ${menuModule.lib.battery.status}` + (
+                        menuModule.lib.battery.status === "Full" ? "" : " " + formatRemaining(
+                                                                     menuModule.lib.battery.remainingSeconds))
                 color: menuModule.theme.colM
                 font.family: "sans-serif"
                 font.pointSize: menuModule.theme.fontSizeM

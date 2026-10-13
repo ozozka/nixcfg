@@ -280,12 +280,6 @@ Scope {
     }
   }
 
-  function formatBytes(bytes) {
-    if (bytes < 1024 * 1024 * 1024)
-      return `${(bytes / (1024 * 1024)).toFixed(2)}M`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}G`;
-  }
-
   function formatRate(bytesPerSecond) {
     if (bytesPerSecond < 1024)
       return `${Math.round(bytesPerSecond)}B/s`;
@@ -386,7 +380,7 @@ Scope {
       family: "monospace"
       pointSize: theme.fontSizeM
     }
-    text: `${barModule.processes.count}p`
+    text: `${barModule.processes.count}`
     Accessible.name: `${barModule.processes.count} processes`
   }
 
@@ -397,7 +391,7 @@ Scope {
       family: "monospace"
       pointSize: theme.fontSizeM
     }
-    text: `${barModule.cpu.usage.toFixed(2)}%`
+    text: `%${barModule.cpu.usage.toFixed(2)}`
   }
 
   component Memory: Text {
@@ -408,7 +402,7 @@ Scope {
       family: "monospace"
       pointSize: theme.fontSizeM
     }
-    text: barModule.formatBytes(barModule.memory.usedBytes)
+    text: `${(barModule.memory.usedBytes / (1024 * 1024 * 1024)).toFixed(2)}`
   }
 
   component Battery: Text {
@@ -416,18 +410,11 @@ Scope {
     readonly property bool charging: barModule.lib.battery.status === "Charging"
     readonly property bool full: barModule.lib.battery.status === "Full"
 
-    function formatRemaining(seconds) {
-      if (seconds <= 0)
-        return "";
-      return `${String(Math.floor(seconds / 60))}m`;
-    }
-
     color: theme.colF
     font {
       family: "monospace"
       pointSize: theme.fontSizeM
     }
-    text: full ? "🞄" : formatRemaining(barModule.lib.battery.remainingSeconds) + " " + Math.round(
-                   barModule.lib.battery.percentage) + "\n" + (charging ? "🞄" : "◦")
+    text: full ? "🞄" : "%" + Math.round(barModule.lib.battery.percentage) + (charging ? "🞄" : "◦")
   }
 }
