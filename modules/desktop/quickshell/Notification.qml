@@ -34,12 +34,12 @@ Scope {
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     anchors {
-      bottom: true
-      right: true
+      top: true
+      left: true
     }
     margins {
-      bottom: notificationModule.theme.dimM + notificationModule.theme.dimS
-      right: notificationModule.theme.dimS
+      top: notificationModule.theme.dimS
+      left: notificationModule.theme.dimS
     }
 
     Flickable {
