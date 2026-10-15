@@ -99,7 +99,7 @@ in
       in
       {
         emoji = mkFont "Noto Color Emoji" "noto-fonts-color-emoji" "Emoji font";
-        serifa = mkFont "Spectral" [ "ozozka" "spectral" ] "Alternative serif font";
+        serifa = mkFont "Spectral" "spectral" "Alternative serif font";
         serif = mkFont "Manuale" [ "ozozka" "manuale" ] "Serif font";
         sansa = mkFont "Source Sans 3" "source-sans" "Alternative sans font";
         sans = mkFont "Inter" "inter" "Sans font";
