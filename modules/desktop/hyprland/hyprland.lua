@@ -158,7 +158,7 @@ hl.bind(
   hl.dsp.exec_cmd [[sh -c 'dir="$HOME/Pictures/Screenshots"; mkdir -p "$dir" && file="$dir/$(date +%Y-%m-%d_%H-%M-%S_%N).png" && grim "$file" && wl-copy --type image/png < "$file"']]
 )
 hl.bind(mainMod .. " + W", hl.dsp.exec_cmd "thunar")
-hl.bind(mainMod .. " + E", hl.dsp.exec_cmd "emacsclient -c")
+hl.bind(mainMod .. " + E", hl.dsp.exec_cmd "emacs")
 hl.bind(mainMod .. " + Return", hl.dsp.exec_cmd "alacritty")
 
 hl.bind(mainMod .. " + H", hl.dsp.focus { direction = "left" })

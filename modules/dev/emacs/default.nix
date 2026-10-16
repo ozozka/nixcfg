@@ -14,12 +14,7 @@ in
     hunspellDicts.en_US
     hunspellDicts.tr_TR
     hunspell
-  ];
-
-  services.emacs = {
-    enable = true;
-    defaultEditor = true;
-    package = (pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages (epkgs: [
+    ((pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages (epkgs: [
       (epkgs.treesit-grammars.with-grammars (
         grammars: with grammars; [
           tree-sitter-bash
@@ -50,8 +45,8 @@ in
           tree-sitter-yaml
         ]
       ))
-    ]);
-  };
+    ]))
+  ];
 
   ozozka.home.profiles.emacs.files = {
     ".config/emacs" = {
