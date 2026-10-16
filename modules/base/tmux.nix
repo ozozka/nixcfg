@@ -113,8 +113,8 @@ _:
       bind -n M-S-Left    swapw -dt :-1
       bind -n M-S-Right   swapw -dt :+1
       bind -n M-n         command-prompt -I "#W" { renamew "%%" }
-      bind -n M-S-Enter   neww
-      bind -n M-Enter     neww "nix develop"
+      bind -n M-S-Enter   neww "nix develop"
+      bind -n M-Enter     neww
       bind -n M-Q         killw
 
       bind -n M-r         refresh
