@@ -115,10 +115,18 @@
      (project-mode-line project-mode-line-format)
      mode-line-end-spaces)))
 
-  (use-package uniquify
-    :ensure nil
-    :custom
-    (uniquify-buffer-name-style 'forward))
+(use-package uniquify
+  :ensure nil
+  :custom
+  (uniquify-buffer-name-style 'forward))
+
+(use-package desktop
+  :ensure nil
+  :custom
+  (desktop-save t)
+  (desktop-restore-frames t)
+  :config
+  (desktop-save-mode 1))
 
 (use-package tab-line
   :ensure nil
