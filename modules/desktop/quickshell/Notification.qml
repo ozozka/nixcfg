@@ -152,7 +152,7 @@ Scope {
                                                                                                             "<br>");
           }
 
-          text: "<b>" + escapeHeading(card.notification?.appName ?? "") + "</b> - " + escapeHeading(card.notification
+          text: "<b>" + escapeHeading(card.notification?.appName ?? "") + "</b>: " + escapeHeading(card.notification
                                                                                                     ?.summary ?? "")
         }
 
