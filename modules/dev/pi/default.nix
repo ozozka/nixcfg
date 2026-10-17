@@ -14,10 +14,11 @@ in
 
   ozozka.home.profiles.pi.files = {
     ".pi/agent" = {
+      "prompts" = ./prompts;
+      # "skills" = ./skills;
       "extensions" = ./extensions;
-
       "settings.json" = settingsFormat.generate "settings.json" {
-        lastChangelogVersion = "1.1.0";
+        lastChangelogVersion = "1.2.0";
 
         defaultProvider = "openai-codex";
         defaultModel = "gpt-6.1-sol";
