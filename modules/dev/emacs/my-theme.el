@@ -76,13 +76,15 @@
    `(completions-first-difference ((t (:foreground ,my-theme-col-p :weight bold))))
 
    `(font-lock-constant-face ((t (:foreground ,my-theme-col-p))))
+   `(font-lock-number-face ((t (:foreground ,my-theme-col-p))))
+   `(font-lock-string-face ((t (:foreground ,my-theme-col-p))))
    `(font-lock-comment-face ((t (:inherit variable-pitch :foreground ,my-theme-col-m))))
    `(font-lock-keyword-face ((t (:foreground ,my-theme-col-m :weight bold))))
    `(font-lock-builtin-face ((t (:foreground ,my-theme-col-m))))
    `(font-lock-function-name-face ((t (:foreground ,my-theme-col-s))))
+   `(font-lock-property-use-face ((t (:foreground ,my-theme-col-s))))
    `(font-lock-variable-name-face ((t (:foreground ,my-theme-col-f))))
    `(font-lock-type-face ((t (:foreground ,my-theme-col-f))))
-   `(font-lock-string-face ((t (:foreground ,my-theme-col-p))))
 
    `(whitespace-trailing ((t (:background ,my-theme-col-s))))
    `(whitespace-empty ((t (:background ,my-theme-col-o))))
