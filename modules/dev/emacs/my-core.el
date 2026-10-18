@@ -48,9 +48,9 @@
   (fringe-mode '(0 . 0))
   (add-to-list
    'display-buffer-alist
-   '((derived-mode . (vc-dir-mode dired-mode ibuffer-mode term-mode))
-     (display-buffer-same-window)
-     (inhibit-same-window . nil)))
+   '((derived-mode . (vc-dir-mode log-view-mode dired-mode ibuffer-mode term-mode))
+     (display-buffer-reuse-window
+      display-buffer-same-window)))
 
   :custom
   (void-text-area-pointer 'arrow)
@@ -185,7 +185,7 @@
 (use-package ibuffer
   :ensure nil
   :custom
-  (ibuffer-default-sorting-mode 'major-mode)) ; 'filename/process
+  (ibuffer-default-sorting-mode 'filename/process))
 
 (use-package dired
   :ensure nil
