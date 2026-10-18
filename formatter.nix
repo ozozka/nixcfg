@@ -103,6 +103,7 @@ pkgs.writeShellApplication {
               "--single-quote=false"
               "--trailing-comma=all"
               "--prose-wrap=always"
+              "--print-width=96"
             ];
           };
 
