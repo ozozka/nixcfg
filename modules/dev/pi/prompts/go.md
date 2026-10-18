@@ -1,4 +1,5 @@
 ---
 description: Implement
 ---
-Proceed with the implementation. Make atomic and focused commits and keep documentation in sync across every commit.
+
+Proceed with implementation. make atomic commits and keep docs in sync across every commit.
