@@ -123,10 +123,9 @@
 (use-package desktop
   :ensure nil
   :custom
-  (desktop-save t)
-  (desktop-restore-frames t)
-  :config
-  (desktop-save-mode 1))
+  (desktop-save nil)
+  (desktop-auto-save-timeout nil)
+  (desktop-restore-frames t))
 
 (use-package tab-line
   :ensure nil
@@ -185,7 +184,13 @@
 (use-package ibuffer
   :ensure nil
   :custom
-  (ibuffer-default-sorting-mode 'filename/process))
+  (ibuffer-default-sorting-mode 'filename/process)
+  :config
+  (keymap-set ibuffer-mode-map "V"
+              (lambda () (interactive)
+                (let ((buffers (ibuffer-get-marked-buffers)))
+                  (unless buffers (user-error "No marked buffers"))
+                  (dolist (buffer (reverse buffers)) (switch-to-buffer buffer))))))
 
 (use-package dired
   :ensure nil
@@ -296,8 +301,9 @@
 
 (use-package whitespace
   :ensure nil
-  :config
-  (global-whitespace-mode 1)
+  :hook
+  (prog-mode . whitespace-mode)
+  (text-mode . whitespace-mode)
   :custom
   (whitespace-style
    '(face
