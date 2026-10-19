@@ -64,6 +64,11 @@ in
         };
       };
 
+      "keybindings.json" = settingsFormat.generate "settings.json" {
+        "app.session.resume" = "ctrl+r";
+        "app.thinking.cycle" = "ctrl+t";
+      };
+
       "themes/ozozka.json" = settingsFormat.generate "ozozka.json" {
         name = "ozozka";
         appearance = if cfg.col.isDark then "dark" else "light";
