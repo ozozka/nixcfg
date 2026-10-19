@@ -3,18 +3,18 @@
 {
   imports = [ ../../overlays.nix ];
 
-  environment.sessionVariables = {
-    EDITOR = "nvim";
-    VISUAL = "nvim";
-    MANPAGER = "nvim +Man!";
-  };
+  # environment.sessionVariables = {
+  #   EDITOR = "nvim";
+  #   VISUAL = "nvim";
+  #   MANPAGER = "nvim +Man!";
+  # };
 
   programs.neovim = {
     enable = true;
-    defaultEditor = true;
+    defaultEditor = false;
     viAlias = true;
-    withNodeJs = true;
-    withPython3 = true;
+    withNodeJs = false;
+    withPython3 = false;
     withRuby = false;
     runtime = {
       "init.lua".source = ./init.lua;

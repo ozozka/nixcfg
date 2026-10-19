@@ -9,12 +9,23 @@ in
     ../../options.nix
   ];
 
-  environment.systemPackages = with pkgs; [
-    mupdf
-    hunspellDicts.en_US
-    hunspellDicts.tr_TR
-    hunspell
-    ((pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages (epkgs: [
+  environment = {
+    sessionVariables = {
+      VISUAL = "emacseditor";
+    };
+    systemPackages = with pkgs; [
+      mupdf
+      hunspellDicts.en_US
+      hunspellDicts.tr_TR
+      hunspell
+    ];
+  };
+
+  services.emacs = {
+    enable = true;
+    defaultEditor = true;
+    startWithGraphical = true;
+    package = (pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages (epkgs: [
       (epkgs.treesit-grammars.with-grammars (
         grammars: with grammars; [
           tree-sitter-bash
@@ -45,8 +56,8 @@ in
           tree-sitter-yaml
         ]
       ))
-    ]))
-  ];
+    ]);
+  };
 
   ozozka.home.profiles.emacs.files = {
     ".config/emacs" = {
