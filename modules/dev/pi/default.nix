@@ -17,6 +17,20 @@ in
       "prompts" = ./prompts;
       # "skills" = ./skills;
       "extensions" = ./extensions;
+
+      "mcp.json" = settingsFormat.generate "mcp.json" {
+        mcpServers = {
+          exa = {
+            url = "https://mcp.exa.ai/mcp";
+            exposure = "hidden";
+            toolExposure = {
+              web_search_exa = "direct";
+              web_fetch_exa = "direct";
+            };
+          };
+        };
+      };
+
       "settings.json" = settingsFormat.generate "settings.json" {
         lastChangelogVersion = "1.2.0";
 
