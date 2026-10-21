@@ -126,6 +126,7 @@
   :custom
   (desktop-save nil)
   (desktop-auto-save-timeout nil)
+  (desktop-load-locked-desktop 'check-pid)
   (desktop-restore-frames t))
 
 (use-package tab-line
