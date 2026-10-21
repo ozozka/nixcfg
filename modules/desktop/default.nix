@@ -14,7 +14,6 @@ in
 
     ./hyprland
     ./quickshell
-    ./qutebrowser
     ./zen
     ./alacritty.nix
   ];

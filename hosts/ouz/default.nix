@@ -56,7 +56,6 @@ inputs.nixpkgs.lib.nixosSystem {
         ouz = {
           emacs = true;
           pi = true;
-          qutebrowser = true;
         };
       };
     }
