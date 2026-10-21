@@ -38,7 +38,11 @@ pkgs.appimageTools.wrapType2 {
     meta
     ;
 
-  extraPkgs = pkgs: with pkgs; [ ffmpeg_8 ];
+  extraPkgs =
+    pkgs: with pkgs; [
+      ffmpeg_8
+      libnotify
+    ];
 
   extraInstallCommands =
     let
