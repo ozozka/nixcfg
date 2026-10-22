@@ -63,7 +63,7 @@ in
     };
 
     wallpaper =
-      mkOpt lib.types.path "${pkgs.ozozka.ozozka-assets}/share/wallpapers/swirls.jpg"
+      mkOpt lib.types.path "${pkgs.ozozka.ozozka-assets}/share/wallpapers/ebru.jpg"
         "Wallpaper image.";
 
     cursor = {
