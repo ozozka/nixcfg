@@ -68,7 +68,7 @@ in
 
     cursor = {
       size = mkOpt lib.types.int 24 "Cursor size";
-      name = mkOpt lib.types.str "DMZ-White" "Cursor name";
+      name = mkOpt lib.types.str (if cfg.col.isDark then "DMZ-White" else "DMZ-Black") "Cursor name";
       pkg = lib.mkPackageOption pkgs "vanilla-dmz" { };
     };
 
