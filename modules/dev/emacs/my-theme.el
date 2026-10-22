@@ -51,13 +51,13 @@
    `(error ((t (:foreground ,my-theme-col-s :underline (:color ,my-theme-col-s :style wave)))))
    `(warning ((t (:foreground ,my-theme-col-p :underline (:color ,my-theme-col-p :style wave)))))
 
-   `(mode-line ((t (:background ,my-theme-col-o :foreground ,my-theme-col-f))))
-   `(mode-line-inactive ((t (:background ,my-theme-col-o :foreground ,my-theme-col-m))))
+   `(mode-line ((t (:background ,my-theme-col-b :foreground ,my-theme-col-f))))
+   `(mode-line-inactive ((t (:background ,my-theme-col-b :foreground ,my-theme-col-m))))
    `(header-line ((t (:inherit mode-line))))
 
    `(tab-line ((t (:inherit mode-line))))
    `(tab-line-tab ((t (:inherit mode-line))))
-   `(tab-line-tab-current ((t (:inherit mode-line :background ,my-theme-col-b :foreground ,my-theme-col-m :weight bold))))
+   `(tab-line-tab-current ((t (:inherit mode-line :background ,my-theme-col-o :foreground ,my-theme-col-f :weight bold))))
    `(tab-line-tab-inactive ((t (:inherit mode-line :foreground ,my-theme-col-m))))
    `(tab-line-tab-modified ((t (:foreground ,my-theme-col-p :weight bold))))
 
