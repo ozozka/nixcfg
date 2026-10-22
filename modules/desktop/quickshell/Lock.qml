@@ -66,11 +66,11 @@ Scope {
   IpcHandler {
     target: "lock"
     function lock(): void {
-    lockModule.engage();
-  }
+      lockModule.engage();
+    }
     function suspend(): void {
-                          lockModule.suspendWhenSecure();
-                        }
+      lockModule.suspendWhenSecure();
+    }
   }
 
   PamContext {
