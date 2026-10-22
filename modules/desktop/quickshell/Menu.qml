@@ -353,8 +353,8 @@ Scope {
       }
     }
     background: Rectangle {
-      color: button.selected || (button.enabled && (button.down || button.hovered)) ? button.theme.colB :
-                                                                                      button.theme.colO
+      color: button.selected || (button.enabled && (button.down || button.hovered)) ? button.theme.colO :
+                                                                                      button.theme.colB
     }
   }
 
@@ -398,7 +398,7 @@ Scope {
 
       Rectangle {
         id: surface
-        color: menu.theme.colO
+        color: menu.theme.colB
         MouseArea {
           anchors.fill: parent
           acceptedButtons: Qt.AllButtons
@@ -420,7 +420,7 @@ Scope {
   component SelectionWidget: Rectangle {
     id: widget
     required property T theme
-    color: widget.theme.colO
+    color: widget.theme.colB
     required property var menuWindow
     property var anchorItem: null
     property string title: ""
@@ -549,7 +549,7 @@ Scope {
         readonly property bool current: ListView.isCurrentItem
         width: results.width
         height: applications.resultHeight
-        color: resultHover.hovered || resultItem.current ? applications.theme.colB : applications.theme.colO
+        color: resultHover.hovered || resultItem.current ? applications.theme.colO : applications.theme.colB
         HoverHandler {
         id: resultHover
       }
@@ -602,7 +602,7 @@ Scope {
         right: parent.right
       }
         height: applications.theme.dimM + applications.theme.dimS * 2
-        color: applications.theme.colO
+        color: applications.theme.colB
         TextInput {
         id: search
         activeFocusOnTab: true
@@ -612,7 +612,7 @@ Scope {
       }
         color: applications.theme.colF
         selectionColor: applications.theme.colP
-        selectedTextColor: applications.theme.colO
+        selectedTextColor: applications.theme.colB
         font.family: "sans-serif"
         font.pointSize: applications.theme.fontSizeM
         verticalAlignment: TextInput.AlignVCenter
@@ -974,11 +974,11 @@ Scope {
         color: controls.theme.colF
         placeholderTextColor: controls.theme.colM
         selectionColor: controls.theme.colP
-        selectedTextColor: controls.theme.colO
+        selectedTextColor: controls.theme.colB
         font.family: "sans-serif"
         font.pointSize: controls.theme.fontSizeM
         background: Rectangle {
-        color: controls.theme.colB
+        color: controls.theme.colO
       }
         onAccepted: controls.submitPassword()
         Connections {
@@ -1050,7 +1050,7 @@ Scope {
         placeholderTextColor: controls.theme.colM
         font.family: "monospace"
         background: Rectangle {
-        color: controls.theme.colB
+        color: controls.theme.colO
       }
         onAccepted: {
         pairing.respond(text);
@@ -1148,7 +1148,7 @@ Scope {
         y: volume.topPadding + volume.availableHeight / 2 - height / 2
         width: volume.availableWidth
         height: 4
-        color: audioControl.controlOwner.theme.colB
+        color: audioControl.controlOwner.theme.colO
         Rectangle {
         width: volume.visualPosition * parent.width
         height: parent.height

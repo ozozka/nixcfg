@@ -153,7 +153,7 @@ Scope {
           Rectangle {
             width: parent.width
             height: theme.dimM * 2
-            color: theme.colB
+            color: theme.colO
 
             TextInput {
               id: password

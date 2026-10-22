@@ -87,7 +87,7 @@ Scope {
     }
 
     implicitHeight: content.implicitHeight + card.theme.dimS * 2
-    color: cardHover.hovered ? card.theme.colB : card.theme.colO
+    color: cardHover.hovered ? card.theme.colO : card.theme.colB
     HoverHandler {
       id: cardHover
     }

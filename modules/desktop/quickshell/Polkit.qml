@@ -22,7 +22,7 @@ Scope {
     }
 
     Rectangle {
-      color: theme.colO
+      color: theme.colB
       anchors.fill: parent
 
       Column {
@@ -110,7 +110,7 @@ Scope {
             enabled: agent.flow?.isResponseRequired ?? false
             color: theme.colF
             selectionColor: theme.colP
-            selectedTextColor: theme.colO
+            selectedTextColor: theme.colB
             font {
               family: "monospace"
               pointSize: theme.fontSizeM
@@ -164,7 +164,7 @@ Scope {
             Text {
               id: authenticateText
               anchors.centerIn: parent
-              color: theme.colO
+              color: theme.colB
               font {
                 family: "monospace"
                 pointSize: theme.fontSizeM

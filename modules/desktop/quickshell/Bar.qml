@@ -27,7 +27,7 @@ Scope {
 
       WlrLayershell.namespace: "quickshell-bar"
 
-      color: barModule.theme.colO
+      color: barModule.theme.colB
 
       implicitHeight: barModule.theme.dimM
       anchors {
@@ -303,7 +303,7 @@ Scope {
         readonly property bool occupied: (ws?.toplevels.values.length ?? 0) > 0
         width: glyph.implicitWidth
         height: theme.dimM
-        color: workspace.isActive ? theme.colB : theme.colO
+        color: workspace.isActive ? theme.colO : theme.colB
 
         Text {
           id: glyph
