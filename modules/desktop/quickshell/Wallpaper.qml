@@ -23,11 +23,11 @@ Scope {
         right: true
       }
 
-      color: "transparent"
+      color: theme.colB
 
       Image {
         anchors.fill: parent
-        fillMode: Image.PreserveAspectCrop
+        fillMode: Image.PreserveAspectFit
         source: Qt.resolvedUrl(theme.wallpaper)
       }
     }
