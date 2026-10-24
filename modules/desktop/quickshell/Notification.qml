@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Services.Notifications
 
@@ -67,6 +68,17 @@ Scope {
 
   NotificationStore {
     id: store
+  }
+
+  IpcHandler {
+    target: "notifications"
+    function dismissAll(): void {
+      const states = store.states.slice();
+      for (const state of states) {
+        if (state.notification)
+          state.notification.dismiss();
+      }
+    }
   }
 
   component NotificationCard: Rectangle {
