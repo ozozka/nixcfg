@@ -148,6 +148,7 @@ hl.window_rule {
 local mainMod = "SUPER"
 
 hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd "qs ipc call notifications dismissAll")
+hl.bind(mainMod .. " + SHIFT + Escape", hl.dsp.exec_cmd "qs ipc call lock lock")
 hl.bind(mainMod .. " + A", hl.dsp.exec_cmd "qs ipc call menu toggle")
 hl.bind(
   mainMod .. " + P",
