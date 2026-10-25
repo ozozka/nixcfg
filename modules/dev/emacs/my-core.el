@@ -5,6 +5,11 @@
 
 (defvar my-scroll-step 12 "Number of lines to scroll with custom scroll commands.")
 
+(use-package server
+  :ensure nil
+  :custom
+  (server-window #'switch-to-buffer-other-window))
+
 (use-package emacs
   :ensure nil
 
