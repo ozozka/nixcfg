@@ -17,6 +17,7 @@ in
       "prompts" = ./prompts;
       # "skills" = ./skills;
       "extensions" = ./extensions;
+      # "APPEND_SYSTEM.md"
 
       "mcp.json" = settingsFormat.generate "mcp.json" {
         mcpServers = {
@@ -32,7 +33,7 @@ in
       };
 
       "settings.json" = settingsFormat.generate "settings.json" {
-        lastChangelogVersion = "1.2.0";
+        lastChangelogVersion = "1.3.0";
 
         defaultProvider = "openai-codex";
         defaultModel = "gpt-6.1-sol";
@@ -121,8 +122,8 @@ in
           customMessageText = "muted";
           customMessageLabel = "secondary";
 
-          toolPendingBg = "bg";
-          toolSuccessBg = "overlay";
+          toolPendingBg = "overlay";
+          toolSuccessBg = "bg";
           toolErrorBg = "overlay";
           toolTitle = "primary";
           toolOutput = "text";
