@@ -183,6 +183,105 @@
   (tab-bar-mode 1)
   (tab-bar-history-mode 1))
 
+(use-package diff-mode
+  :ensure nil
+  :custom
+  (tab-width 4)
+  (diff-refine-nonmodified nil)
+  (diff-font-lock-prettify t))
+
+(use-package vc-git
+  :ensure nil
+  :config
+  (require 'subr-x)
+  (defvar my-vc-git-stats-cache (make-hash-table :test 'equal) "Git statistics indexed by absolute file name.")
+  (defun my-vc-git-collect-stats (dir)
+    "Collect tracked and untracked change statistics in DIR."
+    (clrhash my-vc-git-stats-cache)
+    ;; Tracked files.
+    (with-temp-buffer
+      (when (zerop (process-file "git" nil t nil "-C" dir "diff" "HEAD" "--numstat"))
+        (dolist (line (split-string (buffer-string) "\n" t))
+          (pcase (split-string line "\t")
+            (`(,a ,d ,file)
+             (puthash
+              (expand-file-name file dir)
+              (list (string-to-number a)
+                    (string-to-number d))
+              my-vc-git-stats-cache))))))
+    ;; Untracked files.
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (when (zerop (process-file "git" nil t nil "-C" dir "ls-files" "--others" "--exclude-standard" "-z"))
+        (dolist (file (split-string (buffer-string) "\0" t))
+          (let ((path (expand-file-name file dir)))
+            (when (file-regular-p path)
+              (puthash
+               path
+               (list
+                (with-temp-buffer
+                  (insert-file-contents-literally path)
+                  (count-lines (point-min) (point-max)))
+                0)
+               my-vc-git-stats-cache)))))))
+  (defun my-vc-git-numstat (_dir)
+  "Return a one-line summary of uncommitted Git changes."
+  (let ((added 0)
+        (removed 0)
+        (count 0))
+    (maphash
+     (lambda (_file stats)
+       (cl-incf count)
+       (cl-incf added (car stats))
+       (cl-incf removed (cadr stats)))
+     my-vc-git-stats-cache)
+    (when (> count 0)
+      (concat
+       (propertize (format "%d " count) 'face 'bold)
+       (propertize (format "%+d" (- added removed)) 'face (if (>= added removed) 'diff-indicator-added 'diff-indicator-removed))
+       (propertize (format " +%d -%d" added removed) 'face 'vc-dir-header)))))
+  (defun my-vc-git-commit-count (dir)
+    "Return the number of commits reachable from HEAD in DIR."
+    (with-temp-buffer
+      (when (zerop (process-file "git" nil t nil "-C" dir "rev-list" "--count" "HEAD"))
+        (string-trim (buffer-string)))))
+  (defun my-vc-git-extra-stats (original dir)
+  "Append Git statistics and commit count to ORIGINAL header."
+  (my-vc-git-collect-stats dir)
+  (let ((header (funcall original dir))
+        (stats (my-vc-git-numstat dir))
+        (commits (my-vc-git-commit-count dir)))
+    (string-join
+     (delq nil
+           (list
+            (unless (string-empty-p (or header "")) header)
+            (when commits (concat (propertize "Commits    : " 'face 'vc-dir-header) commits))
+            (when stats (concat (propertize "Change     : " 'face 'vc-dir-header) stats))))
+     "\n")))
+  (advice-add 'vc-git-dir-extra-headers :around #'my-vc-git-extra-stats)
+  (defun my-vc-git-dir-stats (original info)
+  "Print INFO with Git statistics before the filename."
+  (let ((start (point)))
+    (funcall original info)
+    (let* ((file (vc-dir-fileinfo->name info))
+           (path (expand-file-name file default-directory))
+           (stats (unless (vc-dir-fileinfo->directory info) (gethash path my-vc-git-stats-cache)))
+           (filename-pos (text-property-any start (point) 'keymap vc-dir-filename-mouse-map)))
+      (when filename-pos
+        (save-excursion
+          (goto-char filename-pos)
+          (if stats
+              (pcase-let* ((`(,added ,removed) stats) (change (- added removed)))
+                (insert
+                 (propertize (format "%3d%3d" added removed) 'face 'vc-dir-header)
+                 (propertize (format " %+4d " change) 'face (if (>= change 0) 'diff-indicator-added 'diff-indicator-removed))))
+                ;; Keep directory names aligned with file names.
+                (insert (make-string 12 ?\s))))))))
+  (advice-remove 'vc-git-dir-printer #'my-vc-git-dir-stats)
+  (advice-add 'vc-git-dir-printer :around #'my-vc-git-dir-stats)
+  :custom
+  (vc-git-diff-switches '("--unified=1" "--numstat" "--shortstat")))
+
 (use-package vc
   :ensure nil
   :custom

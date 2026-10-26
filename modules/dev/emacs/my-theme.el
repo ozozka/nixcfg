@@ -106,6 +106,18 @@
    `(vc-dir-mark-indicator ((t (:foreground ,my-theme-col-p :weight bold))))
    `(vc-dir-status-edited ((t (:foreground ,my-theme-col-s))))
 
+   `(diff-header ((t (:background ,my-theme-col-o :foreground ,my-theme-col-f :extend nil :extend t))))
+   `(diff-file-header ((t (:background ,my-theme-col-o :foreground ,my-theme-col-f :weight bold :underline (:style dots)))))
+   `(diff-hunk-header ((t (:background ,my-theme-col-o :foreground ,my-theme-col-f :weight bold :underline (:style dots)))))
+   `(diff-function ((t (:foreground ,my-theme-col-m :italic t))))
+   `(diff-context ((t (:height ,my-theme-font-size-m))))
+   `(diff-refine-removed ((t (:weight bold :background ,my-theme-col-o))))
+   `(diff-refine-added ((t (:weight bold :background ,my-theme-col-o))))
+   `(diff-removed ((t (:extend t))))
+   `(diff-added ((t (:extend t))))
+   `(diff-indicator-removed ((t (:foreground ,my-theme-col-s :weight bold))))
+   `(diff-indicator-added ((t (:foreground ,my-theme-col-p :weight bold))))
+
    `(dired-header ((t (:foreground ,my-theme-col-m :weight bold))))
    `(dired-directory ((t (:foreground ,my-theme-col-s :weight bold))))
 
