@@ -33,7 +33,7 @@ in
       };
 
       "settings.json" = settingsFormat.generate "settings.json" {
-        lastChangelogVersion = "1.3.0";
+        lastChangelogVersion = "1.4.0";
 
         defaultProvider = "openai-codex";
         defaultModel = "gpt-6.1-sol";
