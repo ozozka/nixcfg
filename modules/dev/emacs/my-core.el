@@ -121,6 +121,13 @@
      (project-mode-line project-mode-line-format)
      mode-line-end-spaces)))
 
+(use-package mwheel
+  :ensure nil
+  :custom
+  (mouse-wheel-scroll-amount '(2))
+  (mouse-wheel-progressive-speed t)
+  (mouse-wheel-follow-mouse t))
+
 (use-package uniquify
   :ensure nil
   :custom
