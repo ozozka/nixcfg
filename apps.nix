@@ -3,6 +3,83 @@
 rec {
   default = info;
 
+  wallpaper = {
+    type = "app";
+    meta.description = "AI-upscale an image to a 4K wallpaper.";
+    program =
+      let
+        script = pkgs.writeShellApplication {
+          name = "wallpaper";
+          runtimeInputs = with pkgs; [
+            coreutils
+            realesrgan-ncnn-vulkan
+            imagemagick
+            ffmpeg
+          ];
+          text = ''
+            die() {
+              printf 'wallpaper: %s\n' "$*" >&2
+              exit 1
+            }
+
+            if [[ $# -ne 2 ]]; then
+              die "Usage: wallpaper INPUT OUTPUT.jpg (or OUTPUT.png)"
+            fi
+
+            [[ -f "$1" && -r "$1" ]] || die "Input must be a readable image file."
+            input=$(realpath -- "$1")
+            output=$(realpath -m -- "$2")
+            [[ "$input" != "$output" ]] || die "Input and output must be different files."
+            [[ ! -e "$2" && ! -L "$2" ]] || die "Output already exists; refusing to overwrite it."
+            [[ -d "$(dirname -- "$output")" ]] || die "Output directory does not exist."
+
+            case "''${output,,}" in
+              *.jpg|*.jpeg) format=jpg ;;
+              *.png) format=png ;;
+              *) die "Output must have a .jpg, .jpeg, or .png extension." ;;
+            esac
+
+            # Keep the final temporary file on the output filesystem so publishing
+            # it with a hard link is atomic and cannot overwrite another file.
+            work=$(mktemp -d -- "$(dirname -- "$output")/.wallpaper.XXXXXXXX")
+            trap 'rm -rf -- "$work"' EXIT
+            trap 'exit 130' INT
+            trap 'exit 143' TERM
+
+            printf 'Preparing image…\n'
+            magick "''${input}[0]" -auto-orient -colorspace sRGB -background black \
+              -alpha remove -alpha off -depth 8 "PNG24:$work/input.png"
+
+            printf 'Upscaling 4× with Real-ESRGAN x4plus (Vulkan required)…\n'
+            if ! realesrgan-ncnn-vulkan -i "$work/input.png" -o "$work/upscaled.png" \
+              -n realesrgan-x4plus -s 4; then
+              die "AI upscaling failed. Check Vulkan drivers and GPU availability."
+            fi
+
+            printf 'Resizing to 3840×2160 without stretching…\n'
+            magick "$work/upscaled.png" -filter Lanczos -resize '3840x2160^' \
+              -gravity center -extent 3840x2160 -depth 8 "PNG24:$work/4k.png"
+
+            if [[ "$format" == jpg ]]; then
+              ffmpeg -hide_banner -loglevel warning -n -i "$work/4k.png" \
+                -frames:v 1 -c:v mjpeg -q:v 1 -pix_fmt yuvj444p -update 1 "$work/result.jpg"
+            else
+              magick "$work/4k.png" -define png:compression-level=9 "PNG24:$work/result.png"
+            fi
+
+            dimensions=$(magick identify -format '%wx%h' "$work/result.$format")
+            [[ "$dimensions" == 3840x2160 ]] || die "Unexpected output dimensions: $dimensions"
+            ln -T -- "$work/result.$format" "$output" || die "Could not publish output; nothing was overwritten."
+            printf 'Saved %s (%s). Original unchanged.\n' "$output" "$dimensions"
+            if [[ "$format" == jpg ]]; then
+              printf 'JPEG uses maximum quality and 4:4:4 chroma, but is not lossless.\n'
+            fi
+          '';
+        };
+      in
+      "${script}/bin/wallpaper";
+  };
+
   info = {
     type = "app";
     meta.description = "Run fastfetch with custom modules.";
