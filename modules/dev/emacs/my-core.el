@@ -316,6 +316,8 @@
 
 (use-package term
   :ensure nil
+  :custom
+  (term-buffer-maximum-size 2400)
   :hook
   (term-mode . (lambda ()
                  (setq-local font-lock-mode nil)
