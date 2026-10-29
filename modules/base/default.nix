@@ -140,6 +140,7 @@ in
       c = "printf '\\033c'";
       nd = "exec nix develop";
       nf = "nix flake";
+      n = "f() { nix run \".#$1\" -- \"\${@:2}\"; }; f";
       j = "just";
     };
 
