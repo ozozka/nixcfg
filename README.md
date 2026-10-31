@@ -4,14 +4,13 @@
 
 ### Background
 
-The main reason I use Nix is its declarative model. It lets me describe how my system
-and project environments should be configured, rather than maintain a sequence of
-setup steps. I treat system infrastructure and project dependencies as part of the
-same approach: both should be explicit, versioned, and reproducible, rather than
-depend on accumulated machine state or manual setup. Nix brings system configuration
-and package management together, replacing fragmented tools and installation methods
-with a unified approach. This keeps my setup lean and consistent, while reproducible
-configurations and rollbacks make changes easier to manage.
+The main reason I use Nix is its declarative model. It lets me describe how my system and
+project environments should be configured, rather than maintain a sequence of setup steps. I
+treat system infrastructure and project dependencies as part of the same approach: both should
+be explicit, versioned, and reproducible, rather than depend on accumulated machine state or
+manual setup. Nix brings system configuration and package management together, replacing
+fragmented tools and installation methods with a unified approach. This keeps my setup lean and
+consistent, while reproducible configurations and rollbacks make changes easier to manage.
 
 ### Philosophy
 
