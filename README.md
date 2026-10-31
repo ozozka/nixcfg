@@ -2,15 +2,34 @@
 
 ## About
 
-My Nix configuration.
+### Background
 
-**Principles**
+The main reason I use Nix is its declarative model. It lets me describe how my system
+and project environments should be configured, rather than maintain a sequence of
+setup steps. I treat system infrastructure and project dependencies as part of the
+same approach: both should be explicit, versioned, and reproducible, rather than
+depend on accumulated machine state or manual setup. Nix brings system configuration
+and package management together, replacing fragmented tools and installation methods
+with a unified approach. This keeps my setup lean and consistent, while reproducible
+configurations and rollbacks make changes easier to manage.
 
-- No third party extensions, plugins, mods, and packages for flake and programs.
-- Modules and programs must contain and manage their dot files and configuration.
-- All dot files must be managed from Nix declaratively without imperative setup.
+### Philosophy
+
+- **Lean:** Maximize value while minimizing complexity, maintenance cost, and dependencies.
+- **Simplicity:** Prefer built-in capabilities over additional layers and add-ons.
+- **Consistency:** Centralize shared settings and maintain consistent behavior across programs.
+- **Recency:** Track recent releases for new features and performance improvements.
+- **Reliability:** Use reproducible configurations and rollbacks with rolling releases.
+- **Cohesion:** Manage software centrally through Nixpkgs and custom Nix packages.
+
+### Principles
+
+- No third-party program extensions, plugins, or mods, or additional flake dependencies.
+- Modules and programs must contain and manage their dotfiles and configuration.
+- All dotfiles must be managed declaratively through Nix, without imperative setup.
 - Options and constants must be managed and injected by Nix.
-- Home Management configurable for each host and user.
+- Home management must be configurable for each host and user.
+- Flake outputs must be directly reusable without project-specific special arguments.
 
 ## Manual
 
