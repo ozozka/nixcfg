@@ -8,6 +8,16 @@ import {
   generateUnifiedPatch,
 } from "@earendil-works/pi-coding-agent";
 
+/**
+ * Standalone metrics publisher + terminal presentation.
+ *
+ * Generic pi.events contract (no adapter/Emacs dependency):
+ * ozozka:status:update publishes version:1 snapshots with raw millisecond/token/
+ * quota values; ozozka:status:request asks for the current snapshot. A null
+ * snapshot clears a session's metrics. Live clocks/counters deliberately reset
+ * on session replacement; they are not invented from historical transcripts.
+ * Quotas are observed provider data, never estimated from token consumption.
+ */
 const STATUS_KEY = "session-metrics";
 const CODEX_PROVIDER = "openai-codex";
 const STALE_AFTER_MS = 10 * 60 * 1000;
@@ -187,6 +197,30 @@ export default function (pi: ExtensionAPI) {
         ? lastPromptMilliseconds
         : performance.now() - activeStartedAt,
     );
+    pi.events.emit("ozozka:status:update", {
+      version: 1,
+      sessionId: context.sessionManager.getSessionId(),
+      observedAt: Date.now(),
+      activeMilliseconds:
+        activeMilliseconds +
+        (activeStartedAt === undefined
+          ? 0
+          : performance.now() - activeStartedAt),
+      promptMilliseconds:
+        activeStartedAt === undefined
+          ? lastPromptMilliseconds
+          : performance.now() - activeStartedAt,
+      tokensPerSecond: lastTps ?? null,
+      provider: selectedProvider,
+      windows: [...usage.values()].sort(
+        (a, b) => a.windowMinutes - b.windowMinutes,
+      ),
+      toolCalls,
+      addedLines,
+      removedLines,
+    });
+    // Publishing is mode independent; ANSI/theme rendering is terminal only.
+    if (context.mode !== "tui") return;
     const parts = [`${elapsed}-${promptElapsed}`];
     if (lastTps !== undefined) parts.push(`${lastTps.toFixed(1)} tps`);
     if (selectedProvider === CODEX_PROVIDER && usage.size > 0) {
@@ -223,7 +257,14 @@ export default function (pi: ExtensionAPI) {
   function stop() {
     if (timer !== undefined) clearInterval(timer);
     timer = undefined;
-    context?.ui.setStatus(STATUS_KEY, undefined);
+    if (context) {
+      pi.events.emit("ozozka:status:update", {
+        version: 1,
+        sessionId: context.sessionManager.getSessionId(),
+        snapshot: null,
+      });
+      if (context.mode === "tui") context.ui.setStatus(STATUS_KEY, undefined);
+    }
     context = undefined;
     activeMilliseconds = 0;
     activeStartedAt = undefined;
@@ -254,9 +295,11 @@ export default function (pi: ExtensionAPI) {
       addChanges(countPatchLines(details.patch));
   });
 
+  pi.events.on("ozozka:status:request", updateStatus);
+
   pi.on("session_start", (_event, ctx) => {
     stop();
-    if (ctx.mode !== "tui") return;
+    if (!ctx.hasUI) return;
     context = ctx;
     selectedProvider = ctx.model?.provider;
     updateStatus();

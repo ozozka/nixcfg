@@ -65,6 +65,7 @@ in
       "init.el" = ./init.el;
       "my-core.el" = ./my-core.el;
       "my-env.el" = ./my-env.el;
+      "my-agent.el" = ./my-agent.el;
       "my-modes.el" = ./my-modes.el;
       "my-net.el" = ./my-net.el;
       "my-theme.el" = ./my-theme.el;
@@ -75,6 +76,10 @@ in
         ;;; Code:
 
         (defgroup my-options nil "Options for my theme." :group 'convenience)
+
+        ;; Keep the Nix-to-Elisp interface in this generated file.
+        (setq my-agent-program "${pkgs.pi-coding-agent}/bin/pi"
+              my-agent-adapter-file "${../pi/adapter.ts}")
 
         (defcustom my-user-fullname "${cfg.user.fullname}" "User full name." :type 'string :group 'my-options)
         (defcustom my-user-email "${cfg.user.email}" "User email." :type 'string :group 'my-options)
