@@ -12,6 +12,7 @@ in
   imports = [
     ../options.nix
 
+    ./music.nix
     ./hyprland
     ./quickshell
     ./zen

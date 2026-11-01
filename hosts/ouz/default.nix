@@ -43,6 +43,10 @@ inputs.nixpkgs.lib.nixosSystem {
         fsType = "ext4";
       };
 
+      environment.sessionVariables = {
+        KAYNAK_HOME = "/ozozka/al/kaynak";
+      };
+
       users.users.ouz = {
         isNormalUser = true;
         description = "ouz";
@@ -52,10 +56,20 @@ inputs.nixpkgs.lib.nixosSystem {
         ];
       };
 
-      ozozka.home.users = {
-        ouz = {
-          emacs = true;
-          pi = true;
+      ozozka = {
+        mod = {
+          desktop = {
+            music = {
+              user = "ouz";
+              directory = "/ozozka/at/muz";
+            };
+          };
+        };
+        home.users = {
+          ouz = {
+            emacs = true;
+            pi = true;
+          };
         };
       };
     }
