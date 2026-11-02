@@ -34,11 +34,31 @@
 ;; text properties before leaving the scratch buffer. The transcript owns those
 ;; faces: ordinary font-lock/whitespace passes are restricted to the prompt, or
 ;; redisplay would erase the copied Markdown faces after they were inserted.
+;;
+;; PRESENTATION: three planes instead of one stream.  The transcript carries
+;; the conversation only: a human turn ("YOU" label plus Markdown), a model
+;; answer (Markdown, no label), thinking (one muted marker line) and tool
+;; cards (heading plus body).  System noise never enters the transcript: it is
+;; collected in a per-agent compilation buffer (C-c C-e) and counted in the
+;; status line.  The composer is the last region of the buffer, flat and
+;; unmarked by a surface, separated by a thin rule in the overlay colour; it
+;; has a placeholder and attachment chips and renders live Markdown once the
+;; draft stopped changing, so typing never pays for a parse.  Hierarchy comes
+;; from color, weight and vertical rhythm: no borders, no indentation, no
+;; nesting.  Machine content (tool headings, commands, code, diffs) is
+;; monospace; human content (answers, thinking) is proportional.  Tool cards
+;; state what they did: read names the file and the line range, bash shows the
+;; command in its heading and its output in the body, edit shows one diff,
+;; write shows the written content.  The header line holds the live metrics
+;; in Pi's own order (tokens in, tokens out, cache reads, cache writes, cost
+;; and the context share with its window) and the mode line the identity of
+;; the agent.
+;;
 ;; Prose is variable-pitch; section labels/tools/code/diffs are fixed-pitch.
-;; Tools start expanded (thinking remains foldable/collapsed). Tool arguments
+;; Tools start expanded; thinking is a single line with nothing to expand. Tool arguments
 ;; use native multiline commands/files/replacements and a single result diff,
 ;; rather than duplicated JSON-escaped patch strings. Unknown fields still get
-;; a visible generic representation; [data] always retains the complete record.
+;; a visible generic representation; the complete record stays retrievable.
 ;; The editable prompt is isolated Markdown too, but copies faces only: syntax
 ;; stays visible and editing/undo never operate on hidden markup or buttons.
 ;; Prompt rendering is cached per buffer; streamed transcript changes do not
@@ -49,8 +69,10 @@
 ;; LOSSLESS POLICY: received stdout, adapter and stderr chunks are appended to
 ;; private files before decoding/presentation.  Unknown records, methods, content
 ;; types and malformed lines have visible generic sections, not silent default
-;; branches.  Every section has a data inspector.  Tools/thinking fold, never
-;; truncate.  Tool partial-result semantics are tool-specific: show the latest
+;; branches.  Every section has a data inspector.  Tools fold, never truncate;
+;; a thinking section is summarised by its marker and keeps its text in the
+;; record, the log and Pi's session file.  Tool partial-result semantics are
+;; tool-specific: show the latest
 ;; snapshot and retain every earlier update in raw logs.  Final messages replace
 ;; speculative deltas.  Compaction never deletes the human transcript.  Restoring
 ;; history walks raw entries, not only compacted get_messages.  Transient updates
@@ -82,7 +104,9 @@
 ;; ENTRY POINTS: M-x my-agent (focus/select), my-agent-new (always independent).
 ;; Prefix my-agent-new asks for directory/name.  No automatic resume-on-create.
 ;; C-c C-c send/steer, C-c C-f follow-up, C-c C-k abort, C-c C-d answer dialog,
-;; C-c C-p menu, C-c C-o fold all, TAB toggle/complete, M-p/M-n prompt history.
+;; C-c C-e event log, C-c C-s statistics, C-c C-p menu, C-c C-o fold all, TAB
+;; toggle/complete, M-p/M-n prompt history, RET inspect the record at point.
+;; Numbers answer a pending question while the cursor is inside its card.
 ;; Nix injects program/adapter paths through the existing my-options interface.
 ;; Tests: emacs --batch --no-init-file -L modules/dev/emacs -l my-agent-tests
 ;;          -f ert-run-tests-batch-and-exit
@@ -120,22 +144,123 @@
   :type 'directory :group 'my-agent)
 (defcustom my-agent-request-timeout 30 "Seconds for interactive control queries."
   :type 'number :group 'my-agent)
+(defcustom my-agent-compose-delay 0.06
+  "Seconds of silence before the composer is rendered as Markdown.
+Live Markdown must not make typing expensive; the composer is rendered once
+after the draft stops changing, exactly like Emacs defers fontification."
+  :type 'number :group 'my-agent)
+(defcustom my-agent-composer-rule-width 24
+  "Number of columns of the thin rule drawn above the composer."
+  :type 'number :group 'my-agent)
+(defcustom my-agent-event-limit 5000
+  "Maximum number of lines kept in the per-agent events buffer."
+  :type 'number :group 'my-agent)
+(defcustom my-agent-composer-placeholder "Ask…  / commands  ! shell  @ files"
+  "Hint shown while the composer is empty."
+  :type 'string :group 'my-agent)
+
+(defun my-agent--theme-value (variable fallback)
+  "Return the value of VARIABLE when it is usable, otherwise FALLBACK.
+The Nix generated option file provides colors, fonts and heights; this
+frontend also runs in a bare batch Emacs, so every value has a fallback."
+  (let ((value (and (boundp variable) (symbol-value variable))))
+    (if (or (null value) (equal value "")) fallback value)))
+
+(defun my-agent--theme-height (variable fallback)
+  "Return a usable face height from VARIABLE, otherwise FALLBACK.
+Heights are 1/12 point units; accept both numbers and numeric strings."
+  (let ((value (my-agent--theme-value variable nil)))
+    (cond ((numberp value) (if (> value 0) value fallback))
+          ((stringp value) (let ((number (string-to-number value)))
+                             (if (> number 0) number fallback)))
+          (t fallback))))
+
+(defvar my-agent--color-primary (my-agent--theme-value 'my-theme-col-p "#09bea8")
+  "Accent color: tool names, success, links.")
+(defvar my-agent--color-secondary (my-agent--theme-value 'my-theme-col-s "#ff3963")
+  "Attention color: failures and declines.")
+(defvar my-agent--color-foreground (my-agent--theme-value 'my-theme-col-f "#ffffff")
+  "Body text color.")
+(defvar my-agent--color-muted (my-agent--theme-value 'my-theme-col-m "#7e8180")
+  "Secondary text color.")
+(defvar my-agent--color-overlay (my-agent--theme-value 'my-theme-col-o "#101212")
+  "Surface color used to tint the composer.")
+(defvar my-agent--height-small (my-agent--theme-height 'my-theme-font-size-s 90)
+  "Height for metadata, labels and previews.")
+(defvar my-agent--height-medium (my-agent--theme-height 'my-theme-font-size-m 120)
+  "Height for prose, headings and code.")
+
 (defface my-agent-heading '((t (:inherit font-lock-function-name-face :weight bold)))
   "Section titles." :group 'my-agent)
-(defface my-agent-muted '((t (:inherit shadow))) "Secondary information." :group 'my-agent)
+(defface my-agent-muted '((t (:inherit my-agent-meta))) "Secondary information." :group 'my-agent)
 (defface my-agent-warning '((t (:inherit warning :weight bold))) "Attention." :group 'my-agent)
+(defface my-agent-meta
+  `((t (:inherit variable-pitch-text :height ,my-agent--height-small
+            :foreground ,my-agent--color-muted)))
+  "Labels, metadata and placeholders." :group 'my-agent)
+(defface my-agent-you-label '((t (:inherit my-agent-meta :weight bold)))
+  "Label above the human's own turns." :group 'my-agent)
+(defface my-agent-think
+  `((t (:inherit variable-pitch :height ,my-agent--height-small
+            :foreground ,my-agent--color-muted)))
+  "Marker of a thinking section." :group 'my-agent)
+(defface my-agent-tool-name
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-primary)))
+  "Tool name in a card heading." :group 'my-agent)
+(defface my-agent-tool-target
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-foreground)))
+  "Tool target in a card heading." :group 'my-agent)
+(defface my-agent-tool-meta
+  `((t (:inherit fixed-pitch :height ,my-agent--height-small
+            :foreground ,my-agent--color-muted)))
+  "Tool metadata in a card heading." :group 'my-agent)
+(defface my-agent-tool-ok
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-primary)))
+  "Successful tool status." :group 'my-agent)
+(defface my-agent-tool-error
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-secondary)))
+  "Failed tool status." :group 'my-agent)
+(defface my-agent-tool-running
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-muted)))
+  "Running or approximate tool status." :group 'my-agent)
+(defface my-agent-separator
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-overlay)))
+  "Thin rule that separates the transcript from the composer." :group 'my-agent)
+(defface my-agent-output
+  `((t (:inherit fixed-pitch :height ,my-agent--height-small
+            :foreground ,my-agent--color-muted)))
+  "Command output inside a tool card." :group 'my-agent)
+(defface my-agent-attention
+  `((t (:inherit variable-pitch-text :weight bold :foreground ,my-agent--color-primary)))
+  "Pending question." :group 'my-agent)
+(defface my-agent-event-info
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-muted)))
+  "Informational event." :group 'my-agent)
+(defface my-agent-event-warn
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-primary)))
+  "Warning event." :group 'my-agent)
+(defface my-agent-event-error
+  `((t (:inherit fixed-pitch :foreground ,my-agent--color-secondary)))
+  "Error event." :group 'my-agent)
 
 (cl-defstruct (my-agent--session (:constructor my-agent--make-session))
   process stderr server peer runtime token directory log-directory cli-process seen cache-previous
   (counter 0) (serial 0) pending adapter-pending blocks blocks-tail index
-  incoming backlog timer prompt output current-assistant state stats metrics
+  incoming backlog timer prompt output current-assistant current-assistant-key state stats metrics
   statuses commands dialogs history (history-index -1) history-draft attachments submissions
-  (phase "starting") ready stopped attention capabilities fallbacks)
+  (phase "starting") ready stopped attention capabilities fallbacks
+  ;; Presentation state: the event plane, the composer and pending cards.
+  (events 0) (event-errors 0) event-records events-buffer compose-timer compose-overlay chips
+  cards stats-buffer stats-timer)
 (cl-defstruct (my-agent--block (:constructor my-agent--make-block))
   id kind title (text "") chunks raw arguments collapsed start end body-end rendered
-  streaming result overlay dirty)
+  streaming result overlay dirty
+  ;; A block is a heading line and an optional body.  Keeping the two apart
+  ;; lets a status change repaint the heading without touching the body.
+  heading-start heading-end body-start status meta target note options)
 (defvar-local my-agent--session nil "All mutable interaction state for this buffer.")
 (defvar-local my-agent--prompt-cache nil "Last prompt text and its isolated Markdown presentation.")
+(defvar-local my-agent--events-for nil "Session that owns this events buffer.")
 
 (defun my-agent--object (&rest pairs)
   "Make a JSON object from alternating PAIRS."
@@ -186,9 +311,10 @@
                        ("C-c C-d" . my-agent-answer) ("C-c C-p" . my-agent-menu)
                        ("C-c C-o" . my-agent-toggle-all) ("C-c C-r" . my-agent-resume)
                        ("C-c C-a" . my-agent-attach) ("C-c C-l" . my-agent-logs)
+                       ("C-c C-e" . my-agent-events) ("C-c C-s" . my-agent-stats)
                        ("M-p" . my-agent-history-previous) ("M-n" . my-agent-history-next)
                        ("TAB" . my-agent-tab) ("C-c C-j" . my-agent-prompt)
-                       ("C-c C-v" . my-agent-visit)))
+                       ("RET" . my-agent-return) ("C-c C-v" . my-agent-visit)))
       (keymap-set map (car binding) (cdr binding))) map))
 
 (define-derived-mode my-agent-mode text-mode "Pi"
@@ -197,6 +323,8 @@
   (setq-local buffer-face-mode-face 'variable-pitch)
   (buffer-face-mode 1)
   (setq-local header-line-format '(:eval (my-agent--header)))
+  (setq-local mode-line-format
+              '((:eval (my-agent--mode-line)) "  %l:%c"))
   (setq-local completion-at-point-functions '(my-agent--completion))
   (setq-local revert-buffer-function (lambda (&rest _) (my-agent-refresh)))
   (setq-local buffer-undo-list nil)
@@ -214,42 +342,110 @@
   (font-lock-mode 1))
 
 (defun my-agent--fontify-prompt (begin end &optional verbose)
-  "Fontify only the editable part of BEGIN END, optionally VERBOSE."
-  (when-let* ((session my-agent--session)
-              (marker (my-agent--session-prompt session))
-              (prompt (marker-position marker)))
-    (setq begin (max begin prompt (point-min)) end (min end (point-max)))
-    (when (< begin end)
-      (font-lock-set-defaults)
-      ;; Default fontification can extend to line/syntax boundaries. Narrow so
-      ;; those extensions cannot reach read-only, already rendered output.
-      (save-restriction
-        (narrow-to-region (max prompt (point-min)) (point-max))
-        ;; Parse the whole prompt, not individual changed lines: fences and
-        ;; emphasis can span changes. Only face properties enter the editable
-        ;; buffer; markup remains visible, with no display/invisibility/buttons.
-        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
-               (rendered
-                (if (equal text (car my-agent--prompt-cache)) (cdr my-agent--prompt-cache)
-                  (let ((styled (my-agent--markdown text t)))
-                    (setq my-agent--prompt-cache (cons text styled)) styled))))
-          (font-lock-default-fontify-region (point-min) (point-max) verbose)
-          (with-silent-modifications
-            (let ((offset 0))
-              (while (< offset (length rendered))
-                (let ((next (next-single-property-change offset 'face rendered (length rendered)))
-                      (face (get-text-property offset 'face rendered)))
-                  (when face
-                    (add-face-text-property (+ prompt offset) (+ prompt next) face t))
-                  (setq offset next))))))))))
+  "Schedule the composer rendering; the transcript owns its own faces.
+Live Markdown must not make typing expensive, so the draft is rendered once
+the user stops typing instead of once per keystroke."
+  (ignore begin end verbose)
+  (when my-agent--session (my-agent--schedule-composer)))
 
 (defun my-agent--unfontify-prompt (begin end)
-  "Clear font-lock properties only in the editable part of BEGIN END."
-  (when-let* ((session my-agent--session)
-              (marker (my-agent--session-prompt session))
-              (prompt (marker-position marker)))
-    (setq begin (max begin prompt (point-min)) end (min end (point-max)))
-    (when (< begin end) (font-lock-default-unfontify-region begin end))))
+  "Do not clear composer faces; the renderer replaces them atomically."
+  (ignore begin end))
+
+(defun my-agent--composer-start ()
+  "Return the position where the editable composer starts."
+  (if my-agent--session
+      (marker-position (my-agent--session-prompt my-agent--session))
+    (point-min)))
+
+(defun my-agent--composer-text ()
+  "Return the current composer text."
+  (buffer-substring-no-properties (my-agent--composer-start) (point-max)))
+
+(defun my-agent--apply-faces (start rendered)
+  "Apply the FACE properties of RENDERED to the buffer from START."
+  (with-silent-modifications
+    (let ((offset 0)
+          (length (length rendered)))
+      (while (< offset length)
+        (let* ((next (next-single-property-change offset 'face rendered length))
+               (face (get-text-property offset 'face rendered))
+               (faces (cond ((null face) nil)
+                             ((listp face) face)
+                             (t (list face)))))
+          (when faces
+            (put-text-property (+ start offset) (+ start next) 'face faces))
+          (setq offset next))))))
+
+(defun my-agent--composer-rule ()
+  "Return the thin rule that separates the transcript from the composer."
+  (make-string (max 0 my-agent-composer-rule-width) ?─))
+
+(defun my-agent--render-composer ()
+  "Render the composer: live Markdown faces and the placeholder."
+  (when my-agent--session
+    (let* ((start (my-agent--composer-start))
+           (text (buffer-substring-no-properties start (point-max)))
+           (rendered (if (equal text (car my-agent--prompt-cache))
+                         (cdr my-agent--prompt-cache)
+                       (let ((styled (my-agent--markdown text t)))
+                         (setq my-agent--prompt-cache (cons text styled)) styled))))
+      (with-silent-modifications
+        (remove-text-properties start (point-max) '(face) nil))
+      (my-agent--apply-faces start rendered))
+    (my-agent--refresh-composer-overlay)))
+
+(defun my-agent--schedule-composer ()
+  "Render the composer once the draft stopped changing."
+  (let ((session my-agent--session) (owner (current-buffer)))
+    (when (timerp (my-agent--session-compose-timer session))
+      (cancel-timer (my-agent--session-compose-timer session)))
+    (setf (my-agent--session-compose-timer session)
+          (run-at-time my-agent-compose-delay nil
+                       #'my-agent--owned owner session #'my-agent--render-composer))))
+
+(defun my-agent--refresh-composer-overlay ()
+  "Show the placeholder while the composer is empty."
+  (let* ((session my-agent--session)
+         (overlay (my-agent--session-compose-overlay session))
+         (start (my-agent--composer-start))
+         (empty (string-empty-p (buffer-substring-no-properties start (point-max)))))
+    (when (and overlay (overlay-buffer overlay)) (delete-overlay overlay))
+    (setf (my-agent--session-compose-overlay session) nil)
+    (when empty
+      (let ((new (make-overlay start start nil nil t)))
+        (overlay-put new 'overlay-string my-agent-composer-placeholder)
+        (overlay-put new 'face 'my-agent-meta)
+        (overlay-put new 'evaporate t)
+        (overlay-put new 'priority 100)
+        (overlay-put new 'insertion-type t)
+        (setf (my-agent--session-compose-overlay session) new)))))
+
+(defun my-agent--refresh-composer ()
+  "Refresh every surface of the composer: tint, placeholder and chips."
+  (when my-agent--session
+    (my-agent--refresh-chips)
+    (my-agent--render-composer)))
+
+(defun my-agent--refresh-chips ()
+  "Show the pending attachments as chips above the composer."
+  (let* ((session my-agent--session)
+         (overlay (my-agent--session-chips session))
+         (attachments (my-agent--session-attachments session))
+         (start (my-agent--composer-start)))
+    (when (and overlay (overlay-buffer overlay)) (delete-overlay overlay))
+    (setf (my-agent--session-chips session) nil)
+    (when attachments
+      (let* ((label (mapconcat
+                     (lambda (attachment)
+                       (concat "+ " (or (my-agent--get attachment "file") "attachment")))
+                     attachments "   "))
+             (new (make-overlay start start nil nil t)))
+        (overlay-put new 'overlay-string (concat label "\n"))
+        (overlay-put new 'face 'my-agent-meta)
+        (overlay-put new 'priority 90)
+        (overlay-put new 'insertion-type t)
+        (setf (my-agent--session-chips session) new)))))
 
 (defun my-agent-redraw (&optional expand-tools)
   "Reapply presentation without changing this agent's process or draft.
@@ -267,7 +463,7 @@ updated my-agent.el into a running daemon; ordinary redraw preserves folds."
              (result (cond ((equal (my-agent--get raw "role") "toolResult") raw)
                            ((member (my-agent--get raw "type") '("tool_execution_start" "tool_execution_update" "tool_execution_end"))
                             (or (my-agent--get raw "result") (my-agent--get raw "partialResult"))))))
-        (when result (my-agent--set-block block (my-agent--tool-text block result) raw))))
+        (when result (my-agent--update-tool-card block result))))
     (setf (my-agent--block-dirty block) t))
   (font-lock-flush (my-agent--session-prompt my-agent--session) (point-max))
   (my-agent--fontify-prompt (my-agent--session-prompt my-agent--session) (point-max))
@@ -304,11 +500,18 @@ updated my-agent.el into a running daemon; ordinary redraw preserves folds."
          :fallbacks (make-hash-table :test #'equal)))
   (let ((inhibit-read-only t))
     (erase-buffer)
-    (insert (propertize "\n────────────────────────────────────────\nPrompt · C-c C-c send · C-c C-p menu\n"
-                        'read-only t 'rear-nonsticky t 'face '(my-agent-muted fixed-pitch)))
+    ;; The transcript grows downwards from the output marker; the composer is
+    ;; always the last region of the buffer.  The blank line keeps the two
+    ;; surfaces apart and gives the marker a stable anchor, the thin rule
+    ;; marks where the input starts without filling a surface.
+    (insert (propertize "\n" 'read-only t 'rear-nonsticky t))
+    (insert (propertize (my-agent--composer-rule) 'face 'my-agent-separator
+                         'read-only t 'rear-nonsticky t))
+    (insert (propertize "\n" 'read-only t 'rear-nonsticky t))
     (setf (my-agent--session-output my-agent--session) (copy-marker (point-min) t)
-          (my-agent--session-prompt my-agent--session) (copy-marker (point) nil)))
-  (set-buffer-modified-p nil))
+          (my-agent--session-prompt my-agent--session) (copy-marker (point-max) nil)))
+  (set-buffer-modified-p nil)
+  (my-agent--refresh-composer))
 
 (defun my-agent--draft ()
   (buffer-substring-no-properties (my-agent--session-prompt my-agent--session) (point-max)))
@@ -319,7 +522,8 @@ updated my-agent.el into a running daemon; ordinary redraw preserves folds."
       (goto-char start)
       (if append (goto-char (point-max)) (delete-region start (point-max)))
       (when (and append (> (point) start)) (insert "\n\n"))
-      (insert text))))
+      (insert text))
+    (my-agent--schedule-composer)))
 (defun my-agent-prompt ()
   "Move to the editable prompt."
   (interactive) (goto-char (point-max)))
@@ -340,13 +544,99 @@ updated my-agent.el into a running daemon; ordinary redraw preserves folds."
         (setf (my-agent--session-blocks-tail session) cell)))
     block))
 (defun my-agent--notice (title data &optional warning collapsed)
-  "Append TITLE and complete DATA, optionally WARNING or COLLAPSED."
-  (let* ((id (format "notice-%s" (cl-incf (my-agent--session-serial my-agent--session))))
-         (block (my-agent--block id (if warning 'warning 'notice) title collapsed)))
-    (setf (my-agent--block-text block) (if (stringp data) data (my-agent--pretty data))
-          (my-agent--block-raw block) data)
-    (my-agent--schedule)
-    block))
+  "Record TITLE and complete DATA in the event log, optionally WARNING.
+System noise never enters the transcript: it is collected in the events
+buffer and counted in the status line.  COLLAPSED is kept for callers that
+used to place notices in the transcript."
+  (ignore collapsed)
+  (my-agent--log-event title data (if warning "warn" "info")))
+
+(defun my-agent--events-buffer (&optional create)
+  "Return the events buffer of this agent; create it when CREATE is non-nil.
+The events buffer is a native compilation buffer: file and line references
+inside events stay navigable with the standard compilation commands."
+  (let* ((session my-agent--session)
+         (buffer (my-agent--session-events-buffer session)))
+    (or buffer
+        (when create
+          (let ((name (format "*Pi events · %s*"
+                              (string-trim (buffer-name) "*"))))
+            (setq buffer (get-buffer-create name))
+            (with-current-buffer buffer
+              (setq-local major-mode 'compilation-mode)
+              (compilation-mode)
+              (setq-local compilation-error-regexp-alist
+                           '(("^\\([^ \t\n:]+\\):\\([0-9]+\\):" 1 2)))
+              (setq-local compilation-scroll-output t)
+              (setq-local my-agent--events-for session)
+              (keymap-local-set "RET" #'my-agent--event-inspect)
+              (keymap-local-set "g" #'my-agent--event-inspect))
+            (setf (my-agent--session-events-buffer session) buffer)
+            buffer)))))
+
+(defun my-agent--event-inspect ()
+  "Show the complete record of the event at point."
+  (interactive)
+  (let* ((index (get-text-property (point) 'my-agent-event))
+         (session (and (boundp 'my-agent--events-for) my-agent--events-for)))
+    (unless (and session index)
+      (user-error "No event at point"))
+    (let ((record (my-agent--event-record index session)))
+      (with-current-buffer (generate-new-buffer "*Pi event*")
+        (insert (my-agent--pretty record))
+        (special-mode))
+      (display-buffer (get-buffer "*Pi event*")))))
+
+(defun my-agent--log-event (title data &optional severity)
+  "Append TITLE and DATA to the events buffer of this agent.
+SEVERITY is \"info\", \"warn\" or \"error\".  The complete record stays
+retrievable, so nothing is lost by keeping it out of the transcript."
+  (let* ((session my-agent--session)
+         (severity (or severity "info"))
+         (face (pcase severity
+                 ("error" 'my-agent-event-error)
+                 ("warn" 'my-agent-event-warn)
+                 (_ 'my-agent-event-info)))
+         (records (my-agent--session-event-records session))
+         (buffer (my-agent--events-buffer t)))
+    (push (cons title data) records)
+    (setf (my-agent--session-event-records session) records
+          (my-agent--session-events session) (1+ (my-agent--session-events session)))
+    (when (equal severity "error")
+      (setf (my-agent--session-event-errors session)
+            (1+ (my-agent--session-event-errors session))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (insert (propertize (format "%s  %-5s %s\n" (format-time-string "%H:%M:%S") severity title)
+                               'face face
+                               'my-agent-event (length records)))
+          (when (and data (not (and (stringp data) (string-empty-p data))))
+            (insert (propertize (if (stringp data) data (my-agent--pretty data))
+                                 'face 'my-agent-event-info))
+            (insert "\n"))
+          (goto-char (point-max))
+          (my-agent--trim-events))))
+    (force-mode-line-update)
+    title))
+
+(defun my-agent--trim-events ()
+  "Keep the events buffer within my-agent-event-limit lines."
+  (let ((limit (max 100 my-agent-event-limit)))
+    (when (> (line-number-at-pos (point-max)) limit)
+      (goto-char (point-min))
+      (forward-line (- (line-number-at-pos (point-max)) limit))
+      (let ((inhibit-read-only t))
+        (delete-region (point-min) (point))
+        (insert "… earlier events dropped\n")))))
+
+(defun my-agent--event-record (index &optional session)
+  "Return the raw record with INDEX in the event log of SESSION."
+  (let* ((session (or session my-agent--session))
+         (records (my-agent--session-event-records session)))
+    (when (and (integerp index) (>= index 0) (< index (length records)))
+      (cdr (nth index records)))))
 (defun my-agent--body-string (block)
   (when (my-agent--block-chunks block)
     (setf (my-agent--block-text block)
@@ -419,8 +709,50 @@ EDITING keeps markup visible; callers editing a prompt copy only faces."
                                     (my-agent--body-string block))))
       (special-mode))
     (display-buffer buffer)))
+
+(defun my-agent-inspect-at-point ()
+  "Inspect the complete record of the block at point."
+  (interactive)
+  (if-let* ((block (get-text-property (point) 'my-agent-block)))
+      (my-agent--inspect block)
+    (user-error "No agent record at point")))
+
+(defun my-agent-return ()
+  "Inspect the record at point, or insert a newline inside the composer."
+  (interactive)
+  (if (>= (point) (my-agent--composer-start))
+      (newline)
+    (my-agent-inspect-at-point)))
+
+(defun my-agent-events ()
+  "Show the event log of this agent."
+  (interactive)
+  (display-buffer (my-agent--events-buffer t)))
+
+(defun my-agent-stats ()
+  "Show the state, statistics and metrics of this agent."
+  (interactive)
+  (let* ((session my-agent--session)
+         (buffer (or (my-agent--session-stats-buffer session)
+                     (get-buffer-create (format "*Pi stats · %s*" (buffer-name))))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "state\n")
+        (insert (my-agent--pretty (my-agent--session-state session)))
+        (insert "\n\nstatistics\n")
+        (insert (my-agent--pretty (my-agent--session-stats session)))
+        (insert "\n\nmetrics\n")
+        (insert (my-agent--pretty (my-agent--session-metrics session)))
+        (insert "\n\nevents\n")
+        (insert (format "%d events · %d errors"
+                        (my-agent--session-events session)
+                        (my-agent--session-event-errors session))))
+      (special-mode))
+    (setf (my-agent--session-stats-buffer session) buffer)
+    (display-buffer buffer)))
 (defun my-agent--block-plain-p (block)
-  "Return non-nil when BLOCK is rendered without Markdown parsing."
+  "Return non-nil when BLOCK's body is rendered without Markdown parsing."
   (or (my-agent--block-streaming block)
       (not (memq (my-agent--block-kind block) '(assistant user thinking)))))
 
@@ -429,7 +761,60 @@ EDITING keeps markup visible; callers editing a prompt copy only faces."
 Tools, code, diffs and notices are fixed-pitch.  Prose keeps the buffer's
 variable-pitch face, also while it streams, so text does not switch fonts
 when the authoritative Markdown message replaces the deltas."
-  (memq (my-agent--block-kind block) '(tool notice warning)))
+  (memq (my-agent--block-kind block) '(tool notice warning attention)))
+
+(defun my-agent--body-face (block)
+  "Return the face of the body of BLOCK.
+Command output is quiet: it is muted and one size smaller than the text
+around it, while the card heading keeps the normal emphasis."
+  (if (equal (my-agent--block-title block) "bash") 'my-agent-output 'fixed-pitch))
+
+(defun my-agent--insert-segments (segments)
+  "Insert SEGMENTS, a list of (TEXT . FACE) pairs."
+  (dolist (segment segments)
+    (insert (propertize (car segment) 'face (cdr segment)))))
+
+(defun my-agent--status-face (block)
+  "Return the face describing the status glyph of BLOCK."
+  (cond ((equal (my-agent--block-status block) "-") 'my-agent-tool-error)
+        ((equal (my-agent--block-status block) "+") 'my-agent-tool-ok)
+        (t 'my-agent-tool-running)))
+
+(defun my-agent--tool-heading (block)
+  "Return the heading SEGMENTS of a tool card."
+  (let ((name (my-agent--block-title block))
+        (target (my-agent--block-target block))
+        (note (my-agent--block-note block))
+        (status (my-agent--block-status block))
+        (meta (my-agent--block-meta block)))
+    (append
+     (when name (list (cons name 'my-agent-tool-name)))
+     (when (and name target) (list (cons "  " nil)))
+     (when target (list (cons target 'my-agent-tool-target)))
+     (when (and target note) (list (cons "  " nil)))
+     (when note (list (cons note 'my-agent-tool-target)))
+     (when status (list (cons "  " nil) (cons status (my-agent--status-face block))))
+     (when meta (list (cons " " nil)
+                      (cons (string-join (mapcar #'identity meta) " ") 'my-agent-tool-meta))))))
+
+(defun my-agent--foldable-p (block)
+  "Return non-nil when BLOCK has a body that can be folded."
+  (eq (my-agent--block-kind block) 'tool))
+
+(defun my-agent--block-body-p (block)
+  "Return non-nil when BLOCK renders a body below its heading.
+Thinking is one muted line: its text is the heading and there is nothing
+to expand."
+  (not (eq (my-agent--block-kind block) 'thinking)))
+
+(defun my-agent--heading-segments (block)
+  "Return the heading SEGMENTS of BLOCK as a list of (TEXT . FACE) pairs."
+  (pcase (my-agent--block-kind block)
+    ('assistant nil)
+    ('user (list (cons "YOU" 'my-agent-you-label)))
+    ('thinking (list (cons "thinking" 'my-agent-think)))
+    ('attention (list (cons (my-agent--block-title block) 'my-agent-attention)))
+    (_ (my-agent--tool-heading block))))
 
 (defun my-agent--append-block (block text)
   "Append only the new tail of TEXT to an already rendered streaming BLOCK.
@@ -454,10 +839,14 @@ re-render, so a corrected stream cannot leave stale text behind."
 
 (defun my-agent--render-block (block)
   "Render only BLOCK, preserving other blocks, prompt and user view.
-Streaming bodies are appended in place; authoritative bodies are re-rendered."
+A block is a heading line and an optional body.  The heading carries the
+identity of the block (tool, thinking, question); the body carries the
+content.  Streaming bodies are appended in place; authoritative bodies are
+re-rendered."
   (let ((text (my-agent--body-string block))
         (owner (current-buffer)) (session my-agent--session))
-    (if (and (my-agent--block-streaming block)
+    (if (and (my-agent--block-body-p block)
+             (my-agent--block-streaming block)
              (my-agent--block-body-end block)
              (my-agent--append-block block text))
         nil
@@ -469,27 +858,33 @@ Streaming bodies are appended in place; authoritative bodies are re-rendered."
          (goto-char (my-agent--session-output session))
          (setf (my-agent--block-start block) (copy-marker (point) t)))
        (when (my-agent--block-overlay block) (delete-overlay (my-agent--block-overlay block)))
-       (let ((start (point)) (face (if (or (eq (my-agent--block-kind block) 'warning)
-                                           (string-match-p "ERROR" (my-agent--block-title block)))
-                                       'my-agent-warning 'my-agent-heading)))
-         (insert-text-button (if (my-agent--block-collapsed block) "▸ " "▾ ")
-                             'action (lambda (_) (my-agent--owned owner session #'my-agent--toggle block))
-                             'follow-link t)
-         (insert (propertize (my-agent--block-title block) 'face face) " ")
-         (insert-text-button "[data]" 'face 'my-agent-muted 'follow-link t
-                             'action (lambda (_) (my-agent--inspect block)))
-         (insert "\n")
-         (add-face-text-property start (point) 'fixed-pitch t)
+       (let ((start (point)))
+         (when (my-agent--heading-segments block)
+           (let ((heading-start (point)))
+             (when (my-agent--foldable-p block)
+               (insert-text-button (if (my-agent--block-collapsed block) "▸ " "▾ ")
+                                   'face 'my-agent-tool-meta 'follow-link t
+                                   'action (lambda (_) (my-agent--owned owner session #'my-agent--toggle block))))
+             (my-agent--insert-segments (my-agent--heading-segments block))
+             (let ((heading-end (point)))
+               (insert "\n")
+               (setf (my-agent--block-heading-start block) (copy-marker heading-start t)
+                     (my-agent--block-heading-end block) (copy-marker heading-end nil)))))
          (let ((body-start (point)))
-           (insert (if (my-agent--block-plain-p block)
-                       (let ((literal (ansi-color-apply text)))
-                         (when (my-agent--block-fixed-p block)
-                           (add-face-text-property 0 (length literal) 'fixed-pitch t literal))
-                         literal)
-                     (condition-case err (my-agent--markdown text)
-                       (error (concat "[Markdown rendering failed: " (error-message-string err) "]\n" text)))))
-           (my-agent--insert-images (my-agent--block-raw block))
-           (unless (bolp) (insert "\n"))
+           (when (my-agent--block-body-p block)
+             (insert (if (my-agent--block-plain-p block)
+                         (let ((literal (ansi-color-apply text)))
+                           (when (my-agent--block-fixed-p block)
+                             (add-face-text-property 0 (length literal) (my-agent--body-face block) t literal))
+                           literal)
+                       (condition-case err (my-agent--markdown text)
+                         (error (concat "[Markdown rendering failed: " (error-message-string err) "]\n" text)))))
+             (my-agent--insert-images (my-agent--block-raw block))
+             (unless (bolp) (insert "\n")))
+           (setf (my-agent--block-body-start block) (copy-marker body-start t))
+           (when (and (my-agent--block-body-p block) (my-agent--block-options block))
+             (add-text-properties body-start (point)
+                                  (list 'keymap (my-agent--card-map block))))
            (let ((overlay (make-overlay body-start (point))))
              (overlay-put overlay 'invisible (when (my-agent--block-collapsed block) 'my-agent))
              (overlay-put overlay 'isearch-open-invisible
@@ -505,7 +900,7 @@ Streaming bodies are appended in place; authoritative bodies are re-rendered."
                    (my-agent--block-body-end block) (copy-marker body-end nil)
                    (my-agent--block-rendered block) text)
              (my-agent--linkify start (point))))
-	 (setf (my-agent--block-dirty block) nil))))))
+         (setf (my-agent--block-dirty block) nil))))))
 (defun my-agent--expand (block)
   (setf (my-agent--block-collapsed block) nil (my-agent--block-dirty block) t)
   (my-agent--render-block block))
@@ -771,17 +1166,20 @@ Keys are sorted: hash order is unspecified and must not reorder the display."
        (let ((extra (my-agent--fields-text edit '("oldText" "newText"))))
          (unless (string-empty-p extra) (concat "\n" extra)))))))
 
-(defun my-agent--tool-arguments (args &optional has-patch)
+(defun my-agent--tool-arguments (name args &optional has-patch)
   "Present ARGS as commands/files/replacements, not escaped protocol JSON.
-HAS-PATCH avoids repeating edit replacement bodies when a result diff exists;
-original arguments remain in the section's data inspector and raw log."
+The name of the tool is NAME.  HAS-PATCH avoids repeating edit replacement
+bodies when a result diff exists; original arguments remain in the section's
+data inspector and raw log."
   (when (hash-table-p args)
     (let ((command (my-agent--get args "command"))
           (path (my-agent--get args "path"))
           (edits (my-agent--get args "edits")) skip parts)
+      ;; The heading of a shell card carries the whole command already.
       (when (stringp command)
         (push "command" skip)
-        (push (concat (my-agent--section "Command") "\n$ " (my-agent--code command #'sh-mode)) parts))
+        (unless (equal name "bash")
+          (push (concat (my-agent--section "Command") "\n$ " (my-agent--code command #'sh-mode)) parts)))
       (when (stringp path)
         (push "path" skip)
         (push (concat (my-agent--section "File: ") path) parts))
@@ -800,17 +1198,16 @@ original arguments remain in the section's data inspector and raw log."
         (unless (string-empty-p extra) (push extra parts)))
       (string-join (nreverse parts) "\n\n"))))
 
-(defun my-agent--tool-text (block result)
+(defun my-agent--tool-text (name args result)
   "Present complete RESULT with native commands, output and one readable diff.
 Known patch/diff strings are presented once rather than duplicated as escaped
 JSON. Unknown arguments/details remain visible; the full record is in [data]."
-  (let* ((args (my-agent--block-arguments block))
-         (details (my-agent--get result "details"))
+  (let* ((details (my-agent--get result "details"))
          (unified (my-agent--get details "patch"))
          (diff (my-agent--get details "diff"))
          (patch (if (stringp unified) unified (when (stringp diff) diff)))
          (output (my-agent--content-text (my-agent--get result "content")))
-         (arguments (my-agent--tool-arguments args (and patch t)))
+         (arguments (my-agent--tool-arguments name args (and patch t)))
          (line (my-agent--get details "firstChangedLine"))
          (skip (append (when (stringp unified) '("patch"))
                        (when (stringp diff) '("diff"))
@@ -826,6 +1223,134 @@ JSON. Unknown arguments/details remain visible; the full record is in [data]."
                  (unless (or (null extra) (string-empty-p extra))
                    (concat (my-agent--section "Additional result data") "\n" extra))))
      "\n\n")))
+
+(defun my-agent--tool-target (_name args)
+  "Return the target of the tool with ARGS.
+The command of a shell tool is shown whole: the heading wraps instead of
+truncating, so nothing of the executed command is lost."
+  (let ((path (my-agent--get args "path"))
+        (pattern (my-agent--get args "pattern"))
+        (command (my-agent--get args "command")))
+    (cond
+     ((and (stringp path) (stringp pattern))
+      (format "%s  %s" pattern path))
+     ((stringp path) path)
+     ((stringp pattern) (concat "\"" pattern "\""))
+     ((stringp command) command)
+     (t ""))))
+
+(defun my-agent--read-range (args result)
+  "Return the line range of a read call as \"FIRST-LAST\" or \"FIRST-LAST of TOTAL\"."
+  (let* ((content (my-agent--content-text (my-agent--get result "content")))
+         (notice (and (string-match "\\[Showing lines \\([0-9]+\\)-\\([0-9]+\\) of \\([0-9]+\\)" content)
+                       (list (match-string 1 content) (match-string 2 content) (match-string 3 content))))
+         (offset (or (my-agent--get args "offset") 1))
+         ;; Trailing notices are not part of the returned content.
+         (body (replace-regexp-in-string "\\n*\\[[^][]*\\][[:space:]]*$" "" content))
+         (returned (max 1 (length (split-string body "\n")))))
+    (if notice
+        (format "%s-%s of %s" (nth 0 notice) (nth 1 notice) (nth 2 notice))
+      (format "%s-%s" offset (+ offset (1- returned))))))
+
+(defun my-agent--tool-note (name args result)
+  "Return the extra NOTE shown next to the target of the tool NAME."
+  (pcase name
+    ("read" (my-agent--read-range args result))
+    ((or "edit" "write")
+     (let* ((details (my-agent--get result "details"))
+            (unified (my-agent--get details "patch"))
+            (diff (my-agent--get details "diff"))
+            (patch (if (stringp unified) unified (when (stringp diff) diff)))
+            (counters (and patch (my-agent--patch-counters patch))))
+       (when (and counters (or (> (car counters) 0) (> (cadr counters) 0)))
+         (format "+%d -%d" (car counters) (cadr counters)))))
+    (_ nil)))
+
+(defun my-agent--tool-status (block _result)
+  "Return the status glyph of the tool card BLOCK."
+  (let ((errorp (or (my-agent--true (my-agent--get (my-agent--block-raw block) "isError"))
+                    (and (stringp (my-agent--block-title block))
+                         (string-match-p "ERROR" (my-agent--block-title block))))))
+    (cond (errorp "-")
+          ((my-agent--block-result block) "+")
+          (t "~"))))
+
+(defun my-agent--tool-duration (block)
+  "Return the duration of the tool card BLOCK as a short string."
+  (let ((milliseconds (my-agent--get (my-agent--block-raw block) "durationMs")))
+    (when (numberp milliseconds)
+      (if (>= milliseconds 1000)
+          (format "%.1fs" (/ milliseconds 1000.0))
+        (format "%dms" (round milliseconds))))))
+
+(defun my-agent--patch-counters (patch)
+  "Return the added and removed line counts of PATCH."
+  (let ((added 0) (removed 0))
+    (when (stringp patch)
+      (dolist (line (split-string patch "\n"))
+        (cond ((string-prefix-p "---" line) nil)
+              ((string-prefix-p "+++" line) nil)
+              ((string-prefix-p "+" line) (setq added (1+ added)))
+              ((string-prefix-p "-" line) (setq removed (1+ removed))))))
+    (list added removed)))
+
+(defun my-agent--tool-meta (block _result)
+  "Return the metadata strings of the tool card BLOCK."
+  (let ((duration (my-agent--tool-duration block)))
+    (when duration (list duration))))
+
+(defun my-agent--tool-body (name args result)
+  "Return the body text of the tool NAME with ARGS and RESULT."
+  (let* ((details (my-agent--get result "details"))
+         (unified (my-agent--get details "patch"))
+         (diff (my-agent--get details "diff"))
+         (patch (if (stringp unified) unified (when (stringp diff) diff)))
+         (output (my-agent--content-text (my-agent--get result "content")))
+         (truncation (my-agent--get details "truncation"))
+         (full (my-agent--get details "fullOutputPath")))
+    (pcase name
+      ;; The file content is available in the file itself; the card only
+      ;; states which lines were read.
+      ("read" "")
+      ("bash" (let ((text (replace-regexp-in-string "\\n*\\[Command exited with code [0-9]+\\]\\s*$" "" output)))
+                (concat text
+                        (when (my-agent--get truncation "truncated")
+                          (format "\n[showing %s of %s lines · full output: %s]"
+                                  (my-agent--get truncation "outputLines" "?")
+                                  (my-agent--get truncation "totalLines" "?")
+                                  (or full "unknown"))))))
+      ("edit" (if patch (my-agent--code patch #'diff-mode) output))
+      ("write" (let* ((content (my-agent--get args "content"))
+                      (lines (and (stringp content) (split-string content "\n"))))
+                  (when (and lines (string-empty-p (car (last lines))))
+                    (setq lines (butlast lines)))
+                  (if (null lines) output
+                    (concat (string-join (mapcar (lambda (line) (concat "+ " line))
+                                                 (cl-subseq lines 0 (min (length lines) 200)))
+                                         "\n")
+                            (when (> (length lines) 200)
+                              (format "\n… %d more lines" (- (length lines) 200)))))))
+      ((or "grep" "find" "ls") output)
+      (_ (my-agent--tool-text name args result)))))
+
+(defun my-agent--update-tool-card (block result)
+  "Recompute heading and body of the tool card BLOCK with RESULT."
+  (let* ((raw (my-agent--block-raw block))
+         (name (or (my-agent--get raw "toolName")
+                   (and (stringp (my-agent--block-title block)) (my-agent--block-title block))
+                   "tool"))
+         (args (my-agent--block-arguments block)))
+    (setf (my-agent--block-title block) name
+          (my-agent--block-target block) (my-agent--tool-target name args)
+          (my-agent--block-note block) (my-agent--tool-note name args result)
+          (my-agent--block-status block) (my-agent--tool-status block result)
+          (my-agent--block-meta block) (my-agent--tool-meta block result)
+          ;; A later update without a result (the final message repeats the
+          ;; call) must not erase the body that was already executed.
+          (my-agent--block-text block) (cond (result (my-agent--tool-body name args result))
+                                              ((my-agent--block-result block) (my-agent--block-text block))
+                                              (t (my-agent--tool-arguments name args))))
+    block))
 
 (defun my-agent--content-text (content)
   "Plain representation of arbitrary CONTENT; unknown content is not discarded."
@@ -848,10 +1373,17 @@ JSON. Unknown arguments/details remain visible; the full record is in [data]."
                       (my-agent--get message "toolCallId"))))
     (pcase role
       ("assistant"
+       ;; A new assistant message starts a new group of blocks.  Streaming
+       ;; deltas adopt the group that is already open.
+       (when (and (my-agent--session-current-assistant my-agent--session)
+                  (my-agent--session-current-assistant-key my-agent--session)
+                  (not (equal key (my-agent--session-current-assistant-key my-agent--session))))
+         (setf (my-agent--session-current-assistant my-agent--session) nil))
        (unless (my-agent--session-current-assistant my-agent--session)
          (setf (my-agent--session-current-assistant my-agent--session)
                (or (gethash key (my-agent--session-seen my-agent--session))
                    (format "assistant:%d" (cl-incf (my-agent--session-serial my-agent--session))))))
+       (setf (my-agent--session-current-assistant-key my-agent--session) key)
        (puthash key (my-agent--session-current-assistant my-agent--session)
                 (my-agent--session-seen my-agent--session))
        (let ((prefix (my-agent--session-current-assistant my-agent--session)) (i 0))
@@ -862,43 +1394,51 @@ JSON. Unknown arguments/details remain visible; the full record is in [data]."
                              (my-agent--tool (my-agent--get item "id") (my-agent--get item "name"))
                            (my-agent--block (format "%s:%d" prefix i) kind
                                             (pcase kind ('assistant "Pi") ('thinking "Thinking") (_ "Unrecognized Pi content"))
-                                            (eq kind 'thinking)))))
+                                            nil))))
              (when (equal type "toolCall")
-               (setf (my-agent--block-arguments block) (my-agent--get item "arguments")))
+               (setf (my-agent--block-arguments block) (my-agent--get item "arguments")
+                     (my-agent--block-raw block) message)
+               (my-agent--update-tool-card block nil)
+               (setf (my-agent--block-dirty block) t))
              ;; An authoritative message ends the speculative stream: render the
              ;; final text as Markdown instead of the streaming plain body.
              (when (member type '("text" "thinking"))
                (setf (my-agent--block-streaming block) nil))
-             (my-agent--set-block-body block
-                                       (pcase type
-					 ("text" (my-agent--get item "text" ""))
-					 ("thinking" (my-agent--get item "thinking" "[redacted/unavailable]"))
-					 ("toolCall" (my-agent--tool-text block nil))
-					 (_ (my-agent--pretty item)))
-                                       message)
+             (unless (equal type "toolCall")
+               (my-agent--set-block-body block
+                                         (pcase type
+                                          ("text" (my-agent--get item "text" ""))
+                                          ("thinking" (my-agent--get item "thinking" "[redacted/unavailable]"))
+                                          (_ (my-agent--pretty item)))
+                                         message))
              (cl-incf i))))
        (when (my-agent--get message "errorMessage")
          (my-agent--notice "Assistant error" message t))
        (when final (setf (my-agent--session-current-assistant my-agent--session) nil)))
       ("toolResult"
        (let ((block (my-agent--tool (my-agent--get message "toolCallId") (my-agent--get message "toolName"))))
-         (setf (my-agent--block-result block) t)
-         (my-agent--set-block block (my-agent--tool-text block message) message
-                              (format "%s · %s" (my-agent--get message "toolName")
-                                      (if (my-agent--true (my-agent--get message "isError")) "ERROR" "completed")))))
+         (setf (my-agent--block-result block) t
+               (my-agent--block-raw block) message)
+         (my-agent--update-tool-card block message)
+         (setf (my-agent--block-dirty block) t)))
+      ("user"
+       (let ((block (my-agent--block key 'user "YOU")))
+         (my-agent--set-block block (my-agent--content-text content) message)
+         (setf (my-agent--block-dirty block) t)))
       (_
-       (let ((block (my-agent--block key
-                                     (if (equal role "user") 'user 'notice)
-                                     (pcase role ("user" "You") ("bashExecution" "Shell")
-					    ("system" "System prompt / tools") ("custom" "Extension message")
-					    ("compactionSummary" "Compaction summary") ("branchSummary" "Branch summary")
-					    (_ (format "Unrecognized message role · %s" role)))
-                                     (equal role "system"))))
-         (my-agent--set-block block
-                              (cond (content (my-agent--content-text content))
-                                    ((my-agent--get message "output") (my-agent--get message "output"))
-                                    ((my-agent--get message "summary") (my-agent--get message "summary"))
-                                    (t (my-agent--pretty message))) message))))))
+       ;; Everything that is not a human turn belongs to the event plane.
+       (my-agent--log-event
+        (pcase role ("bashExecution" "Shell") ("system" "System prompt / tools")
+                    ("custom" "Extension message") ("compactionSummary" "Compaction summary")
+                    ("branchSummary" "Branch summary")
+                    (_ (format "Unrecognized message role · %s" role)))
+        (cond (content (my-agent--content-text content))
+              ((my-agent--get message "output") (my-agent--get message "output"))
+              ((my-agent--get message "summary") (my-agent--get message "summary"))
+              (t (my-agent--pretty message)))
+        (if (member role '("system" "custom" "compactionSummary" "branchSummary" "bashExecution"))
+            "info"
+          "warn"))))))
 (defun my-agent--delta (record)
   (let* ((event (my-agent--get record "assistantMessageEvent"))
          (type (my-agent--get event "type"))
@@ -912,12 +1452,15 @@ JSON. Unknown arguments/details remain visible; the full record is in [data]."
                        ((string-prefix-p "toolcall" (or type "")) 'tool) (t 'assistant)))
            (block (my-agent--block key kind
                                    (pcase kind ('thinking "Thinking · streaming") ('tool "Tool arguments · streaming") (_ "Pi · streaming"))
-                                   (eq kind 'thinking))))
+                                   nil)))
       (setf (my-agent--block-raw block) record
             (my-agent--block-streaming block) t)
       (cond ((member type '("text_delta" "thinking_delta" "toolcall_delta"))
              (push (my-agent--get event "delta" "") (my-agent--block-chunks block))
-             (setf (my-agent--block-dirty block) t))
+             ;; A thinking section is a static marker: its text is kept in the
+             ;; record, not rendered, so deltas must not trigger a redraw.
+             (unless (eq kind 'thinking)
+               (setf (my-agent--block-dirty block) t)))
             ((member type '("text_end" "thinking_end"))
              (my-agent--set-block block (my-agent--get event "content" "") record)
              (setf (my-agent--block-streaming block) nil))
@@ -925,14 +1468,16 @@ JSON. Unknown arguments/details remain visible; the full record is in [data]."
              (let ((id (my-agent--get event "id")))
                (when id
                  (puthash (concat "tool:" id) block (my-agent--session-index session))))
-             (setf (my-agent--block-title block) (format "%s · arguments" (my-agent--get event "toolName" "tool"))))
+             (setf (my-agent--block-title block) (my-agent--get event "toolName" "tool")
+                   (my-agent--block-dirty block) t))
             ((equal type "toolcall_end")
              (let* ((call (my-agent--get event "toolCall")) (id (my-agent--get call "id")))
                (when id (puthash (concat "tool:" id) block (my-agent--session-index session)))
-               (setf (my-agent--block-arguments block) (my-agent--get call "arguments"))
-               (my-agent--set-block block (my-agent--tool-text block nil) record
-                                    (my-agent--get call "name" "tool"))
-               (setf (my-agent--block-streaming block) nil)))
+               (setf (my-agent--block-arguments block) (my-agent--get call "arguments")
+                     (my-agent--block-raw block) record)
+               (my-agent--update-tool-card block nil)
+               (setf (my-agent--block-streaming block) nil
+                     (my-agent--block-dirty block) t)))
             ((member type '("text_start" "thinking_start" "start")) nil)
             ((member type '("done" "error")) (my-agent--notice "Provider stream outcome" record (equal type "error")))
             (t (my-agent--notice "Unrecognized streaming update" record t))))))
@@ -968,10 +1513,12 @@ Cache notices are labelled estimates, not a claim about provider internals."
   (let ((session my-agent--session) (type (my-agent--get record "type")))
     (pcase type
       ("response" (my-agent--response record))
-      ("agent_start" (setf (my-agent--session-phase session) "working"))
+      ("agent_start" (setf (my-agent--session-phase session) "working")
+                   (my-agent--start-stats-poll))
       ("agent_settled"
        (setf (my-agent--session-phase session) "idle"
              (my-agent--session-submissions session) nil)
+       (my-agent--stop-stats-poll)
        (my-agent--refresh-state))
       ("agent_end" (my-agent--notice "Agent run ended (may continue automatically)" record nil t))
       ("turn_start" (setf (my-agent--session-phase session) "thinking"))
@@ -990,15 +1537,13 @@ Cache notices are labelled estimates, not a claim about provider internals."
          (setf (my-agent--session-phase session) "tools")
          (when (my-agent--get record "args")
            (setf (my-agent--block-arguments block) (my-agent--get record "args")))
-         (my-agent--set-block
-          block (my-agent--tool-text block result)
-          record (format "%s · %s%s" (my-agent--get record "toolName")
-                         (if end (if errorp "ERROR" "completed") "running")
-                         (if-let* ((ms (my-agent--get record "durationMs"))) (format " · %.2fs" (/ ms 1000.0)) "")))
+         (setf (my-agent--block-raw block) record)
          (when end (setf (my-agent--block-result block) t))
+         (my-agent--update-tool-card block result)
+         (setf (my-agent--block-dirty block) t)
          (when errorp (setf (my-agent--session-attention session) t))))
       ("bash_execution_update"
-       (let ((block (my-agent--tool (my-agent--get record "id") "Shell · running")))
+       (let ((block (my-agent--tool (my-agent--get record "id") "shell")))
          (push (my-agent--get record "delta" "") (my-agent--block-chunks block))
          (setf (my-agent--block-dirty block) t (my-agent--block-raw block) record)))
       ("extension_ui_request" (my-agent--ui record))
@@ -1093,10 +1638,11 @@ Cache notices are labelled estimates, not a claim about provider internals."
          (my-agent--extra-fields data
                                  '("version" "id" "sessionId" "observedAt" "title" "body" "severity" "desktopDelivered")
                                  "additional-notification" "Additional unimplemented notification data")
-         (let ((block (my-agent--notice (format "Notification · %s" (my-agent--get data "title" "Pi"))
-					(my-agent--get data "body" (my-agent--pretty data))
-					(member (my-agent--get data "severity") '("warning" "error")))))
-           (setf (my-agent--block-raw block) record))
+         (my-agent--log-event (format "Notification · %s" (my-agent--get data "title" "Pi"))
+                              (my-agent--get data "body" (my-agent--pretty data))
+                              (if (member (my-agent--get data "severity") '("warning" "error"))
+                                  "warn"
+                                "info"))
          (unless (eql (my-agent--get data "version") 1)
            (my-agent--notice "Unrecognized notification protocol version" record t))
          (setf (my-agent--session-attention session) t)
@@ -1149,15 +1695,16 @@ Cache notices are labelled estimates, not a claim about provider internals."
        (my-agent--dialog 'rpc record)
        (my-agent--notice "Pi needs input · C-c C-d" record t))
       ("notify"
-       (let ((block (my-agent--notice "Pi notification" (my-agent--get record "message" "")
-                                      (member (my-agent--get record "notifyType") '("warning" "error")))))
-         (setf (my-agent--block-raw block) record)))
+       (my-agent--log-event "Pi notification" (my-agent--get record "message" "")
+                            (if (member (my-agent--get record "notifyType") '("warning" "error"))
+                                "warn"
+                              "info")))
       ("setStatus"
        (puthash (my-agent--get record "statusKey") (my-agent--get record "statusText") statuses))
       ("setWidget"
-       (let ((block (my-agent--block (concat "widget:" (my-agent--get record "widgetKey" "unknown"))
-                                     'notice (format "Widget · %s" (my-agent--get record "widgetKey")))))
-         (my-agent--set-block block (mapconcat #'identity (my-agent--array (my-agent--get record "widgetLines")) "\n") record)))
+       (my-agent--log-event (format "Widget · %s" (my-agent--get record "widgetKey"))
+                            (mapconcat #'identity (my-agent--array (my-agent--get record "widgetLines")) "\n")
+                            "info"))
       ("setTitle" (puthash "title" (my-agent--get record "title") statuses))
       ("set_editor_text"
        ;; Never overwrite a user's in-progress draft with an asynchronous update.
@@ -1174,6 +1721,7 @@ Cache notices are labelled estimates, not a claim about provider internals."
          (dialog (list transport record)))
     (setf (my-agent--session-dialogs session)
           (append (my-agent--session-dialogs session) (list dialog)))
+    (my-agent--attention-card dialog)
     (when (numberp timeout)
       (run-at-time (/ timeout 1000.0) nil
                    #'my-agent--owned owner session
@@ -1181,8 +1729,125 @@ Cache notices are labelled estimates, not a claim about provider internals."
                      (when (member dialog (my-agent--session-dialogs session))
                        (setf (my-agent--session-dialogs session)
                              (delq dialog (my-agent--session-dialogs session)))
+                       (my-agent--expire-card dialog)
                        (my-agent--notice "Pi dialog expired (no consent given)" record t)))))))
-(defun my-agent--answer-dialog (dialog answer)
+
+(defconst my-agent--trust-options '("Allow once" "Remember allow" "Decline once" "Remember decline")
+  "Choices offered when Pi asks for project trust.")
+
+(defun my-agent--dialog-options (dialog)
+  "Return the discrete OPTIONS of DIALOG, or nil when free text is needed."
+  (let* ((transport (car dialog)) (record (cadr dialog))
+         (method (my-agent--get record "method")))
+    (pcase transport
+      ('trust my-agent--trust-options)
+      (_ (pcase method
+           ("select" (my-agent--array (my-agent--get record "options")))
+           ("confirm" '("Yes" "No"))
+           (_ nil))))))
+
+(defun my-agent--dialog-title (dialog)
+  "Return the heading of the question in DIALOG."
+  (let* ((transport (car dialog)) (record (cadr dialog))
+         (method (my-agent--get record "method")))
+    (pcase transport
+      ('trust (format "Trust %s?" (my-agent--get (my-agent--get record "data") "cwd" "this project")))
+      (_ (pcase method
+           ("select" (format "%s" (my-agent--get record "title" "Pi")))
+           ("confirm" (format "%s" (my-agent--get record "title" "Pi")))
+           (_ (format "%s" (my-agent--get record "title" "Pi needs an answer"))))))))
+
+(defun my-agent--dialog-body (dialog)
+  "Return the body text of the question in DIALOG."
+  (let* ((options (my-agent--dialog-options dialog))
+         (record (cadr dialog))
+         (message (my-agent--get record "message" "")))
+    (concat
+     (unless (string-empty-p message) (concat message "\n"))
+     (if options
+         (concat (let ((index 0))
+                   (mapconcat (lambda (option)
+                                (setq index (1+ index))
+                                (format "[%d] %s" index option))
+                              options "   "))
+                 "\nAnswer with a number, or C-c C-d.")
+       "Answer with C-c C-d."))))
+
+(defun my-agent--attention-card (dialog)
+  "Show the question in DIALOG as a card in the transcript."
+  (let* ((session my-agent--session)
+         (id (format "attention-%s" (cl-incf (my-agent--session-serial session))))
+         (block (my-agent--block id 'attention (my-agent--dialog-title dialog))))
+    (setf (my-agent--block-raw block) dialog
+          (my-agent--block-options block) (my-agent--dialog-options dialog))
+    (my-agent--set-block block (my-agent--dialog-body dialog) dialog)
+    (push (cons block dialog) (my-agent--session-cards session))
+    (setf (my-agent--session-attention session) t)
+    (my-agent--schedule)
+    block))
+
+(defun my-agent--card-map (block)
+  "Return a keymap answering the attention card BLOCK with a number."
+  (let ((map (make-sparse-keymap)))
+    (dotimes (index 9)
+      (let ((choice (1+ index)))
+        (keymap-set map (char-to-string (+ ?0 choice))
+                    (lambda () (interactive) (my-agent--answer-choice block choice)))))
+    map))
+
+(defun my-agent--find-card (dialog)
+  "Return the attention card that belongs to DIALOG."
+  (let ((entry (cl-find-if (lambda (entry) (equal (cdr entry) dialog))
+                           (my-agent--session-cards my-agent--session))))
+    (and entry (car entry))))
+
+(defun my-agent--expire-card (dialog)
+  "Mark the card of DIALOG as expired."
+  (when-let* ((block (my-agent--find-card dialog))
+              (session my-agent--session))
+    (setf (my-agent--session-cards session)
+          (delq (assq block (my-agent--session-cards session))
+                (my-agent--session-cards session))
+          (my-agent--block-options block) nil)
+    (my-agent--set-block block "expired — no answer given" dialog)
+    (setf (my-agent--block-dirty block) t)))
+
+(defun my-agent--resolve-card (dialog answer-text)
+  "Mark the card of DIALOG as answered with ANSWER-TEXT."
+  (when-let* ((block (my-agent--find-card dialog))
+              (session my-agent--session))
+    (setf (my-agent--session-cards session)
+          (delq (assq block (my-agent--session-cards session))
+                (my-agent--session-cards session))
+          (my-agent--block-options block) nil)
+    (my-agent--set-block block (concat "answered: " answer-text) dialog)
+    (setf (my-agent--block-dirty block) t)))
+
+(defun my-agent--answer-choice (block choice)
+  "Answer the attention card BLOCK with the numbered CHOICE."
+  (let* ((session my-agent--session)
+         (entry (assq block (my-agent--session-cards session)))
+         (options (my-agent--block-options block)))
+    (unless entry (user-error "This question is no longer pending"))
+    (unless (and options (<= 1 choice) (<= choice (length options)))
+      (user-error "Choose a number between 1 and %s" (length options)))
+    (let* ((dialog (cdr entry))
+           (transport (car dialog))
+           (record (cadr dialog))
+           (text (nth (1- choice) options)))
+      (my-agent--answer-dialog
+       dialog
+       (pcase transport
+         ('trust (my-agent--object "trusted" (if (member text '("Allow once" "Remember allow")) t :false)
+                                 "remember" (if (string-prefix-p "Remember" text) t :false)))
+         (_ (pcase (my-agent--get record "method")
+              ("select" (my-agent--object "value" text))
+              ("confirm" (my-agent--object "confirmed" (equal text "Yes")))
+              (_ (my-agent--object "cancelled" t)))))
+       text))))
+
+(defun my-agent--answer-dialog (dialog answer &optional answer-text)
+  "Send ANSWER for DIALOG and record ANSWER-TEXT as the visible choice."
   (let ((session my-agent--session) (record (cadr dialog)))
     (unless (member dialog (my-agent--session-dialogs session))
       (user-error "This dialog has expired or already been answered"))
@@ -1193,6 +1858,7 @@ Cache notices are labelled estimates, not a claim about provider internals."
                (my-agent--write (my-agent--session-peer session) answer "adapter-commands"))
       (puthash "type" "extension_ui_response" answer)
       (my-agent--write (my-agent--session-process session) answer "commands"))
+    (my-agent--resolve-card dialog (or answer-text "answered"))
     (my-agent--notice "Dialog answered" (my-agent--get record "title" "Project trust") nil t)))
 (defun my-agent-answer ()
   "Answer the oldest pending question in THIS agent, without stealing focus."
@@ -1209,7 +1875,7 @@ Cache notices are labelled estimates, not a claim about provider internals."
            (if (eq (car dialog) 'trust)
                (let ((choice (completing-read
                               (format "Trust %s? " (my-agent--get (my-agent--get record "data") "cwd"))
-                              '("Decline once" "Allow once" "Remember allow" "Remember decline") nil t nil nil "Decline once")))
+                              my-agent--trust-options nil t nil nil "Decline once")))
 		 (my-agent--object "trusted" (if (member choice '("Allow once" "Remember allow")) t :false)
                                    "remember" (if (string-prefix-p "Remember" choice) t :false)))
              (pcase method
@@ -1237,6 +1903,41 @@ Cache notices are labelled estimates, not a claim about provider internals."
 		(throw 'my-agent-editor nil))
                (_ (my-agent--object "cancelled" t)))))
 	(quit (my-agent--owned owner session #'my-agent--answer-dialog dialog (my-agent--object "cancelled" t)))))))
+
+(defun my-agent--refresh-stats ()
+  "Refresh the session statistics that the header line shows."
+  (when (my-agent--alive-p)
+    (condition-case nil
+        (my-agent--rpc "get_session_stats" nil
+                       (lambda (record)
+                         (when (my-agent--true (my-agent--get record "success"))
+                           (setf (my-agent--session-stats my-agent--session)
+                                 (my-agent--get record "data")))))
+      (error nil))))
+
+(defun my-agent--stats-poll ()
+  "Poll the statistics while the agent works, then schedule the next poll."
+  (let ((session my-agent--session) (owner (current-buffer)))
+    (setf (my-agent--session-stats-timer session) nil)
+    (when (and session (not (equal (my-agent--session-phase session) "idle")))
+      (my-agent--refresh-stats)
+      (setf (my-agent--session-stats-timer session)
+            (run-at-time 2 nil
+                         #'my-agent--owned owner session #'my-agent--stats-poll)))))
+
+(defun my-agent--start-stats-poll ()
+  "Start the statistics poll for a working agent."
+  (let ((session my-agent--session) (owner (current-buffer)))
+    (when (and session (not (timerp (my-agent--session-stats-timer session))))
+      (setf (my-agent--session-stats-timer session)
+            (run-at-time 2 nil #'my-agent--owned owner session #'my-agent--stats-poll)))))
+
+(defun my-agent--stop-stats-poll ()
+  "Stop the statistics poll of a settled agent."
+  (when-let* ((session my-agent--session))
+    (when (timerp (my-agent--session-stats-timer session))
+      (cancel-timer (my-agent--session-stats-timer session))
+      (setf (my-agent--session-stats-timer session) nil))))
 
 (defun my-agent--refresh-state ()
   "Asynchronously refresh state/statistics/commands without querying per token."
@@ -1278,61 +1979,141 @@ Cache notices are labelled estimates, not a claim about provider internals."
 (defun my-agent--duration (milliseconds)
   (let ((seconds (floor (/ (or milliseconds 0) 1000))))
     (if (< seconds 60) (format "%ss" seconds) (format "%sm%02ss" (/ seconds 60) (% seconds 60)))))
+(defun my-agent--phase-face (phase)
+  "Return the face describing the agent PHASE."
+  (pcase phase
+    ("idle" 'my-agent-meta)
+    ("stopped" 'my-agent-tool-error)
+    ("starting" 'my-agent-tool-running)
+    ((or "working" "thinking" "tools" "compacting") 'my-agent-tool-name)
+    (_ 'my-agent-tool-error)))
+
 (defun my-agent--header ()
-  "Keep unexpected status schemas visible without breaking Emacs redisplay."
+  "Render the live metrics of this agent in the header line.
+Keep unexpected status schemas visible without breaking Emacs redisplay."
   (condition-case err (my-agent--header-string)
-    (error (format " Pi · unsupported status data: %s · inspect Statistics"
-                   (error-message-string err)))))
+    (error (format "unsupported status data: %s" (error-message-string err)))))
+
+(defun my-agent--join-parts (parts)
+  "Join PARTS, a list of (TEXT . FACE) pairs, with a muted separator."
+  (string-join (mapcar (lambda (part)
+                          (propertize (car part) 'face (cdr part)))
+                        (delq nil parts))
+               (propertize " · " 'face 'my-agent-meta)))
+
+(defun my-agent--join-shared (parts)
+  "Join the shared PARTS the way Pi joins its own footer cells.
+Pi separates the counters of its stats line with a single space; the
+Emacs only cells keep the muted dot of this frontend."
+  (string-join (mapcar (lambda (part)
+                          (propertize (car part) 'face (cdr part)))
+                        (delq nil parts))
+               " "))
+
+(defun my-agent--format-tokens (count)
+  "Format COUNT the way Pi formats token counts."
+  (cond ((not (numberp count)) "0")
+        ((< count 1000) (number-to-string (truncate count)))
+        ((< count 10000) (format "%.1fk" (/ count 1000.0)))
+        ((< count 1000000) (format "%dk" (round (/ count 1000.0))))
+        ((< count 10000000) (format "%.1fM" (/ count 1000000.0)))
+        (t (format "%dM" (round (/ count 1000000.0))))))
+
+(defun my-agent--context-face (percent)
+  "Return the face of the context cell for PERCENT.
+Pi turns the context share into an error above ninety percent and into a
+warning above seventy percent."
+  (cond ((not (numberp percent)) 'my-agent-meta)
+        ((> percent 90) 'my-agent-tool-error)
+        ((> percent 70) 'my-agent-warning)
+        (t 'my-agent-tool-target)))
+
+(defun my-agent--context-part (stats state)
+  "Return the context usage cell of the header line.
+Pi reports the used share of the context window; the window itself comes
+from the model when the session does not report one."
+  (let* ((context (my-agent--get stats "contextUsage"))
+         (percent (my-agent--get context "percent"))
+         (model (my-agent--get state "model"))
+         (window (or (my-agent--get context "contextWindow")
+                     (my-agent--get model "contextWindow"))))
+    (when (numberp window)
+      (cons (format "%s/%s"
+                    (if (numberp percent) (format "%.1f%%" percent) "?")
+                    (my-agent--format-tokens window))
+            (my-agent--context-face percent)))))
 
 (defun my-agent--header-string ()
-  "Render state belonging only to the buffer whose header Emacs is drawing."
+  "Render the metrics that stay visible while the agent works.
+The order follows Pi's own footer: tokens in, tokens out, cache reads,
+cache writes, cost and context usage.  The remaining cells are Emacs
+only and stay after the shared ones."
   (when-let* ((session my-agent--session))
-    (let* ((state (my-agent--session-state session))
-           (model (my-agent--get state "model"))
-           (stats (my-agent--session-stats session))
-           (context (my-agent--get stats "contextUsage"))
+    (let* ((stats (my-agent--session-stats session))
+           (state (my-agent--session-state session))
+           (tokens (my-agent--get stats "tokens"))
            (metrics (my-agent--session-metrics session))
            (windows (my-agent--array (my-agent--get metrics "windows")))
-           (parts (list (format " Pi · %s%s · %s · %s · %s"
-                                (or (my-agent--get state "sessionName") (file-name-nondirectory (directory-file-name default-directory)))
-                                (if (my-agent--session-attention session) " !" "")
-                                (my-agent--session-phase session)
-                                (my-agent--get model "id" "no model")
-                                (my-agent--get state "thinkingLevel" "?")))))
+           (shared nil)
+           (extra nil))
+      (dolist (cell '(("↑" . "input") ("↓" . "output") ("R" . "cacheRead") ("W" . "cacheWrite")))
+        (let ((value (my-agent--get tokens (cdr cell))))
+          (when (and (numberp value) (> value 0))
+            (push (cons (format "%s%s" (car cell) (my-agent--format-tokens value))
+                        'my-agent-meta)
+                  shared))))
+      (let ((cost (my-agent--get stats "cost")))
+        (when (and (numberp cost) (> cost 0))
+          (push (cons (format "$%.3f" cost) 'my-agent-tool-target) shared)))
+      (when-let* ((context (my-agent--context-part stats state)))
+        (push context shared))
+      (when (hash-table-p metrics)
+        (push (cons (format "%s calls" (my-agent--get metrics "toolCalls" 0)) 'my-agent-meta) extra)
+        (push (cons (format "+%s" (my-agent--get metrics "addedLines" 0)) 'my-agent-tool-ok) extra)
+        (push (cons (format "-%s" (my-agent--get metrics "removedLines" 0)) 'my-agent-tool-error) extra))
+      (dolist (window windows)
+        (let* ((reset (- (* 1000 (my-agent--get window "resetAt" 0)) (* 1000 (float-time))))
+               (stale (or (<= reset 0) (> (- (* 1000 (float-time)) (my-agent--get window "observedAt" 0)) 600000)))
+               (remaining (if (<= reset 0) nil (- 100 (my-agent--get window "usedPercent" 0)))))
+          (push (cons (format "%s%s%sm %s"
+                               (if stale "~" "")
+                               (my-agent--get window "windowMinutes")
+                               (if (= (my-agent--get window "windowMinutes" 0) 300) "h" "w")
+                               (if remaining (format "%d%%" (round remaining)) "?"))
+                      (if (and remaining (< remaining 20)) 'my-agent-tool-error 'my-agent-meta))
+                extra)))
+      (when (> (my-agent--session-events session) 0)
+        (push (cons (format "%d events" (my-agent--session-events session))
+                    (if (> (my-agent--session-event-errors session) 0)
+                        'my-agent-tool-error
+                      'my-agent-meta))
+              extra))
+      (when (my-agent--session-dialogs session)
+        (push (cons "answer needed" 'my-agent-warning) extra))
       (when-let* ((queues (gethash "queues" (my-agent--session-statuses session))))
         (let ((steering (length (my-agent--array (my-agent--get queues "steering"))))
               (follow-up (length (my-agent--array (my-agent--get queues "followUp")))))
           (when (> (+ steering follow-up) 0)
-            (push (format "queued: %d steer / %d follow-up" steering follow-up) parts))))
-      (when (my-agent--session-dialogs session)
-        (push (propertize "INPUT NEEDED: C-c C-d" 'face 'my-agent-warning) parts))
-      (when (hash-table-p stats)
-        (push (format "$%.3f · context %s%%"
-                      (my-agent--get stats "cost" 0.0)
-                      (let ((percent (my-agent--get context "percent")))
-                        (if (numberp percent) (format "%.1f" percent) "?"))) parts))
-      (when (hash-table-p metrics)
-        (push (format "%s / %s · %s calls · +%s −%s%s"
-                      (my-agent--duration (my-agent--get metrics "activeMilliseconds"))
-                      (my-agent--duration (my-agent--get metrics "promptMilliseconds"))
-                      (my-agent--get metrics "toolCalls" 0)
-                      (my-agent--get metrics "addedLines" 0) (my-agent--get metrics "removedLines" 0)
-                      (let ((tps (my-agent--get metrics "tokensPerSecond")))
-                        (if (numberp tps) (format " · %.1f tps" tps) ""))) parts))
-      (dolist (window windows)
-        (let* ((reset (- (* 1000 (my-agent--get window "resetAt" 0)) (* 1000 (float-time))))
-               (stale (or (<= reset 0) (> (- (* 1000 (float-time)) (my-agent--get window "observedAt" 0)) 600000))))
-          (push (format "%s%sm: %s remaining · reset %s"
-                        (if stale "~" "") (my-agent--get window "windowMinutes")
-                        (if (<= reset 0) "?" (format "%d%%" (round (- 100 (my-agent--get window "usedPercent" 0)))))
-                        (if (<= reset 0) "due" (my-agent--duration reset))) parts)))
-      (maphash (lambda (key value)
-                 (when (and (stringp value) (not (string-empty-p value)))
-                   (push (format "%s: %s" key (ansi-color-filter-apply value)) parts)))
-               (my-agent--session-statuses session))
-      (when (my-agent--session-attachments session)
-        (push (format "%d attachments" (length (my-agent--session-attachments session))) parts))
-      (string-join (nreverse parts) "  ·  "))))
+            (push (cons (format "queued %d/%d" steering follow-up) 'my-agent-meta) extra))))
+      (let ((shared (my-agent--join-shared (nreverse shared)))
+            (extra (my-agent--join-parts (nreverse extra))))
+        (if (string-empty-p extra) shared (concat shared " · " extra))))))
+
+(defun my-agent--mode-line ()
+  "Render the identity of this agent in the mode line."
+  (when my-agent--session
+    (let* ((state (my-agent--session-state my-agent--session))
+           (model (my-agent--get state "model"))
+           (phase (my-agent--session-phase my-agent--session))
+           (name (or (my-agent--get state "sessionName")
+                     (file-name-nondirectory (directory-file-name default-directory)))))
+      (my-agent--join-parts
+       (list (cons name 'my-agent-tool-name)
+             (cons (or (my-agent--get model "id") "no model") 'my-agent-tool-target)
+             (cons (or (my-agent--get state "thinkingLevel") "–") 'my-agent-meta)
+             (cons phase (my-agent--phase-face phase))
+             (when (my-agent--session-attention my-agent--session)
+               (cons "!" 'my-agent-tool-error)))))))
 
 (defun my-agent--accept (owner session server client _message)
   "Bind a private socket CLIENT to its immutable owner, never selected-buffer."
@@ -1433,6 +2214,13 @@ Cache notices are labelled estimates, not a claim about provider internals."
   "Dispose resources belonging only to this buffer; logs intentionally survive."
   (when-let* ((session my-agent--session))
     (when (timerp (my-agent--session-timer session)) (cancel-timer (my-agent--session-timer session)))
+    (when (timerp (my-agent--session-compose-timer session))
+      (cancel-timer (my-agent--session-compose-timer session)))
+    (when (timerp (my-agent--session-stats-timer session))
+      (cancel-timer (my-agent--session-stats-timer session)))
+    (dolist (overlay (list (my-agent--session-compose-overlay session)
+                            (my-agent--session-chips session)))
+      (when (and overlay (overlay-buffer overlay)) (delete-overlay overlay)))
     (setf (my-agent--session-stopped session) t)
     (when (my-agent--alive-p)
       (ignore-errors (process-send-eof (my-agent--session-process session)))
@@ -1481,9 +2269,11 @@ Cache notices are labelled estimates, not a claim about provider internals."
           (my-agent--session-incoming my-agent--session) nil
           (my-agent--session-backlog my-agent--session) nil
           (my-agent--session-dialogs my-agent--session) nil
+          (my-agent--session-cards my-agent--session) nil
           (my-agent--session-ready my-agent--session) nil
           (my-agent--session-stopped my-agent--session) nil
           (my-agent--session-phase my-agent--session) "starting"
+          (my-agent--session-compose-timer my-agent--session) nil
           (my-agent--session-pending my-agent--session) (make-hash-table :test #'equal)
           (my-agent--session-adapter-pending my-agent--session) (make-hash-table :test #'equal))
     (dolist (block (my-agent--session-blocks my-agent--session))
@@ -1553,7 +2343,7 @@ Cache notices are labelled estimates, not a claim about provider internals."
                (setf (my-agent--block-title block) "Shell · completed"
                      (my-agent--block-dirty block) t))
              (my-agent--refresh-state))))
-    (let ((block (my-agent--tool id "Shell · running")))
+    (let ((block (my-agent--tool id "shell")))
       (my-agent--set-block block (concat "$ " (my-agent--code command #'sh-mode) "\n")
                            (my-agent--object "command" command)))
     t))
@@ -1597,7 +2387,8 @@ Cache notices are labelled estimates, not a claim about provider internals."
         (setf (my-agent--session-history-index my-agent--session) -1
               (my-agent--session-attachments my-agent--session) nil
               (my-agent--session-attention my-agent--session) nil)
-        (my-agent--set-draft "")))))
+        (my-agent--set-draft "")
+        (my-agent--refresh-composer)))))
 (defun my-agent-send ()
   "Send this prompt, steering after the current turn if Pi is working."
   (interactive) (my-agent--submit "steer"))
@@ -1661,6 +2452,7 @@ Text is explicit prompt context; images use Pi's image content format."
                                 (concat "File: " file "\n" (with-temp-buffer (insert-file-contents file) (buffer-string)))))))
       (push attachment (my-agent--session-attachments my-agent--session))
       (my-agent--notice "Attachment captured for next prompt" file nil t)))
+  (my-agent--refresh-composer)
   (force-mode-line-update))
 (defun my-agent--select-agent ()
   (let ((buffers (cl-remove-if-not
@@ -1899,10 +2691,7 @@ Text is explicit prompt context; images use Pi's image content format."
                     (my-agent--adapter-query "snapshot")))
 (defun my-agent-statistics ()
   (interactive)
-  (my-agent--notice "Session statistics" (my-agent--query "get_session_stats"))
-  (my-agent--notice "Extension statuses and queues" (my-agent--session-statuses my-agent--session))
-  (my-agent--notice "Custom metrics (live, reset on runtime replacement)"
-                    (or (my-agent--session-metrics my-agent--session) "No publisher snapshot received")))
+  (my-agent-stats))
 (defun my-agent-rpc ()
   "Execute any Pi RPC command, exposing unsupported or new controls."
   (interactive)
@@ -1965,7 +2754,8 @@ COMMAND is shown as a manual instruction, never typed/executed automatically."
                     ("Resume" . my-agent-resume) ("Tree" . my-agent-tree) ("Fork" . my-agent-fork)
                     ("Clone" . my-agent-clone) ("Name" . my-agent-name) ("Compact" . my-agent-compact)
                     ("Tools" . my-agent-tools) ("Settings/resources" . my-agent-settings)
-                    ("Statistics" . my-agent-statistics) ("Project trust" . my-agent-trust) ("Copy reply" . my-agent-copy)
+                    ("Statistics" . my-agent-stats) ("Events" . my-agent-events)
+                    ("Project trust" . my-agent-trust) ("Copy reply" . my-agent-copy)
                     ("Export" . my-agent-export) ("Reload" . my-agent-reload)
                     ("Refresh history" . my-agent-refresh) ("Redraw presentation" . my-agent-redraw)
                     ("Raw RPC" . my-agent-rpc)
