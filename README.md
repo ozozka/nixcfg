@@ -12,16 +12,16 @@ manual setup. Nix brings system configuration and package management together, r
 fragmented tools and installation methods with a unified approach. This keeps my setup lean and
 consistent, while reproducible configurations and rollbacks make changes easier to manage.
 
-### Philosophy
-
-- **Lean:** Maximize value while minimizing complexity, maintenance cost, and dependencies.
-- **Simplicity:** Prefer built-in capabilities over additional layers and add-ons.
-- **Consistency:** Centralize shared settings and maintain consistent behavior across programs.
-- **Recency:** Track recent releases for new features and performance improvements.
-- **Reliability:** Use reproducible configurations and rollbacks with rolling releases.
-- **Cohesion:** Manage software centrally through Nixpkgs and custom Nix packages.
-
 ### Principles
+
+- **Lean:** Maximize value while minimizing complexity, maintenance surface, and dependencies.
+- **Simplicity:** Prefer built-in capabilities over additional layers and add-ons.
+- **Cohesion:** Manage software centrally through Nixpkgs and custom Nix packages.
+- **Consistency:** Centralize shared settings and maintain consistent behavior system-wide.
+- **Reliability:** Use reproducible configurations and rollbacks with rolling releases.
+- **Recency:** Track recent releases for new features and performance improvements.
+
+### Constraints
 
 - No third-party program extensions, plugins, or mods, or additional flake dependencies.
 - Modules and programs must contain and manage their dotfiles and configuration.
@@ -32,18 +32,20 @@ consistent, while reproducible configurations and rollbacks make changes easier 
 
 ## Manual
 
-Most of the required commands exists as [just recipes](justfile) and can be used from there.
-
-**Other Commands**
+Most of the required commands are wrapped as Nix flake apps for ease of use. `nix flake show`
+lists the available apps, while the `r` shell alias provides a shorthand for running them.
 
 ```bash
-# Templates
+nix run              # Run the default app
+r info               # Run the info app
+r nixpkgs#hello      # Run an external flake app
+```
+
+**Templates**
+
+```bash
 nix flake init -t github:ozozka/nixcfg#default
 nix flake new -t .#<template> ./new-project
-
-# Apps
-nix run
-nix run .#info
 ```
 
 ## Reference
@@ -62,7 +64,6 @@ nix run .#info
 - [overlays/](overlays/): Overlays.
 - [pkgs/](pkgs/): Custom packages exported by flake.
 - [templates/](templates/): Templates for projects and tools.
-- [justfile](justfile): Management recipes.
 - [README.md](README.md): Documentation.
 - [apps.nix](apps.nix): Apps related to the system configuration.
 - [checks.nix](checks.nix): Format, and module checks.
@@ -107,8 +108,8 @@ public and store-backed; profiles must not contain secrets.
 
 ## Development
 
-- `just fix`: Runs formatters and linters for the languages used.
-- `just check`: Checks flake, format, and evaluates individual modules.
+- `nix fmt`: Runs formatters and linters for the languages used.
+- `nix flake check`: Checks flake, format, and evaluates individual modules.
 
 ## Roadmap
 

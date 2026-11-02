@@ -4,13 +4,11 @@ pkgs.writeShellApplication {
   name = "formatter";
 
   text = ''
-    just --fmt
     statix check .
     treefmt
   '';
 
   runtimeInputs = with pkgs; [
-    just
     statix
 
     (treefmt.withConfig {

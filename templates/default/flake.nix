@@ -1,163 +1,80 @@
 {
   description = "";
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   outputs =
     { nixpkgs, ... }:
     let
-      inherit (nixpkgs) lib;
-
-      perSystem =
-        f:
-        nixpkgs.lib.genAttrs [ "x86_64-linux" ] (
-          system:
-          f (
-            import nixpkgs {
-              inherit system;
-              config = {
-                allowUnfree = false;
-              };
-            }
-          )
-        );
+      system = "x86_64-linux";
+      pkgs = import nixpkgs { inherit system; };
     in
     {
-      devShells = perSystem (
-        pkgs:
+      devShells.${system}.default = pkgs.mkShell {
+        packages = with pkgs; [
+          ty
+          rust-analyzer
+          nixd
+        ];
+      };
+
+      apps.${system} =
         let
-          base = {
-            packages = with pkgs; [ just ];
-            env = { };
-            shellHook = "";
-          };
-
-          shells = {
-            dev = {
-              packages = with pkgs; [
-                nixd
-                lua-language-server
-              ];
+          mkApp =
+            {
+              name,
+              desc,
+              deps,
+              text,
+            }:
+            {
+              type = "app";
+              meta.description = desc;
+              program = pkgs.lib.getExe (
+                pkgs.writeShellApplication {
+                  inherit name text;
+                  runtimeInputs = deps;
+                  inheritPath = false;
+                }
+              );
             };
-          };
-
-          inherit (builtins) attrValues;
-        in
-        builtins.mapAttrs
-          (
-            shellName: shell:
-            pkgs.mkShell rec {
-              LD_LIBRARY_PATH = lib.makeLibraryPath packages;
-              packages = lib.unique (base.packages ++ (shell.packages or [ ]));
-              env = (base.env or { }) // (shell.env or { });
-              shellHook = lib.concatStringsSep "\n" [
-                base.shellHook
-                (shell.shellHook or "")
-                ''echo "- ${shellName}"''
-              ];
-            }
-          )
-          (
-            shells
-            // {
-              default = {
-                packages = lib.unique (lib.flatten (map (s: s.packages or [ ]) (attrValues shells)));
-                env = lib.foldl' (acc: env: acc // env) { } (map (s: s.env or { }) (attrValues shells));
-                shellHook = lib.concatStringsSep "\n" (map (s: s.shellHook or "") (attrValues shells));
-              };
-            }
-          )
-      );
-
-      formatter = perSystem (
-        pkgs:
-        pkgs.treefmt.withConfig {
-          settings = {
-            tree-root-file = "flake.nix";
-            on-unmatched = "debug";
-
-            formatter = {
-              just = {
-                command = pkgs.lib.getExe (
-                  pkgs.writeShellApplication {
-                    name = "justfmt";
-                    runtimeInputs = [ pkgs.just ];
-                    text = ''
-                      for f in "$@"; do
-                        just --fmt --justfile "$f"
-                      done
-                    '';
-                  }
-                );
-                includes = [
-                  "justfile"
-                  "*/justfile"
-                ];
-              };
-
-              prettier = {
-                command = pkgs.lib.getExe pkgs.prettier;
-                includes = [
-                  "*.html"
-                  "*.css"
-                  "*.js"
-                  "*.ts"
-                  "*.md"
-                ];
-                options = [
-                  "--write"
-                  "--ignore-unknown"
-                  "--tab-width=2"
-                  "--semi=true"
-                  "--single-quote=false"
-                  "--trailing-comma=all"
-                ];
-              };
-
-              nixf-diagnose = {
-                command = pkgs.lib.getExe pkgs.nixf-diagnose;
-                includes = [ "*.nix" ];
-                options = [ "--auto-fix" ];
-                priority = -2;
-              };
-
-              statix = {
-                command = lib.getExe (
-                  pkgs.writeShellApplication {
-                    name = "statix-check";
-                    runtimeInputs = [ pkgs.statix ];
-                    text = ''
-                      for file in "$@"; do
-                        statix check "$file"
-                      done
-                    '';
-                  }
-                );
-                includes = [ "*.nix" ];
-                priority = -1;
-              };
-
-              nixfmt = {
-                command = pkgs.lib.getExe pkgs.nixfmt;
-                includes = [ "*.nix" ];
-                options = [ "--strict" ];
-              };
-            };
-          };
-        }
-      );
-
-      checks = perSystem (
-        pkgs:
-        let
-          formatter = pkgs.callPackage ./formatter.nix { };
-          fs = lib.fileset;
-          src = fs.toSource {
-            root = ./.;
-            fileset = fs.difference ./. (fs.maybeMissing ./.git);
-          };
         in
         {
-          format = formatter.check src;
-        }
-      );
+          qual = mkApp {
+            name = "kaynak-qual";
+            desc = "Format and validate the working tree with debug-profile Rust checks";
+            deps = with pkgs; [
+              coreutils
+              prettier
+              nixfmt
+              ruff
+              rustfmt
+              cargo-nextest
+              clippy
+              rustc
+              cargo
+              stdenv.cc
+              binutils
+              git
+              nix
+            ];
+            text = ''
+              cd "$(git rev-parse --show-toplevel)"
+              export CARGO_TARGET_DIR="$PWD/target"
+              export RUSTFLAGS="-C target-cpu=native"
+              export PYTHONPATH="$PWD"
+
+              prettier --write --print-width=96 --prose-wrap=always --tab-width=2 --list-different .
+              nixfmt --strict flake.nix
+              nix flake check --no-build --no-update-lock-file --quiet --no-warn-dirty
+              ruff format --isolated --quiet --target-version py314 --line-length 96 --no-cache .
+              ruff check --isolated --quiet --target-version py314 --line-length 96 --select E,F,I,UP,B --fix --unsafe-fixes --no-cache .
+              cargo clippy --quiet --fix --allow-dirty --allow-staged --workspace --all-targets --locked -- -D warnings
+              cargo fmt --all
+              cargo clippy --quiet --locked --workspace --all-targets -- -D warnings
+              cargo nextest run --cargo-quiet --locked --workspace --no-fail-fast \
+                --status-level fail --final-status-level fail \
+                --failure-output final --success-output never
+            '';
+          };
+        };
     };
 }

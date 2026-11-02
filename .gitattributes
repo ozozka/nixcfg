@@ -1,9 +1,0 @@
-* text=auto eol=lf
-
-*.pdf binary
-*.pdf binary
-*.jpg binary
-*.jpeg binary
-
-# child directories of templates
-templates/*/** linguist-detectable=false

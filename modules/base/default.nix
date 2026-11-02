@@ -140,7 +140,7 @@ in
       c = "printf '\\033c'";
       nd = "exec nix develop";
       nf = "nix flake";
-      r = "f() { nix run \".#$1\" -- \"\${@:2}\"; }; f";
+      r = "f() { local ref=\"$1\"; shift; [[ \"$ref\" == *#* ]] || ref=\".#$ref\"; nix run \"$ref\" -- \"$@\"; }; f";
       j = "just";
     };
 

@@ -194,6 +194,7 @@
   :ensure nil
   :custom
   (tab-width 4)
+  (diff-switches "-U1")
   (diff-refine-nonmodified nil)
   (diff-font-lock-prettify t))
 
@@ -352,7 +353,7 @@
   :ensure nil
   :custom
   (compilation-scroll-output 'first-error)
-  (compile-command "just")
+  (compile-command "nix run .#")
   :config
   (add-to-list
    'display-buffer-alist

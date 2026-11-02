@@ -1,7 +1,56 @@
 { pkgs, ... }:
 
-rec {
-  default = info;
+let
+  mkApp =
+    {
+      name,
+      desc,
+      path ? true,
+      deps ? [ ],
+      text,
+    }:
+    {
+      type = "app";
+      meta.description = desc;
+      program = pkgs.lib.getExe (
+        pkgs.writeShellApplication {
+          inherit name text;
+          runtimeInputs = deps;
+          inheritPath = path;
+        }
+      );
+    };
+in
+{
+  default = mkApp {
+    name = "build";
+    desc = "Build with current host name";
+    text = ''sudo nixos-rebuild switch --flake ".#''${1:-}"'';
+  };
+
+  specialisation = mkApp {
+    name = "specialisation";
+    desc = "Build with a specific specialization";
+    text = ''sudo nixos-rebuild switch --flake .# --specialisation "$1"'';
+  };
+
+  ls = mkApp {
+    name = "ls";
+    desc = "List generations";
+    text = "nixos-rebuild list-generations";
+  };
+
+  gc = mkApp {
+    name = "gc";
+    desc = "Remove all generations except current";
+    text = "sudo nix-collect-garbage -d";
+  };
+
+  hash = mkApp {
+    name = "hash";
+    desc = "Generate hash for package";
+    text = ''nix hash convert --to sri --hash-algo sha256 "$1"'';
+  };
 
   wallpaper = {
     type = "app";
