@@ -5,7 +5,7 @@ pkgs.writeShellApplication {
 
   text = ''
     statix check .
-    treefmt
+    treefmt --no-cache
   '';
 
   runtimeInputs = with pkgs; [
@@ -49,7 +49,10 @@ pkgs.writeShellApplication {
             command = lib.getExe pkgs.ruff;
             includes = [ "*.py" ];
             options = [
+              "--no-cache"
               "check"
+              "--line-length"
+              "96"
               "--fix"
             ];
             priority = -1;
@@ -58,7 +61,12 @@ pkgs.writeShellApplication {
           ruff-format = {
             command = lib.getExe pkgs.ruff;
             includes = [ "*.py" ];
-            options = [ "format" ];
+            options = [
+              "--no-cache"
+              "format"
+              "--line-length"
+              "96"
+            ];
           };
 
           biome = {
@@ -84,6 +92,7 @@ pkgs.writeShellApplication {
               "--javascript-formatter-quote-style=double"
               "--semicolons=always"
               "--trailing-commas=all"
+              "--line-width=96"
             ];
           };
 

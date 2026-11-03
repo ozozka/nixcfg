@@ -9,9 +9,28 @@ let
     root = ./.;
     fileset = fs.difference ./. (fs.maybeMissing ./.git);
   };
+
+  formatter = pkgs.callPackage ./formatter.nix { };
 in
 {
-  format = (pkgs.callPackage ./formatter.nix { }).check src;
+  format =
+    pkgs.runCommandLocal "format-check"
+      {
+        nativeBuildInputs = [
+          pkgs.gitMinimal
+          formatter
+        ];
+        __structuredAttrs = true;
+      }
+      ''
+        cp -r ${src} project
+        chmod -R u+w project
+
+        cd project
+        formatter
+        git diff --no-index --exit-code ${src} .
+        touch "$out"
+      '';
 }
 // lib.mapAttrs' (
   name: module:
