@@ -1,8 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   createWriteToolDefinition,
   generateUnifiedPatch,
@@ -88,8 +85,7 @@ function formatWindow(window: UsageWindow, now: number): string {
   const resetIn = window.resetAt * 1000 - now;
   const stale = now - window.observedAt > STALE_AFTER_MS || resetIn <= 0;
   // A passed reset is not evidence of a fresh quota allocation.
-  const remaining =
-    resetIn <= 0 ? "?" : `${Math.round(100 - window.usedPercent)}%`;
+  const remaining = resetIn <= 0 ? "?" : `${Math.round(100 - window.usedPercent)}%`;
   const reset =
     resetIn <= 0
       ? "due"
@@ -151,25 +147,16 @@ export default function (pi: ExtensionAPI) {
                 if (record(error)?.code === "ENOENT") previous = "";
               }
               if (previous !== undefined) {
-                changes = countPatchLines(
-                  generateUnifiedPatch(path, previous, content, 0),
-                );
+                changes = countPatchLines(generateUnifiedPatch(path, previous, content, 0));
               }
             }
             await writeFile(path, content, "utf8");
           },
         },
       });
-      const result = await tool.execute(
-        toolCallId,
-        input,
-        signal,
-        onUpdate,
-        ctx,
-      );
+      const result = await tool.execute(toolCallId, input, signal, onUpdate, ctx);
       // Failed/aborted writes throw above and never contribute to totals.
-      if (changes && sessionContext && context === sessionContext)
-        addChanges(changes);
+      if (changes && sessionContext && context === sessionContext) addChanges(changes);
       return result;
     },
   });
@@ -178,9 +165,7 @@ export default function (pi: ExtensionAPI) {
     if (!context) return;
     const elapsed = formatDuration(
       activeMilliseconds +
-        (activeStartedAt === undefined
-          ? 0
-          : performance.now() - activeStartedAt),
+        (activeStartedAt === undefined ? 0 : performance.now() - activeStartedAt),
     );
     const promptElapsed = formatDuration(
       activeStartedAt === undefined
@@ -198,8 +183,7 @@ export default function (pi: ExtensionAPI) {
       );
     }
     const theme = context.ui.theme;
-    if (toolCalls > 0)
-      parts.push(`${toolCalls} ${toolCalls === 1 ? "call" : "calls"}`);
+    if (toolCalls > 0) parts.push(`${toolCalls} ${toolCalls === 1 ? "call" : "calls"}`);
     if (addedLines > 0 || removedLines > 0) {
       parts.push(
         `${theme.fg("toolDiffAdded", `+${addedLines}`)} ${theme.fg("toolDiffRemoved", `-${removedLines}`)}`,
@@ -250,8 +234,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_execution_end", (event) => {
     if (!context || event.toolName !== "edit" || event.isError) return;
     const details = record(record(event.result)?.details);
-    if (typeof details?.patch === "string")
-      addChanges(countPatchLines(details.patch));
+    if (typeof details?.patch === "string") addChanges(countPatchLines(details.patch));
   });
 
   pi.on("session_start", (_event, ctx) => {
@@ -293,8 +276,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("message_end", (event) => {
-    if (event.message.role !== "assistant" || responseStartedAt === undefined)
-      return;
+    if (event.message.role !== "assistant" || responseStartedAt === undefined) return;
     const responseMilliseconds = performance.now() - responseStartedAt;
     responseStartedAt = undefined;
     const message = event.message;
@@ -314,17 +296,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("after_provider_response", (event) => {
-    if (
-      !context ||
-      requestProvider !== CODEX_PROVIDER ||
-      selectedProvider !== CODEX_PROVIDER
-    )
+    if (!context || requestProvider !== CODEX_PROVIDER || selectedProvider !== CODEX_PROVIDER)
       return;
     const headers = Object.fromEntries(
-      Object.entries(event.headers).map(([key, value]) => [
-        key.toLowerCase(),
-        value,
-      ]),
+      Object.entries(event.headers).map(([key, value]) => [key.toLowerCase(), value]),
     );
     const now = Date.now();
     saveWindows(
@@ -336,9 +311,7 @@ export default function (pi: ExtensionAPI) {
           headers[`${prefix}used-percent`],
           headers[`${prefix}window-minutes`],
           resetAt ??
-            (resetAfter !== undefined && resetAfter >= 0
-              ? now / 1000 + resetAfter
-              : undefined),
+            (resetAfter !== undefined && resetAfter >= 0 ? now / 1000 + resetAfter : undefined),
           now,
         );
       }),
@@ -346,11 +319,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("provider_stream_event", (event) => {
-    if (
-      !context ||
-      event.provider !== CODEX_PROVIDER ||
-      selectedProvider !== CODEX_PROVIDER
-    )
+    if (!context || event.provider !== CODEX_PROVIDER || selectedProvider !== CODEX_PROVIDER)
       return;
     const data = record(event.data);
     if (data?.type !== "codex.rate_limits") return;

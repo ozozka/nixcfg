@@ -1,10 +1,7 @@
 import { existsSync } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "project-docs-setting";
 type ContextFile = { path: string; content: string };
@@ -34,10 +31,7 @@ function restoreSetting(ctx: ExtensionContext): boolean {
   return enabled;
 }
 
-async function loadDocs(
-  cwd: string,
-  ctx: ExtensionContext,
-): Promise<ContextFile[]> {
+async function loadDocs(cwd: string, ctx: ExtensionContext): Promise<ContextFile[]> {
   const root = projectRoot(cwd);
   const files: ContextFile[] = [];
 
@@ -50,8 +44,7 @@ async function loadDocs(
         const entries = await readdir(path);
         // Only direct Markdown children of docs/ are context files.
         for (const name of entries.sort()) {
-          if (name.toLowerCase().endsWith(".md"))
-            await visit(join(path, name), false);
+          if (name.toLowerCase().endsWith(".md")) await visit(join(path, name), false);
         }
       } else if (info.isFile()) {
         files.push({ path, content: await readFile(path, "utf8") });
@@ -59,10 +52,7 @@ async function loadDocs(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       if (ctx.hasUI) {
-        ctx.ui.notify(
-          `Could not load documentation ${path}: ${String(error)}`,
-          "warning",
-        );
+        ctx.ui.notify(`Could not load documentation ${path}: ${String(error)}`, "warning");
       }
     }
   }
@@ -96,8 +86,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("docs", {
-    description:
-      "Show or switch README/docs/justfile context injection for this session",
+    description: "Show or switch README/docs/justfile context injection for this session",
     getArgumentCompletions: (prefix) =>
       ["on", "off"]
         .filter((value) => value.startsWith(prefix))
@@ -105,10 +94,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const value = args.trim().toLowerCase();
       if (!value) {
-        const trust =
-          enabled && !ctx.isProjectTrusted()
-            ? " (waiting for project trust)"
-            : "";
+        const trust = enabled && !ctx.isProjectTrusted() ? " (waiting for project trust)" : "";
         const paths = new Set(
           (ctx.getSystemPromptOptions().contextFiles ?? []).map((file) =>
             resolve(ctx.cwd, file.path),
@@ -145,13 +131,8 @@ export default function (pi: ExtensionAPI) {
         pi.appendEntry(ENTRY_TYPE, { enabled });
       }
       const history =
-        !enabled && hasInjected
-          ? " Previously sent documentation remains in history."
-          : "";
-      ctx.ui.notify(
-        `Docs ${value}; applies to the next prompt.${history}`,
-        "info",
-      );
+        !enabled && hasInjected ? " Previously sent documentation remains in history." : "";
+      ctx.ui.notify(`Docs ${value}; applies to the next prompt.${history}`, "info");
     },
   });
 
@@ -161,9 +142,7 @@ export default function (pi: ExtensionAPI) {
     // Each run starts with Pi's base context. Add one stable copy per path,
     // preserving AGENTS.md and context contributed by other extensions.
     const existing = new Set(
-      event.systemPromptOptions.contextFiles.map((file) =>
-        resolve(ctx.cwd, file.path),
-      ),
+      event.systemPromptOptions.contextFiles.map((file) => resolve(ctx.cwd, file.path)),
     );
     for (const file of files) {
       if (existing.has(file.path)) continue;
