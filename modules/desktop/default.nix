@@ -107,6 +107,7 @@ in
     };
 
     systemPackages = with pkgs; [
+      libnotify
       mpv
       cfg.cursor.pkg
       playerctl
