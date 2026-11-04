@@ -4,6 +4,8 @@
   imports = [
     ./emacs
     ./pi
+    ./claude
+    ./codex
   ];
 
   environment = {
