@@ -15,6 +15,7 @@ in
     ./music.nix
     ./hyprland
     ./quickshell
+    ./nyxt
     ./zen
     ./alacritty.nix
   ];
