@@ -24,6 +24,10 @@
       marksman
       sqls
       yaml-language-server
+      nixd
+      rust-analyzer
+      lua-language-server
+      ty
     ];
   };
 }
