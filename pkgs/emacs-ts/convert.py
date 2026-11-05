@@ -1,8 +1,13 @@
 """Adapt the pinned Nix, Just and Typst highlight queries for Emacs treesit-x.
 
 This is deliberately not a general query/regexp translator. Unknown predicates
-and regexp constructs fail the build so upstream changes require review. Query
-structure is parsed before editing; strings and comments are never substituted.
+and regexp constructs, or changes to required Nix patterns, fail the build so
+upstream changes require review. Balanced query forms are parsed before mapping
+captures and predicates; strings and comments are never substituted.
+
+Source paths and build dependencies belong to default.nix. This standard-library
+converter runs only at build time; grammar selection and mode definitions remain
+in modules/dev/emacs/.
 """
 
 import argparse
@@ -139,6 +144,8 @@ def emacs_regexp(value: str) -> str:
 
 # Exact names take precedence over prefix families. Remaining standard captures
 # are intentionally left for Emacs treesit-generic-mode-font-lock-map.
+# Builtin functions use font-lock-builtin-face, not the nonexistent
+# font-lock-function-face used by the old configuration.
 FACES = {
     "attribute.builtin": "builtin",
     "constant.numeric": "number",
@@ -189,7 +196,7 @@ def transform(node, language: str):
     if head.startswith("#"):
         if language == "nix" and items == ["#is-not?", "local"]:
             # Emacs has no upstream locals tracking. This deliberately broadens
-            # builtin matching; preserve the previous configuration's behavior.
+            # builtin matching to shadowed names; preserve the previous behavior.
             return None
         if head == "#offset!":
             # Font-lock highlights complete nodes, without upstream offsets.
@@ -202,6 +209,7 @@ def transform(node, language: str):
         if target is None:
             raise ValueError(f"predicate refers to discarded capture {items[1]}")
         if head == "#any-of?":
+            # Match literal alternatives as whole strings using an Emacs regexp.
             alternatives = [literal_regexp(decode_string(item)) for item in items[2:]]
             regexp = r"\`\(?:" + r"\|".join(alternatives) + r"\)\'"
         else:
@@ -213,6 +221,9 @@ def transform(node, language: str):
     return Group(node.opening, [item for item in converted if item is not None])
 
 
+# Keep Nix-specific removals and the extra function-binding query here, alongside
+# builtin-priority handling in convert_query. Required patterns are checked so
+# upstream changes cannot silently alter these configuration-specific choices.
 NIX_REMOVALS = {
     "(select_expression attrpath: (attrpath (identifier)) @property)",
     "(binding attrpath: (attrpath (identifier)) @property)",
