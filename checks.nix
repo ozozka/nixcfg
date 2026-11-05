@@ -17,24 +17,7 @@ in
   emacs-ts = emacsTs;
   emacs-ts-emacs = emacsTs.tests.emacs;
 
-  format =
-    pkgs.runCommandLocal "format-check"
-      {
-        nativeBuildInputs = [
-          pkgs.gitMinimal
-          formatter
-        ];
-        __structuredAttrs = true;
-      }
-      ''
-        cp -r ${src} project
-        chmod -R u+w project
-
-        cd project
-        formatter
-        git diff --no-index --exit-code ${src} .
-        touch "$out"
-      '';
+  format = formatter.check src;
 }
 // lib.mapAttrs' (
   name: module:
