@@ -12,20 +12,29 @@ MAX_CONTEXT = 9_000
 
 
 def documentation(cwd):
-    # Only cwd/README.md and sorted direct cwd/docs/*.md children, without symlinks.
+    # Load cwd/README.md and recursive cwd/docs/**/*.md in sorted traversal order.
+    # Skip symlinks and docs entries starting with _ (including whole subtrees).
     # Never search parents. Missing files are optional; other read failures warn.
     # Claude gates settings-file hooks on workspace trust. In -p/SDK mode,
     # Claude considers the workspace trusted: only run those modes in vetted repos.
     paths = [cwd / "README.md"]
     warnings = []
-    docs = cwd / "docs"
-    try:
-        if stat.S_ISDIR(docs.lstat().st_mode):
-            paths.extend(sorted(path for path in docs.iterdir() if path.suffix == ".md"))
-    except FileNotFoundError:
-        pass
-    except OSError as error:
-        warnings.append(f"Could not list {docs}: {error}")
+
+    def visit(path):
+        try:
+            mode = path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                for child in sorted(path.iterdir()):
+                    if not child.name.startswith("_"):
+                        visit(child)
+            elif stat.S_ISREG(mode) and path.suffix == ".md":
+                paths.append(path)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            warnings.append(f"Could not discover documentation {path}: {error}")
+
+    visit(cwd / "docs")
 
     files = []
     parts = []
@@ -62,7 +71,8 @@ def documentation(cwd):
         )
         if len(context) > MAX_CONTEXT:
             context = (
-                f"Read {cwd / 'README.md'} and all direct {cwd / 'docs'}/*.md files in full."
+                f"Read {cwd / 'README.md'} and recursive {cwd / 'docs'}/**/*.md in full, "
+                "excluding symlinks and files or directories whose names start with _."
             )
     else:
         context = "".join(parts)

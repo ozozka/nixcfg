@@ -27,15 +27,55 @@ class DocsTest(unittest.TestCase):
         (directory / "z.md").write_text("last marker")
         (directory / "a space.md").write_text("first marker")
         (directory / "nested").mkdir()
-        (directory / "nested" / "hidden.md").write_text("excluded nested")
+        (directory / "nested" / "guide.md").write_text("nested marker")
         (directory / "link.md").symlink_to(self.root / "README.md")
         (directory / "dir.md").mkdir()
         result = self.context()
         self.assertLess(result.index("README marker"), result.index("first marker"))
-        self.assertLess(result.index("first marker"), result.index("last marker"))
+        self.assertLess(result.index("first marker"), result.index("nested marker"))
+        self.assertLess(result.index("nested marker"), result.index("last marker"))
         self.assertNotIn("excluded", result)
         self.assertNotIn("link.md", result)
         self.assertNotIn("dir.md", result)
+
+    def test_recursive_exclusions_and_symlinks(self):
+        directory = self.root / "docs"
+        for name in ("_private", "_archive.md", "public/deep", "public/_drafts"):
+            (directory / name).mkdir(parents=True, exist_ok=True)
+        for name in (
+            "_private/visible.md",
+            "_archive.md/visible.md",
+            "_hidden.md",
+            "public/_hidden.md",
+            "public/_drafts/visible.md",
+            "public/deep/ignored.txt",
+        ):
+            (directory / name).write_text("excluded marker")
+        (directory / "public" / "deep" / "guide.md").write_text("deep marker")
+        (directory / "public" / "deep" / "_cycle").symlink_to(directory)
+        (directory / "public" / "cycle").symlink_to(directory, target_is_directory=True)
+        (directory / "public" / "linked.md").symlink_to(directory / "_hidden.md")
+        (directory / "linked-dir").symlink_to(directory / "_private", target_is_directory=True)
+        result = self.context()
+        self.assertIn("deep marker", result)
+        self.assertNotIn("excluded marker", result)
+        self.assertNotIn("linked", result)
+
+    def test_discovery_error_preserves_other_docs(self):
+        directory = self.root / "docs"
+        (directory / "broken").mkdir(parents=True)
+        (directory / "guide.md").write_text("readable marker")
+        original = Path.iterdir
+
+        def iterdir(path):
+            if path == directory / "broken":
+                raise PermissionError("unreadable directory")
+            return original(path)
+
+        with patch.object(Path, "iterdir", iterdir):
+            result = docs.documentation(self.root)
+        self.assertIn("readable marker", result["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("unreadable directory", result["systemMessage"])
 
     def test_only_cwd_documentation_is_loaded(self):
         (self.root / "README.md").write_text("excluded parent README")
