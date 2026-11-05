@@ -17,6 +17,18 @@ in
   emacs-ts = emacsTs;
   emacs-ts-emacs = emacsTs.tests.emacs;
 
+  codex-hooks = pkgs.runCommand "codex-hooks-check" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+    export PYTHONDONTWRITEBYTECODE=1
+    python3 -m unittest discover -s ${./modules/dev/codex} -p 'test_*.py' -v
+    touch "$out"
+  '';
+
+  claude-hooks = pkgs.runCommand "claude-hooks-check" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+    export PYTHONDONTWRITEBYTECODE=1
+    python3 -m unittest discover -s ${./modules/dev/claude} -p 'test_*.py' -v
+    touch "$out"
+  '';
+
   format = formatter.check src;
 }
 // lib.mapAttrs' (
