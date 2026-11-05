@@ -139,7 +139,7 @@ Scope {
         }
         BarItem {
           theme: barModule.theme
-          text: keyboard.layout ? "⌨ " + keyboard.layout : ""
+          text: keyboard.layout
           textColor: theme.colM
         }
         Submap {
@@ -494,10 +494,9 @@ Scope {
     onClicked: barModule.toggleDetails(section, summary, barWindow)
 
     text: {
-      const symbol = barModule.controls.symbol(section);
       if (section === "wifi" || section === "bluetooth")
-        return symbol + " " + barModule.controls.summary(section).replace(/^(Wi-Fi|Bluetooth) · /, "");
-      return symbol + " " + barModule.controls.value(section);
+        return barModule.controls.summary(section).replace(/^(Wi-Fi|Bluetooth) · /, "");
+      return barModule.controls.value(section);
     }
   }
 
@@ -583,8 +582,9 @@ Scope {
       return seconds > 0 ? `${Math.floor(seconds / 60)}m` : "";
     }
 
-    text: `▰ %${Math.round(battery.percentage)} · ${battery.status}` + (battery.status === "Full" || battery.remainingSeconds
-                                                                        <= 0 ? "" : " " + formatRemaining(
-                                                                                 battery.remainingSeconds))
+    text: `%${Math.round(battery.percentage)} · ${battery.status}` + (battery.status === "Full"
+                                                                      || battery.remainingSeconds <= 0 ? "" : " "
+                                                                                                         + formatRemaining(
+                                                                                                           battery.remainingSeconds))
   }
 }
