@@ -11,8 +11,12 @@ let
   };
 
   formatter = pkgs.callPackage ./formatter.nix { };
+  emacsTs = pkgs.callPackage ./pkgs/emacs-ts { };
 in
 {
+  emacs-ts = emacsTs;
+  emacs-ts-emacs = emacsTs.tests.emacs;
+
   format =
     pkgs.runCommandLocal "format-check"
       {
