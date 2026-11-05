@@ -127,7 +127,8 @@ in
       l = "LC_COLLATE=C ls -ACx --group-directories-first --color=auto"; # -F (symbols), -x
       c = "printf '\\033c'";
       nd = "exec nix develop";
-      nf = "nix flake";
+      nf = "nix fmt";
+      n = "nix flake";
       r = "f() { local ref=\"$1\"; shift; [[ \"$ref\" == *#* ]] || ref=\".#$ref\"; nix run \"$ref\" -- \"$@\"; }; f";
       j = "just";
     };
