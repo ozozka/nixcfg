@@ -29,6 +29,11 @@ in
     touch "$out"
   '';
 
+  pi-docs = pkgs.runCommand "pi-docs-check" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
+    node --test ${./modules/dev/pi}/docs.test.ts
+    touch "$out"
+  '';
+
   format = formatter.check src;
 }
 // lib.mapAttrs' (

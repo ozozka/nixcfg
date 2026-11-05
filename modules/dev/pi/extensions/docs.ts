@@ -42,11 +42,11 @@ async function loadDocs(cwd: string, ctx: ExtensionContext): Promise<ContextFile
       if (info.isSymbolicLink()) return;
       if (info.isDirectory() && recurse) {
         const entries = await readdir(path);
-        // Only direct Markdown children of docs/ are context files.
+        // Recurse in stable order, pruning underscore-prefixed files and subtrees.
         for (const name of entries.sort()) {
-          if (name.toLowerCase().endsWith(".md")) await visit(join(path, name), false);
+          if (!name.startsWith("_")) await visit(join(path, name), true);
         }
-      } else if (info.isFile()) {
+      } else if (info.isFile() && (!recurse || path.endsWith(".md"))) {
         files.push({ path, content: await readFile(path, "utf8") });
       }
     } catch (error) {
@@ -58,7 +58,6 @@ async function loadDocs(cwd: string, ctx: ExtensionContext): Promise<ContextFile
   }
 
   await visit(join(root, "README.md"), false);
-  await visit(join(root, "justfile"), false);
   await visit(join(root, "docs"), true);
   return files;
 }
@@ -86,7 +85,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("docs", {
-    description: "Show or switch README/docs/justfile context injection for this session",
+    description: "Show or switch README/docs/**/*.md context (excluding _ entries)",
     getArgumentCompletions: (prefix) =>
       ["on", "off"]
         .filter((value) => value.startsWith(prefix))
