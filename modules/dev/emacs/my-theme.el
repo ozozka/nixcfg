@@ -86,6 +86,7 @@
    `(font-lock-variable-name-face ((t (:foreground ,my-theme-col-f))))
    `(font-lock-type-face ((t (:foreground ,my-theme-col-f))))
 
+   `(whitespace-line ((t (:background ,my-theme-col-o))))
    `(whitespace-trailing ((t (:background ,my-theme-col-s))))
    `(whitespace-empty ((t (:background ,my-theme-col-o))))
 

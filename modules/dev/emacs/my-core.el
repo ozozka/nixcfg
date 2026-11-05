@@ -425,16 +425,23 @@
 (use-package whitespace
   :ensure nil
   :hook
-  (prog-mode . whitespace-mode)
-  (text-mode . whitespace-mode)
+  (prog-mode . my-whitespace-setup)
+  (text-mode . my-whitespace-setup)
   :custom
+  (whitespace-line-column 96)
   (whitespace-style
    '(face
      trailing
      empty
      tabs
      space-before-tab
-     space-after-tab)))
+     space-after-tab))
+  :config
+  (defun my-whitespace-setup ()
+    "Enable whitespace checks, including line overflow only in Markdown."
+    (when (derived-mode-p 'markdown-ts-mode)
+      (setq-local whitespace-style (append whitespace-style '(lines-tail))))
+    (whitespace-mode 1)))
 
 (use-package prog-mode
   :ensure nil
