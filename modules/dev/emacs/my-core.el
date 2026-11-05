@@ -141,6 +141,13 @@
   (desktop-load-locked-desktop 'check-pid)
   (desktop-restore-frames t))
 
+(use-package mpc
+  :ensure nil
+  :custom
+  (mpc-browser-tags '(Directory))
+  (mpc-songs-format "   %{Duration} %{file}")
+  (mpc-status-buffer-format '("%{Duration}-%{Time}" "%{file}")))
+
 (use-package tab-line
   :ensure nil
   :custom
