@@ -1,12 +1,12 @@
 ;;; my-env.el --- Load Nix development shells into buffers -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Buffers below a trusted directory containing flake.nix or shell.nix get that
-;; project's development shell environment, evaluated with
-;; `nix print-dev-env --json' and cached until flake.nix, flake.lock or
-;; shell.nix change.  Loading is synchronous so mode hooks such as
-;; `eglot-ensure' see the project's tools.  Cached environments are kept alive
-;; across garbage collection by a Nix profile, like nix-direnv.
+;; Buffers below a trusted directory containing flake.nix get that flake's
+;; development shell environment, evaluated with `nix print-dev-env --json'
+;; and cached until flake.nix or flake.lock change, or garbage collection
+;; removes the shell.  Loading is synchronous so mode hooks such as
+;; `eglot-ensure' see the project's tools; Nix output streams into the
+;; *my-env* buffer meanwhile.
 
 ;;; Code:
 
@@ -20,7 +20,7 @@
 
 (defcustom my-env-cache-directory
   (expand-file-name "my-env" (or (getenv "XDG_CACHE_HOME") "~/.cache"))
-  "Directory holding cached environments and their Nix profiles."
+  "Directory holding cached environments."
   :type 'directory
   :group 'my-env)
 
@@ -67,21 +67,11 @@ SHELL is also kept: the build shell lacks readline, which terminals need.")
 ;;; Projects
 
 (defun my-env--project ()
-  "Return the nearest project directory for the current buffer, or nil.
-A project directory contains flake.nix or shell.nix."
+  "Return the nearest directory containing flake.nix, or nil."
   (when (and (stringp default-directory)
              (not (file-remote-p default-directory)))
-    (when-let* ((directory
-                 (locate-dominating-file
-                  default-directory
-                  (lambda (directory)
-                    (or (file-exists-p (expand-file-name "flake.nix" directory))
-                        (file-exists-p (expand-file-name "shell.nix" directory)))))))
+    (when-let* ((directory (locate-dominating-file default-directory "flake.nix")))
       (file-name-as-directory (file-truename directory)))))
-
-(defun my-env--flake-p (directory)
-  "Return non-nil when DIRECTORY uses flake.nix rather than shell.nix."
-  (file-exists-p (expand-file-name "flake.nix" directory)))
 
 (defun my-env--trusted-p (directory)
   "Return non-nil when `trusted-content' covers DIRECTORY.
@@ -96,7 +86,7 @@ Like `trusted-content-p', only entries ending in a slash trust a tree."
             trusted-content))))
 
 (defun my-env--fingerprint (directory)
-  "Return a hash of the files that define DIRECTORY's shell."
+  "Return a hash of DIRECTORY's flake.nix and flake.lock."
   (secure-hash
    'sha256
    (mapconcat
@@ -109,47 +99,52 @@ Like `trusted-content-p', only entries ending in a slash trust a tree."
                       (insert-file-contents-literally file)
                       (secure-hash 'sha256 (current-buffer)))
                   "missing"))))
-    (if (my-env--flake-p directory)
-        '("flake.nix" "flake.lock")
-      '("shell.nix"))
+    '("flake.nix" "flake.lock")
     "\0")))
-
-(defun my-env--cache (directory)
-  "Return the cache directory for project DIRECTORY."
-  (expand-file-name (secure-hash 'sha256 directory) my-env-cache-directory))
 
 ;;; Evaluation
 
+(defconst my-env-log-buffer "*my-env*"
+  "Buffer collecting Nix output from every evaluation.")
+
+(defun my-env--log (_process string)
+  "Append Nix STRING to the log and show its latest line."
+  (with-current-buffer (get-buffer-create my-env-log-buffer)
+    (goto-char (point-max))
+    (insert string))
+  (when-let* ((line (car (last (split-string string "[\r\n]+" t "[ \t]+")))))
+    (message "Nix: %s" (truncate-string-to-width line (max 20 (- (frame-width) 6))))))
+
 (defun my-env--run (environment directory &rest arguments)
-  "Run Nix with ENVIRONMENT in DIRECTORY and ARGUMENTS.
-Return a list of the exit status, standard output, and standard error."
-  (let ((output-buffer (generate-new-buffer " *my-env-output*"))
-        (error-file (make-temp-file "my-env-error-"))
+  "Run Nix with ENVIRONMENT in DIRECTORY and ARGUMENTS, and wait for it.
+Standard error streams into `my-env-log-buffer' while Emacs keeps
+redisplaying; \\[keyboard-quit] stops Nix.  Return the exit status and
+standard output."
+  (let ((output (generate-new-buffer " *my-env-output*"))
         (process-environment (copy-sequence environment))
         (default-directory (file-name-as-directory directory))
-        (coding-system-for-read 'utf-8-unix)
-        (coding-system-for-write 'utf-8-unix))
+        (stderr nil)
+        (process nil))
+    (my-env--log nil (format "\n== %s %s\n" (format-time-string "%F %T") directory))
     (unwind-protect
-        (let ((status
-               (apply #'process-file my-nix-program nil
-                      (list output-buffer error-file) nil arguments)))
-          (list status
-                (with-current-buffer output-buffer (buffer-string))
-                (with-temp-buffer
-                  (insert-file-contents error-file)
-                  (buffer-string))))
-      (kill-buffer output-buffer)
-      (delete-file error-file))))
-
-(defun my-env--error-message (status error-output)
-  "Return a concise Nix error for STATUS and ERROR-OUTPUT."
-  (let ((detail (string-trim
-                 (replace-regexp-in-string "[\r\n]+" " " error-output))))
-    (truncate-string-to-width
-     (if (string-empty-p detail)
-         (format "nix print-dev-env exited with status %s" status)
-       (format "nix print-dev-env exited with status %s: %s" status detail))
-     500 nil nil "...")))
+        (progn
+          (setq stderr (make-pipe-process :name "my-env-stderr" :noquery t
+                                          :coding 'utf-8-unix :filter #'my-env--log)
+                process (make-process :name "my-env-nix" :buffer output :noquery t
+                                      :command (cons my-nix-program arguments)
+                                      :connection-type 'pipe :coding 'utf-8-unix
+                                      :stderr stderr :sentinel #'ignore))
+          ;; Returns nil once Nix has exited and its output is drained.
+          (while (accept-process-output process))
+          (while (accept-process-output stderr 0))
+          (list (process-exit-status process)
+                (with-current-buffer output (buffer-string))))
+      (when (process-live-p process)
+        (delete-process process)
+        (my-env--log nil "cancelled\n"))
+      (when stderr
+        (delete-process stderr))
+      (kill-buffer output))))
 
 (defun my-env--parse (output)
   "Return the exported variables in `nix print-dev-env --json' OUTPUT.
@@ -173,65 +168,74 @@ variables in `my-env-ignored-variables'."
     (nreverse result)))
 
 (defun my-env--evaluate (directory)
-  "Evaluate DIRECTORY's shell with Nix and cache the JSON output.
-The Nix profile in the cache keeps the shell from garbage collection."
-  (let* ((cache (my-env--cache directory))
-         (profile (expand-file-name "profile" cache))
-         (arguments
-          (if (my-env--flake-p directory)
-              (list "print-dev-env" "--json" "--profile" profile
-                    (concat directory "#"))
-            (list "print-dev-env" "--json" "--profile" profile
-                  "--file" (expand-file-name "shell.nix" directory)))))
-    (make-directory cache t)
-    (message "Loading Nix environment for %s..." (abbreviate-file-name directory))
-    (pcase-let ((`(,status ,output ,error-output)
-                 (apply #'my-env--run
-                        (or my-env--base-process-environment process-environment)
-                        directory arguments)))
-      (unless (and (integerp status) (zerop status))
-        (error "%s" (my-env--error-message status error-output)))
-      ;; Validate before caching, so a malformed result is never reused.
-      (my-env--parse output)
-      ;; Each evaluation adds a profile generation; keep only the current one
-      ;; so older shells can be garbage collected.
-      (let ((current (file-symlink-p profile)))
-        (dolist (link (directory-files cache t "\\`profile-[0-9]+-link\\'"))
-          (unless (equal (file-name-nondirectory link) current)
-            (delete-file link))))
-      (with-temp-file (expand-file-name "environment.json" cache)
-        (insert output))
-      (message "Loading Nix environment for %s...done"
-               (abbreviate-file-name directory))
-      output)))
+  "Evaluate DIRECTORY's development shell and return its variables."
+  (let ((name (abbreviate-file-name directory)))
+    (message "Loading Nix environment for %s..." name)
+    (pcase-let ((`(,status ,output)
+                 (my-env--run (or my-env--base-process-environment process-environment)
+                              directory
+                              "print-dev-env" "--json" (concat directory "#"))))
+      (unless (eql status 0)
+        (error "nix print-dev-env failed with exit status %s; see %s"
+               status my-env-log-buffer))
+      (prog1 (my-env--parse output)
+        (message "Loading Nix environment for %s...done" name)))))
+
+;;; Cache
+
+(defun my-env--cache-file (directory)
+  "Return the cache file for project DIRECTORY."
+  (expand-file-name (concat (secure-hash 'sha256 directory) ".json")
+                    my-env-cache-directory))
+
+(defun my-env--read-cache (file fingerprint)
+  "Return the variables cached in FILE for FINGERPRINT, or nil."
+  (when (file-exists-p file)
+    (condition-case nil
+        (let ((json (json-parse-string
+                     (with-temp-buffer
+                       (insert-file-contents file)
+                       (buffer-string))
+                     :object-type 'alist)))
+          (when (equal (alist-get 'fingerprint json) fingerprint)
+            (mapcar (lambda (entry) (cons (symbol-name (car entry)) (cdr entry)))
+                    (alist-get 'variables json))))
+      ;; A corrupt cache is just a miss.
+      (error nil))))
+
+(defun my-env--write-cache (file fingerprint variables)
+  "Store VARIABLES for FINGERPRINT in FILE, replacing it atomically."
+  (make-directory (file-name-directory file) t)
+  (let ((temporary (make-temp-file (expand-file-name "tmp-" (file-name-directory file)))))
+    (with-temp-file temporary
+      (insert (json-serialize
+               `((fingerprint . ,fingerprint)
+                 (variables . ,(mapcar (lambda (entry)
+                                         (cons (intern (car entry)) (cdr entry)))
+                                       variables))))))
+    (rename-file temporary file t)))
+
+(defun my-env--available-p (variables)
+  "Return non-nil when the store paths on VARIABLES' PATH still exist.
+Without a garbage collection root, `nix-collect-garbage' may delete them."
+  (seq-every-p (lambda (entry)
+                 (or (not (string-prefix-p "/nix/store/" entry))
+                     (file-directory-p entry)))
+               (split-string (or (cdr (assoc "PATH" variables)) "") ":" t)))
 
 (defun my-env--environment (directory)
   "Return DIRECTORY's variables, evaluating its shell only when needed."
   (let* ((fingerprint (my-env--fingerprint directory))
+         (file (my-env--cache-file directory))
          (loaded (gethash directory my-env--environments))
-         (cache (my-env--cache directory))
-         (json-file (expand-file-name "environment.json" cache))
-         (fingerprint-file (expand-file-name "fingerprint" cache)))
-    (if (and loaded (equal (car loaded) fingerprint))
-        (cdr loaded)
-      (let ((variables
-             (if (and (file-exists-p json-file)
-                      (file-exists-p fingerprint-file)
-                      (equal fingerprint
-                             (with-temp-buffer
-                               (insert-file-contents fingerprint-file)
-                               (buffer-string))))
-                 (my-env--parse
-                  (with-temp-buffer
-                    (insert-file-contents json-file)
-                    (buffer-string)))
-               (prog1 (my-env--parse (my-env--evaluate directory))
-                 ;; Written last: a fingerprint only ever describes a
-                 ;; complete, valid environment.json.
-                 (with-temp-file fingerprint-file
-                   (insert fingerprint))))))
-        (puthash directory (cons fingerprint variables) my-env--environments)
-        variables))))
+         (variables (if (and loaded (equal (car loaded) fingerprint))
+                        (cdr loaded)
+                      (my-env--read-cache file fingerprint))))
+    (unless (and variables (my-env--available-p variables))
+      (setq variables (my-env--evaluate directory))
+      (my-env--write-cache file fingerprint variables))
+    (puthash directory (cons fingerprint variables) my-env--environments)
+    variables))
 
 ;;; Buffer environments
 
@@ -341,12 +345,12 @@ The Nix profile in the cache keeps the shell from garbage collection."
   (interactive)
   (let ((directory (my-env--project)))
     (unless directory
-      (user-error "No flake.nix or shell.nix found for this buffer"))
+      (user-error "No flake.nix found for this buffer"))
     ;; Forget both caches; the next load evaluates once for all buffers.
     (remhash directory my-env--environments)
-    (let ((fingerprint (expand-file-name "fingerprint" (my-env--cache directory))))
-      (when (file-exists-p fingerprint)
-        (delete-file fingerprint)))
+    (let ((file (my-env--cache-file directory)))
+      (when (file-exists-p file)
+        (delete-file file)))
     (if my-env-mode
         (my-env--load)
       (my-env-mode 1))
