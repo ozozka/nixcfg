@@ -152,7 +152,6 @@ Scope {
 
         Lib.SectionText {
           theme: card.theme
-          Layout.fillWidth: true
           Layout.minimumWidth: 0
           Layout.alignment: Qt.AlignTop
           textFormat: Text.RichText
@@ -178,10 +177,9 @@ Scope {
         }
       }
 
-      Lib.SectionText {
+      Lib.Message {
         theme: card.theme
         width: parent.width
-        visible: text.length > 0
         font.family: "serif"
         textFormat: Text.PlainText
         text: card.notification?.body ?? ""

@@ -1,28 +1,30 @@
 import Quickshell
+import Quickshell.Hyprland
 
 ShellRoot {
   id: root
 
   property T theme: T {}
-  property Lib lib: Lib {
-    theme: root.theme
+  readonly property var focusedScreen: {
+    const monitor = Hyprland.focusedMonitor;
+    return Quickshell.screens.find(screen => Hyprland.monitorFor(screen) === monitor)
+        ?? Quickshell.screens[0] ?? null;
   }
 
   Bar {
     id: bar
     theme: root.theme
-    lib: root.lib
     onControlsOpened: menu.close()
   }
   Menu {
     id: menu
     theme: root.theme
-    focusedScreen: root.lib.focusedScreen
+    focusedScreen: root.focusedScreen
     onOpened: bar.closeDetails()
   }
   Notification {
     theme: root.theme
-    focusedScreen: root.lib.focusedScreen
+    focusedScreen: root.focusedScreen
   }
   Polkit {
     theme: root.theme

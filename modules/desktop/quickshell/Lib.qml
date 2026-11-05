@@ -1,7 +1,6 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import Quickshell.Hyprland
 import QtQuick.Layouts
 import QtQuick.Controls
 import Quickshell.Wayland
@@ -11,24 +10,6 @@ import Quickshell.Services.Pipewire
 import Quickshell.Services.Mpris
 
 Scope {
-  id: shared
-  required property T theme
-  readonly property alias controls: controls
-
-  SystemControls {
-    id: controls
-    theme: shared.theme
-    profiles: powerProfiles
-  }
-
-  PowerProfiles {
-    id: powerProfiles
-  }
-  readonly property var focusedScreen: {
-    const monitor = Hyprland.focusedMonitor;
-    return Quickshell.screens.find(screen => Hyprland.monitorFor(screen) === monitor)
-        ?? Quickshell.screens[0] ?? null;
-  }
   component MenuButton: Button {
     id: button
     required property T theme
@@ -108,25 +89,6 @@ Scope {
     ToolTip.text: description
   }
 
-  component PlaybackRepeatButton: PlaybackButton {
-    required property var player
-    readonly property int loopMode: player?.loopState ?? MprisLoopState.None
-    symbol: loopMode === MprisLoopState.Track ? "↻¹" : "↻"
-    description: "Repeat: " + (loopMode === MprisLoopState.Track ? "track" : loopMode
-                                                                   === MprisLoopState.Playlist
-                                                                   ? "playlist" : "off")
-                 + " (click to cycle)"
-    muted: loopMode === MprisLoopState.None
-    selected: loopMode !== MprisLoopState.None
-    enabled: !!player?.canControl && !!player?.loopSupported
-    onClicked: {
-      player.loopState = loopMode === MprisLoopState.None ? MprisLoopState.Track : loopMode
-                                                            === MprisLoopState.Track
-                                                            ? MprisLoopState.Playlist :
-                                                              MprisLoopState.None;
-    }
-  }
-
   component PlaybackDetails: ColumnLayout {
     id: playbackView
     required property T theme
@@ -136,12 +98,10 @@ Scope {
 
     Heading {
       theme: playbackView.theme
-      Layout.fillWidth: true
       text: "Playback"
     }
     SectionText {
       theme: playbackView.theme
-      Layout.fillWidth: true
       visible: !playbackView.player
       text: "No media player available"
       color: theme.colM
@@ -174,7 +134,6 @@ Scope {
 
         SectionText {
           theme: playbackView.theme
-          Layout.fillWidth: true
           Layout.minimumWidth: 0
           text: playbackView.player?.identity || playbackView.player?.dbusName || ""
           visible: playbackView.playback.players.length === 1
@@ -184,7 +143,6 @@ Scope {
         }
         SectionText {
           theme: playbackView.theme
-          Layout.fillWidth: true
           Layout.minimumWidth: 0
           text: playbackView.player?.trackTitle || "No track information"
           horizontalAlignment: Text.AlignHCenter
@@ -199,6 +157,7 @@ Scope {
         spacing: playbackView.theme.dimS
         SectionText {
           theme: playbackView.theme
+          Layout.fillWidth: false
           text: playbackView.playback.timing || "Timing unavailable"
           font.family: "monospace"
           font.pointSize: theme.fontSizeS
@@ -220,9 +179,25 @@ Scope {
           onMoved: playbackView.player.position = value
           Accessible.name: "Playback position"
         }
-        PlaybackRepeatButton {
+        PlaybackButton {
           theme: playbackView.theme
-          player: playbackView.player
+          readonly property var player: playbackView.player
+          readonly property int loopMode: player?.loopState ?? MprisLoopState.None
+          symbol: loopMode === MprisLoopState.Track ? "↻¹" : "↻"
+          description: "Repeat: " + (loopMode === MprisLoopState.Track ? "track" : loopMode
+                                                                         === MprisLoopState.Playlist
+                                                                         ? "playlist" : "off")
+                       + " (click to cycle)"
+          muted: loopMode === MprisLoopState.None
+          selected: loopMode !== MprisLoopState.None
+          enabled: !!player?.canControl && !!player?.loopSupported
+          onClicked: {
+            player.loopState = loopMode === MprisLoopState.None ? MprisLoopState.Track :
+                                                                  loopMode
+                                                                  === MprisLoopState.Track
+                                                                  ? MprisLoopState.Playlist :
+                                                                    MprisLoopState.None;
+          }
         }
       }
       RowLayout {
@@ -533,10 +508,8 @@ Scope {
             onClicked: controls.profiles.setProfile(modelData)
           }
         }
-        SectionText {
+        Message {
           theme: controls.theme
-          Layout.fillWidth: true
-          visible: text.length > 0
           color: controls.theme.colS
           text: controls.profiles.error
         }
@@ -547,17 +520,95 @@ Scope {
       id: connectionDetails
       ColumnLayout {
         spacing: controls.theme.dimS
-        Loader {
-          Layout.fillWidth: true
-          sourceComponent: bluetoothDetails
-        }
-
         ColumnLayout {
           Layout.fillWidth: true
           spacing: controls.theme.dimS
           Heading {
             theme: controls.theme
+            text: "Bluetooth"
+          }
+          MenuButton {
+            theme: controls.theme
             Layout.fillWidth: true
+            text: controls.adapter?.enabled ? "Turn Bluetooth off" : "Turn Bluetooth on"
+            enabled: controls.adapter !== null && !pairing.busy
+            onClicked: controls.adapter.enabled = !controls.adapter.enabled
+          }
+          Repeater {
+            model: controls.adapter?.devices.values ?? []
+            MenuButton {
+              theme: controls.theme
+              required property var modelData
+              Layout.fillWidth: true
+              text: (modelData.name || modelData.address) + " · " + (modelData.pairing
+                                                                     ? "Pairing…" :
+                                                                       modelData.connected
+                                                                       ? "Disconnect" :
+                                                                         modelData.paired
+                                                                         ? "Connect" : "Pair")
+              selected: modelData.connected
+              enabled: !!controls.adapter?.enabled && !pairing.busy && !modelData.pairing &&
+                       ![BluetoothDeviceState.Connecting,
+                BluetoothDeviceState.Disconnecting].includes(modelData.state)
+              onClicked: {
+                if (modelData.paired)
+                  modelData.connected = !modelData.connected;
+                else
+                  pairing.pair(modelData);
+              }
+            }
+          }
+          Message {
+            theme: controls.theme
+            text: pairing.status
+            color: controls.theme.colM
+          }
+          Message {
+            theme: controls.theme
+            text: pairing.prompt
+            font.bold: true
+          }
+          Field {
+            theme: controls.theme
+            Layout.fillWidth: true
+            visible: pairing.busy && pairing.prompt.length > 0 && !pairing.confirmation
+            text: controls.pairingText
+            onTextEdited: controls.pairingText = text
+            placeholderText: "PIN / passkey"
+            font.family: "monospace"
+            onAccepted: {
+              pairing.respond(text);
+              controls.pairingText = "";
+            }
+          }
+          RowLayout {
+            visible: pairing.busy && pairing.prompt.length > 0
+            MenuButton {
+              theme: controls.theme
+              text: pairing.confirmation ? "Confirm" : "Send"
+              onClicked: {
+                pairing.respond(pairing.confirmation ? "yes" : controls.pairingText);
+                controls.pairingText = "";
+              }
+            }
+            MenuButton {
+              theme: controls.theme
+              text: "Cancel"
+              onClicked: pairing.cancel()
+            }
+          }
+          MenuButton {
+            theme: controls.theme
+            visible: pairing.busy && !pairing.prompt
+            text: "Cancel pairing"
+            onClicked: pairing.cancel()
+          }
+        }
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: controls.theme.dimS
+          Heading {
+            theme: controls.theme
             text: "Wi-Fi"
           }
           RowLayout {
@@ -586,7 +637,6 @@ Scope {
           }
           SectionText {
             theme: controls.theme
-            Layout.fillWidth: true
             visible: !controls.wifiDevice || !Networking.wifiHardwareEnabled ||
                      !Networking.wifiEnabled || !(controls.wifiDevice?.networks.values.length
                                                   ?? 0)
@@ -614,10 +664,8 @@ Scope {
               onClicked: controls.connectNetwork(modelData)
             }
           }
-          SectionText {
+          Message {
             theme: controls.theme
-            Layout.fillWidth: true
-            visible: text.length > 0
             text: controls.networkError
             color: controls.passwordNetwork ? controls.theme.colM : controls.theme.colS
           }
@@ -648,98 +696,6 @@ Scope {
             onClicked: controls.submitPassword()
           }
         }
-
-        Component {
-          id: bluetoothDetails
-          ColumnLayout {
-            spacing: controls.theme.dimS
-            Heading {
-              theme: controls.theme
-              Layout.fillWidth: true
-              text: "Bluetooth"
-            }
-            MenuButton {
-              theme: controls.theme
-              Layout.fillWidth: true
-              text: controls.adapter?.enabled ? "Turn Bluetooth off" : "Turn Bluetooth on"
-              enabled: controls.adapter !== null && !pairing.busy
-              onClicked: controls.adapter.enabled = !controls.adapter.enabled
-            }
-            Repeater {
-              model: controls.adapter?.devices.values ?? []
-              MenuButton {
-                theme: controls.theme
-                required property var modelData
-                Layout.fillWidth: true
-                text: (modelData.name || modelData.address) + " · " + (modelData.pairing
-                                                                       ? "Pairing…" :
-                                                                         modelData.connected
-                                                                         ? "Disconnect" :
-                                                                           modelData.paired
-                                                                           ? "Connect" : "Pair")
-                selected: modelData.connected
-                enabled: !!controls.adapter?.enabled && !pairing.busy && !modelData.pairing &&
-                         ![BluetoothDeviceState.Connecting,
-                  BluetoothDeviceState.Disconnecting].includes(modelData.state)
-                onClicked: {
-                  if (modelData.paired)
-                    modelData.connected = !modelData.connected;
-                  else
-                    pairing.pair(modelData);
-                }
-              }
-            }
-            SectionText {
-              theme: controls.theme
-              Layout.fillWidth: true
-              visible: text.length > 0
-              text: pairing.status
-              color: controls.theme.colM
-            }
-            SectionText {
-              theme: controls.theme
-              Layout.fillWidth: true
-              visible: text.length > 0
-              text: pairing.prompt
-              font.bold: true
-            }
-            Field {
-              theme: controls.theme
-              Layout.fillWidth: true
-              visible: pairing.busy && pairing.prompt.length > 0 && !pairing.confirmation
-              text: controls.pairingText
-              onTextEdited: controls.pairingText = text
-              placeholderText: "PIN / passkey"
-              font.family: "monospace"
-              onAccepted: {
-                pairing.respond(text);
-                controls.pairingText = "";
-              }
-            }
-            RowLayout {
-              visible: pairing.busy && pairing.prompt.length > 0
-              MenuButton {
-                theme: controls.theme
-                text: pairing.confirmation ? "Confirm" : "Send"
-                onClicked: {
-                  pairing.respond(pairing.confirmation ? "yes" : controls.pairingText);
-                  controls.pairingText = "";
-                }
-              }
-              MenuButton {
-                theme: controls.theme
-                text: "Cancel"
-                onClicked: pairing.cancel()
-              }
-            }
-            MenuButton {
-              theme: controls.theme
-              visible: pairing.busy && !pairing.prompt
-              text: "Cancel pairing"
-              onClicked: pairing.cancel()
-            }
-          }
-        }
       }
     }
     Component {
@@ -768,7 +724,12 @@ Scope {
   }
 
   component SectionText: Label {
+    Layout.fillWidth: true
     wrapMode: Text.Wrap
+  }
+
+  component Message: SectionText {
+    visible: text.length > 0
   }
 
   component Heading: SectionText {
@@ -785,15 +746,19 @@ Scope {
     }
   }
 
-  component AuthInput: TextInput {
+  component Input: TextInput {
     required property T theme
     color: theme.colF
     selectionColor: theme.colP
     selectedTextColor: theme.colB
-    font.family: "monospace"
+    font.family: "sans-serif"
     font.pointSize: theme.fontSizeM
-    inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
     verticalAlignment: TextInput.AlignVCenter
+  }
+
+  component AuthInput: Input {
+    font.family: "monospace"
+    inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
   }
 
   component ThemedSlider: Slider {
@@ -859,7 +824,6 @@ Scope {
     spacing: theme.dimS
     Heading {
       theme: audioControl.theme
-      Layout.fillWidth: true
       text: audioControl.input ? "Microphone" : "Speaker"
     }
     RowLayout {
@@ -885,6 +849,7 @@ Scope {
       }
       SectionText {
         theme: audioControl.theme
+        Layout.fillWidth: false
         Layout.preferredWidth: 52
         horizontalAlignment: Text.AlignRight
         font.family: "monospace"

@@ -10,8 +10,17 @@ import Quickshell.Services.Mpris
 Scope {
   id: barModule
   required property T theme
-  required property Lib lib
-  readonly property var controls: lib.controls
+  readonly property alias controls: systemControls
+
+  Lib.SystemControls {
+    id: systemControls
+    theme: barModule.theme
+    profiles: powerProfiles
+  }
+
+  Lib.PowerProfiles {
+    id: powerProfiles
+  }
   property var detailBar: null
   signal controlsOpened
 
@@ -60,7 +69,6 @@ Scope {
 
       Lib.Heading {
         theme: barModule.theme
-        Layout.fillWidth: true
         visible: barModule.controls.expanded === "profiles"
         text: "Battery"
       }
@@ -71,17 +79,14 @@ Scope {
 
         Lib.SectionText {
           theme: barModule.theme
-          Layout.fillWidth: true
           text: `Charge: %${Math.round(battery.percentage)}`
         }
         Lib.SectionText {
           theme: barModule.theme
-          Layout.fillWidth: true
           text: `Status: ${battery.status}`
         }
         Lib.SectionText {
           theme: barModule.theme
-          Layout.fillWidth: true
           visible: battery.status === "Charging" || battery.status === "Discharging"
           text: battery.remainingSeconds > 0 ? (battery.status === "Charging"
                                                 ? "Time until full: " : "Time remaining: ")
@@ -91,13 +96,11 @@ Scope {
         }
         Lib.SectionText {
           theme: barModule.theme
-          Layout.fillWidth: true
           text: "Power profiles"
           font.bold: true
         }
         Lib.SectionText {
           theme: barModule.theme
-          Layout.fillWidth: true
           visible: !barModule.controls.profiles.available
           text: "Power profiles unavailable"
           color: theme.colM
@@ -218,13 +221,26 @@ Scope {
         anchors.verticalCenter: parent.verticalCenter
         spacing: 0
 
-        Workspaces {
-
-          theme: barModule.theme
+        Row {
+          spacing: 0
+          Repeater {
+            model: 6
+            BarItem {
+              required property int index
+              readonly property var ws: Hyprland.workspaces.values.find(w => w.id === index + 1)
+              readonly property bool occupied: (ws?.toplevels.values.length ?? 0) > 0
+              theme: barModule.theme
+              selected: Hyprland.focusedWorkspace?.id === (index + 1)
+              text: "🞄"
+              textColor: occupied ? theme.colF : theme.colM
+              font.bold: true
+            }
+          }
         }
         BarItem {
           theme: barModule.theme
-          text: bar.showingDate ? clockStats.date : clockStats.time
+          text: bar.showingDate ? Qt.formatDate(clock.date, "yyyy-MM-dd") : Qt.formatTime(
+                                    clock.date, "hh:mm:ss")
           focusPolicy: Qt.StrongFocus
           onClicked: Quickshell.execDetached(["qs", "ipc", "call", "menu", "toggle"])
 
@@ -242,9 +258,18 @@ Scope {
             barWindow: bar
           }
         }
-        Battery {
+        BarItem {
+          id: batteryButton
           theme: barModule.theme
-          barWindow: bar
+          selected: barModule.controls.expanded === "profiles" && barModule.detailBar === bar
+          textColor: battery.status === "Charging" || battery.status === "Discharging"
+                     ? theme.colF : theme.colM
+          focusPolicy: Qt.StrongFocus
+          Accessible.name: "Battery"
+          Accessible.description: `%${Math.round(battery.percentage)} · ${battery.status}`
+          onClicked: barModule.toggleDetails("profiles", batteryButton, bar)
+          text: battery.status === "Full" ? "🞄" : (battery.status === "Discharging" ? "-%" : "%")
+                                            + Math.round(battery.percentage)
         }
         BarItem {
           theme: barModule.theme
@@ -269,7 +294,7 @@ Scope {
         }
         BarItem {
           theme: barModule.theme
-          text: Math.round(temperature.celsius) + "°C"
+          text: Math.round(temperatureFile.value / 1000) + "°C"
         }
         BarItem {
           theme: barModule.theme
@@ -302,11 +327,11 @@ Scope {
   Scope {
     id: battery
 
-    property real percentage: 0
+    readonly property real percentage: capacityFile.value
     property string status: "Unknown"
-    property real energy: 0
-    property real fullEnergy: 0
-    property real power: 0
+    readonly property real energy: energyFile.value
+    readonly property real fullEnergy: fullEnergyFile.value
+    readonly property real power: powerFile.value
 
     readonly property real remainingSeconds: {
       if (power <= 0)
@@ -315,36 +340,26 @@ Scope {
       return Math.max(0, 3600 * remainingEnergy / power);
     }
 
-    function updateNumber(file, propertyName) {
-      const value = Number(file.text().trim());
-      if (!Number.isNaN(value))
-        battery[propertyName] = value;
-    }
-
-    FileView {
+    NumberFile {
       id: capacityFile
       path: "/sys/class/power_supply/BAT1/capacity"
-      onLoaded: battery.updateNumber(this, "percentage")
     }
     FileView {
       id: statusFile
       path: "/sys/class/power_supply/BAT1/status"
       onLoaded: battery.status = text().trim()
     }
-    FileView {
+    NumberFile {
       id: energyFile
       path: "/sys/class/power_supply/BAT1/energy_now"
-      onLoaded: battery.updateNumber(this, "energy")
     }
-    FileView {
+    NumberFile {
       id: fullEnergyFile
       path: "/sys/class/power_supply/BAT1/energy_full"
-      onLoaded: battery.updateNumber(this, "fullEnergy")
     }
-    FileView {
+    NumberFile {
       id: powerFile
       path: "/sys/class/power_supply/BAT1/power_now"
-      onLoaded: battery.updateNumber(this, "power")
     }
   }
 
@@ -383,15 +398,9 @@ Scope {
     }
   }
 
-  Scope {
-    id: clockStats
-    readonly property string time: Qt.formatTime(clock.date, "hh:mm:ss")
-    readonly property string date: Qt.formatDate(clock.date, "yyyy-MM-dd")
-
-    SystemClock {
-      id: clock
-      precision: SystemClock.Seconds
-    }
+  SystemClock {
+    id: clock
+    precision: SystemClock.Seconds
   }
 
   Scope {
@@ -431,7 +440,6 @@ Scope {
     id: memory
 
     property real usedBytes: 0
-    property real totalBytes: 0
 
     function update(text) {
       const values = {};
@@ -442,7 +450,6 @@ Scope {
       }
 
       if (values.MemTotal && values.MemAvailable !== undefined) {
-        totalBytes = values.MemTotal;
         usedBytes = values.MemTotal - values.MemAvailable;
       }
     }
@@ -458,8 +465,6 @@ Scope {
     id: network
 
     property string interfaceName: "wlan0"
-    property real downloadBytesPerSecond: 0
-    property real uploadBytesPerSecond: 0
     property real totalBytesPerSecond: 0
     property double previousReceived: 0
     property double previousTransmitted: 0
@@ -481,9 +486,10 @@ Scope {
       if (previousTime > 0) {
         const elapsedSeconds = (now - previousTime) / 1000;
         if (elapsedSeconds > 0) {
-          downloadBytesPerSecond = Math.max(0, (received - previousReceived) / elapsedSeconds);
-          uploadBytesPerSecond = Math.max(0, (transmitted - previousTransmitted)
-                                          / elapsedSeconds);
+          const downloadBytesPerSecond = Math.max(0, (received - previousReceived)
+                                                  / elapsedSeconds);
+          const uploadBytesPerSecond = Math.max(0, (transmitted - previousTransmitted)
+                                                / elapsedSeconds);
           totalBytesPerSecond = downloadBytesPerSecond + uploadBytesPerSecond;
         }
       }
@@ -525,19 +531,17 @@ Scope {
     }
   }
 
-  Scope {
-    id: temperature
+  NumberFile {
+    id: temperatureFile
+    path: "/sys/class/thermal/thermal_zone3/temp"
+  }
 
-    property real celsius: 0
-
-    FileView {
-      id: temperatureFile
-      path: "/sys/class/thermal/thermal_zone3/temp"
-      onLoaded: {
-        const millidegrees = Number(text().trim());
-        if (!Number.isNaN(millidegrees))
-          temperature.celsius = millidegrees / 1000;
-      }
+  component NumberFile: FileView {
+    property real value: 0
+    onLoaded: {
+      const number = Number(text().trim());
+      if (!Number.isNaN(number))
+        value = number;
     }
   }
 
@@ -612,27 +616,6 @@ Scope {
 
   }
 
-  component Workspaces: Row {
-    id: workspaces
-    required property T theme
-    spacing: 0
-
-    Repeater {
-      model: 6
-
-      BarItem {
-        required property int index
-        readonly property var ws: Hyprland.workspaces.values.find(w => w.id === index + 1)
-        readonly property bool occupied: (ws?.toplevels.values.length ?? 0) > 0
-        theme: workspaces.theme
-        selected: Hyprland.focusedWorkspace?.id === (index + 1)
-        text: "🞄"
-        textColor: occupied ? theme.colF : theme.colM
-        font.bold: true
-      }
-    }
-  }
-
   Scope {
     id: submap
     property string name: "default"
@@ -651,21 +634,5 @@ Scope {
           submap.name = event.data || "default";
       }
     }
-  }
-
-  component Battery: BarItem {
-    id: batteryButton
-    required property var barWindow
-    selected: barModule.controls.expanded === "profiles" && barModule.detailBar === barWindow
-    textColor: battery.status === "Charging" || battery.status === "Discharging" ? theme.colF :
-                                                                                   theme.colM
-    focusPolicy: Qt.StrongFocus
-    Accessible.name: "Battery"
-
-    Accessible.description: `%${Math.round(battery.percentage)} · ${battery.status}`
-    onClicked: barModule.toggleDetails("profiles", batteryButton, barWindow)
-
-    text: battery.status === "Full" ? "🞄" : (battery.status === "Discharging" ? "-%" : "%")
-                                      + Math.round(battery.percentage)
   }
 }

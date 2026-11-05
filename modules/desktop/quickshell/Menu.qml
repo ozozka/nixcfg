@@ -100,26 +100,6 @@ Scope {
     close();
   }
 
-  Component {
-    id: powerDetails
-    ColumnLayout {
-      spacing: menuModule.theme.dimS
-      Repeater {
-        model: menuModule.powerEntries
-        Lib.MenuButton {
-          theme: menuModule.theme
-          required property var modelData
-          Layout.fillWidth: true
-          symbol: modelData.symbol
-          text: menuModule.pendingAction === modelData.key ? `Confirm ${modelData.name}` :
-                                                             modelData.name
-          selected: menuModule.pendingAction === modelData.key
-          onClicked: menuModule.activatePower(modelData)
-        }
-      }
-    }
-  }
-
   IpcHandler {
     target: "menu"
     function open(): void {
@@ -146,13 +126,56 @@ Scope {
                                                                                    - menuModule.theme.dimS
                                                                                    * 2))
     onDismissRequested: menuModule.close()
-    widgetContent: SelectionWidget {
+    widgetContent: Rectangle {
       id: selection
-      theme: menuModule.theme
-      menuWindow: panel
+      readonly property real inset: menuModule.theme.dimS
       visible: panel.visible && menuModule.powerExpanded
-      title: "Power actions"
-      content: powerDetails
+      color: menuModule.theme.colB
+      width: Math.min(380, panel.width - inset * 2)
+      height: Math.min(body.implicitHeight, panel.height - menuModule.theme.dimM - inset * 2)
+      x: {
+        const beside = panel.menuX + panel.menuWidth + menuModule.theme.dimS;
+        return beside + width + inset <= panel.width ? beside : Math.max(inset, panel.width
+                                                                         - width - inset);
+      }
+      y: Math.max(inset, Math.min(panel.menuY + panel.menuHeight - height, panel.height
+                                  - menuModule.theme.dimM - inset - height))
+
+      // Consume blank-area clicks, but leave child controls interactive.
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.AllButtons
+      }
+
+      Lib.ScrollColumn {
+        id: body
+        theme: menuModule.theme
+        anchors.fill: parent
+        Lib.Heading {
+          theme: menuModule.theme
+          text: "Power actions"
+        }
+        Loader {
+          Layout.fillWidth: true
+          active: selection.visible
+          sourceComponent: ColumnLayout {
+            spacing: menuModule.theme.dimS
+            Repeater {
+              model: menuModule.powerEntries
+              Lib.MenuButton {
+                theme: menuModule.theme
+                required property var modelData
+                Layout.fillWidth: true
+                symbol: modelData.symbol
+                text: menuModule.pendingAction === modelData.key ? `Confirm ${modelData.name}` :
+                                                                   modelData.name
+                selected: menuModule.pendingAction === modelData.key
+                onClicked: menuModule.activatePower(modelData)
+              }
+            }
+          }
+        }
+      }
     }
     onKeyPressed: event => {
       if (event.key === Qt.Key_Escape) {
@@ -184,48 +207,6 @@ Scope {
         onPowerClicked: menuModule.togglePower()
         onLaunched: menuModule.close()
         onQueryChanged: menuModule.pendingAction = ""
-      }
-    }
-  }
-
-  component SelectionWidget: Rectangle {
-    id: widget
-    required property T theme
-    color: widget.theme.colB
-    required property var menuWindow
-    property string title: ""
-    property Component content: null
-    readonly property real inset: widget.theme.dimS
-
-    width: Math.min(380, menuWindow.width - inset * 2)
-    height: Math.min(body.implicitHeight, menuWindow.height - widget.theme.dimM - inset * 2)
-    x: {
-      const beside = menuWindow.menuX + menuWindow.menuWidth + widget.theme.dimS;
-      return beside + width + inset <= menuWindow.width ? beside : Math.max(inset,
-                                                                            menuWindow.width
-                                                                            - width - inset);
-    }
-    y: Math.max(inset, Math.min(menuWindow.menuY + menuWindow.menuHeight - height,
-                                menuWindow.height - widget.theme.dimM - inset - height))
-
-    // Consume blank-area clicks, but leave child controls interactive.
-    MouseArea {
-      anchors.fill: parent
-      acceptedButtons: Qt.AllButtons
-    }
-
-    Lib.ScrollColumn {
-      id: body
-      theme: widget.theme
-      anchors.fill: parent
-      Lib.Heading {
-        theme: widget.theme
-        Layout.fillWidth: true
-        text: widget.title
-      }
-      Loader {
-        Layout.fillWidth: true
-        sourceComponent: widget.visible ? widget.content : null
       }
     }
   }
@@ -377,8 +358,9 @@ Scope {
         Layout.fillWidth: true
         Layout.fillHeight: true
         color: applications.theme.colB
-        TextInput {
+        Lib.Input {
           id: search
+          theme: applications.theme
           activeFocusOnTab: true
           anchors {
             fill: parent
@@ -387,12 +369,6 @@ Scope {
             topMargin: applications.theme.dimS / 2
             bottomMargin: applications.theme.dimS / 2
           }
-          color: applications.theme.colF
-          selectionColor: applications.theme.colP
-          selectedTextColor: applications.theme.colB
-          font.family: "sans-serif"
-          font.pointSize: applications.theme.fontSizeM
-          verticalAlignment: TextInput.AlignVCenter
           clip: true
           onTextChanged: results.currentIndex = resultModel.values.length ? 0 : -1
           onAccepted: applications.activate(results.currentItem?.modelData)

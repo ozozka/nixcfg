@@ -76,19 +76,17 @@ Scope {
           text: agent.flow?.message ?? ""
         }
 
-        Lib.SectionText {
+        Lib.Message {
           theme: polkitModule.theme
           width: parent.width
-          visible: text.length > 0
           color: theme.colM
           textFormat: Text.PlainText
           text: agent.flow?.inputPrompt ?? ""
         }
 
-        Lib.SectionText {
+        Lib.Message {
           theme: polkitModule.theme
           width: parent.width
-          visible: text.length > 0
           color: agent.flow?.supplementaryIsError ? theme.colS : theme.colM
           textFormat: Text.PlainText
           text: agent.flow?.supplementaryMessage ?? ""
