@@ -3,6 +3,8 @@
 ;;; Commentary:
 ;;; Code:
 
+(require 'my-options)
+
 (use-package eglot
   :ensure nil
   :defer t
@@ -114,6 +116,7 @@
   :mode ("\\.cuh?\\'" . c++-ts-mode))
 
 (use-package markdown-ts-mode
+  :functions my-markdown-sync-line-numbers
   :mode ("\\.\\(?:md\\|markdown\\|mdown\\|mkd\\)\\'" . markdown-ts-mode)
   :custom
   (markdown-ts-hide-markup t)
@@ -148,6 +151,15 @@
 (use-package treesit-x
   :ensure nil
   :demand t
+  ;; Generic mode bodies call into treesit, which treesit-x loads at runtime.
+  :functions treesit-major-mode-setup
+  :preface
+  ;; treesit-x always reads queries below `user-emacs-directory'; read the
+  ;; Nix-built queries instead. Covered by the emacs-config check.
+  (define-advice treesit-generic-mode-font-lock-query (:around (query lang) my-nix-queries)
+    "Read LANG highlighting queries from `my-treesit-query-root'."
+    (let ((user-emacs-directory my-treesit-query-root))
+      (funcall query lang)))
   :config
   (define-treesit-generic-mode just-ts-mode
     "Tree-sitter mode for Justfiles."

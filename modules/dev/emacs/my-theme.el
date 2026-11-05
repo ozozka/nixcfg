@@ -3,6 +3,8 @@
 ;;; Commentary:
 ;;; Code:
 
+(require 'my-options)
+
 (deftheme my "My custom theme.")
 
 (let* (

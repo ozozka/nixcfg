@@ -12,6 +12,7 @@
 
 (use-package emacs
   :ensure nil
+  :functions flymake-start
 
   :bind
   ("M-<down>" . (lambda () (interactive) (scroll-up-command my-scroll-step)))
@@ -40,6 +41,9 @@
                  (message "Trusted content: %s" trusted-content)))
 
   :config
+  (menu-bar-mode -1)
+  (tool-bar-mode -1)
+  (scroll-bar-mode -1)
   (load custom-file 'noerror)
   (fset 'yes-or-no-p 'y-or-n-p)
   (prefer-coding-system 'utf-8)
@@ -59,6 +63,8 @@
       display-buffer-same-window)))
 
   :custom
+  (frame-inhibit-implied-resize t)
+  (use-dialog-box nil)
   (void-text-area-pointer 'arrow)
   (x-pointer-shape 'text)
   (x-sensitive-text-pointer-shape 'hand)
@@ -150,6 +156,7 @@
 
 (use-package tab-line
   :ensure nil
+  :functions tab-line-select-tab-buffer
   :custom
   (tab-line-new-button-show nil)
   (tab-line-close-button-show nil)
@@ -207,6 +214,12 @@
 
 (use-package vc-git
   :ensure nil
+  ;; Helpers below are defined in :config, which compiles to a deferred body.
+  :functions
+  my-vc-git-collect-stats my-vc-git-numstat my-vc-git-commit-count
+  my-vc-git-extra-stats my-vc-git-dir-stats
+  vc-dir-fileinfo->name vc-dir-fileinfo->directory
+  :defines vc-dir-filename-mouse-map
   :config
   (require 'subr-x)
   (defvar my-vc-git-stats-cache (make-hash-table :test 'equal) "Git statistics indexed by absolute file name.")
@@ -304,6 +317,7 @@
 
 (use-package ibuffer
   :ensure nil
+  :functions ibuffer-get-marked-buffers
   :custom
   (ibuffer-default-sorting-mode 'filename/process)
   :config
@@ -331,6 +345,7 @@
 
 (use-package term
   :ensure nil
+  :functions term-send-raw-string term-paste
   :custom
   (term-buffer-maximum-size 2400)
   :hook
@@ -404,6 +419,7 @@
 
 (use-package ispell
   :ensure nil
+  :functions ispell-set-spellchecker-params ispell-hunspell-add-multi-dic
   :custom
   (ispell-program-name "hunspell")
   (ispell-dictionary "en_US,tr_TR")
