@@ -99,7 +99,7 @@ Scope {
         Rectangle {
           width: parent.width
           height: theme.dimM * 1.5
-          color: theme.colO
+          color: theme.colB
 
           TextInput {
             id: response
