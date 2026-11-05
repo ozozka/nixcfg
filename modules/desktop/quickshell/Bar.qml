@@ -1,6 +1,7 @@
 import Quickshell
 import Quickshell.Wayland
 import QtQuick
+import QtQuick.Layouts
 import Quickshell.Io
 import Quickshell.Networking
 import Quickshell.Hyprland
@@ -14,6 +15,73 @@ Scope {
   readonly property alias network: network
   readonly property alias processes: processes
   readonly property alias temperature: temperature
+  readonly property var controls: lib.controls
+  property var detailBar: null
+  signal controlsOpened
+
+  function closeDetails() {
+    controls.reset();
+    detailBar = null;
+  }
+
+  function toggleDetails(section, item, window) {
+    detailBar = window;
+    details.screen = window.screen;
+    controls.toggleDetails(section, item);
+    if (controls.expanded !== "") {
+      controlsOpened();
+      Qt.callLater(() => detailBody.forceActiveFocus());
+    }
+  }
+
+  Lib.MenuWindow {
+    id: details
+    theme: barModule.theme
+    visible: barModule.controls.expanded !== ""
+    barInteractive: true
+    WlrLayershell.namespace: "quickshell-controls"
+    anchorCenter: {
+      const item = barModule.controls.selectionAnchor;
+      const window = barModule.detailBar;
+      return item && window ? item.parent.mapToItem(window.contentItem, item.x + item.width / 2, 0).x : -1;
+    }
+    menuWidth: Math.min(380, Math.max(0, width - theme.dimS * 2))
+    menuHeight: Math.min(detailBody.implicitHeight + theme.dimS * 2, Math.max(0, height - theme.dimM - theme.dimS * 2))
+    onDismissRequested: barModule.closeDetails()
+    onKeyPressed: event => {
+      if (event.key === Qt.Key_Escape) {
+        barModule.closeDetails();
+        event.accepted = true;
+      }
+    }
+
+    Flickable {
+      anchors.fill: parent
+      anchors.margins: barModule.theme.dimS
+      contentHeight: detailBody.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+
+      ColumnLayout {
+        id: detailBody
+        width: parent.width
+        spacing: barModule.theme.dimS
+
+        Text {
+          Layout.fillWidth: true
+          text: barModule.controls.title(barModule.controls.expanded)
+          color: barModule.theme.colF
+          font.family: "sans-serif"
+          font.pointSize: barModule.theme.fontSizeM
+          font.bold: true
+        }
+        Loader {
+          Layout.fillWidth: true
+          sourceComponent: details.visible ? barModule.controls.details : null
+        }
+      }
+    }
+  }
 
   Variants {
     model: Quickshell.screens
@@ -62,6 +130,26 @@ Scope {
             }
           }
         }
+        Repeater {
+          model: ["wifi", "bluetooth", "output"]
+
+          ControlSummary {
+            required property string modelData
+            section: modelData
+            barWindow: bar
+          }
+        }
+        Battery {
+          theme: barModule.theme
+          barWindow: bar
+        }
+        Text {
+          text: "⌨ " + keyboard.layout
+          color: barModule.theme.colM
+          font.family: "monospace"
+          font.pointSize: barModule.theme.fontSizeM
+          anchors.verticalCenter: parent.verticalCenter
+        }
         Submap {
           theme: barModule.theme
         }
@@ -89,9 +177,102 @@ Scope {
         Memory {
           theme: barModule.theme
         }
-        Battery {
-          theme: barModule.theme
+      }
+    }
+  }
+
+  Scope {
+    id: battery
+
+    property real percentage: 0
+    property string status: "Unknown"
+    property real energy: 0
+    property real fullEnergy: 0
+    property real power: 0
+
+    readonly property real remainingSeconds: {
+      if (power <= 0)
+        return 0;
+      const remainingEnergy = status === "Charging" ? fullEnergy - energy : energy;
+      return Math.max(0, 3600 * remainingEnergy / power);
+    }
+
+    function updateNumber(file, propertyName) {
+      const value = Number(file.text().trim());
+      if (!Number.isNaN(value))
+        battery[propertyName] = value;
+    }
+
+    FileView {
+      id: capacityFile
+      path: "/sys/class/power_supply/BAT1/capacity"
+      onLoaded: battery.updateNumber(this, "percentage")
+    }
+    FileView {
+      id: statusFile
+      path: "/sys/class/power_supply/BAT1/status"
+      onLoaded: battery.status = text().trim()
+    }
+    FileView {
+      id: energyFile
+      path: "/sys/class/power_supply/BAT1/energy_now"
+      onLoaded: battery.updateNumber(this, "energy")
+    }
+    FileView {
+      id: fullEnergyFile
+      path: "/sys/class/power_supply/BAT1/energy_full"
+      onLoaded: battery.updateNumber(this, "fullEnergy")
+    }
+    FileView {
+      id: powerFile
+      path: "/sys/class/power_supply/BAT1/power_now"
+      onLoaded: battery.updateNumber(this, "power")
+    }
+    Timer {
+      interval: 600
+      running: true
+      repeat: true
+      onTriggered: {
+        capacityFile.reload();
+        statusFile.reload();
+        energyFile.reload();
+        fullEnergyFile.reload();
+        powerFile.reload();
+      }
+    }
+  }
+
+  Scope {
+    id: keyboard
+    property string layout: ""
+
+    function updateLayout(devices) {
+      const main = devices.keyboards.find(keyboard => keyboard.main);
+      if (!main)
+        return;
+      const layouts = main.layout.split(",");
+      layout = layouts[main.active_layout_index] || main.active_keymap;
+    }
+
+    Process {
+      id: devicesProcess
+      command: ["hyprctl", "-j", "devices"]
+      running: true
+      stdout: StdioCollector {
+        onStreamFinished: {
+          try {
+            keyboard.updateLayout(JSON.parse(this.text));
+          } catch (error) {
+            console.warn(`Failed to read keyboard layout: ${error}`);
+          }
         }
+      }
+    }
+    Connections {
+      target: Hyprland
+      function onRawEvent(event) {
+        if (event.name === "activelayout")
+          devicesProcess.running = true;
       }
     }
   }
@@ -288,6 +469,41 @@ Scope {
     return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)}M/s`;
   }
 
+  component ControlSummary: Lib.MenuButton {
+    id: summary
+    required property string section
+    required property var barWindow
+    theme: barModule.theme
+    opensMenu: true
+    enabled: barModule.controls.available(section)
+    selected: barModule.controls.expanded === section && barModule.detailBar === barWindow
+    muted: barModule.controls.muted(section)
+    implicitHeight: theme.dimM
+    implicitWidth: summaryLabel.implicitWidth
+    padding: 0
+    Accessible.name: barModule.controls.summary(section)
+    Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section)
+    onClicked: barModule.toggleDetails(section, summary, barWindow)
+
+    contentItem: Text {
+      id: summaryLabel
+      text: {
+        const symbol = barModule.controls.symbol(summary.section);
+        if (summary.section === "wifi" || summary.section === "bluetooth")
+          return symbol + " " + barModule.controls.summary(summary.section).replace(/^(Wi-Fi|Bluetooth) · /, "");
+        const value = summary.section === "input" || summary.section === "output" ? barModule.controls.value(
+                                                                                      summary.section) :
+                                                                                    barModule.controls.summary(
+                                                                                      summary.section);
+        return symbol + " " + value;
+      }
+      color: !summary.enabled || summary.muted ? summary.theme.colM : summary.theme.colF
+      font.family: "monospace"
+      font.pointSize: summary.theme.fontSizeM
+      verticalAlignment: Text.AlignVCenter
+    }
+  }
+
   component Workspaces: Row {
     required property T theme
     spacing: 0
@@ -405,16 +621,34 @@ Scope {
     text: `${(barModule.memory.usedBytes / (1024 * 1024 * 1024)).toFixed(2)}`
   }
 
-  component Battery: Text {
-    required property T theme
-    readonly property bool charging: barModule.lib.battery.status === "Charging"
-    readonly property bool full: barModule.lib.battery.status === "Full"
+  component Battery: Lib.MenuButton {
+    id: batteryButton
+    opensMenu: true
+    required property var barWindow
+    anchors.verticalCenter: parent.verticalCenter
+    implicitHeight: theme.dimM
+    implicitWidth: batteryLabel.implicitWidth
+    padding: 0
+    enabled: barModule.controls.available("profiles")
+    selected: barModule.controls.expanded === "profiles" && barModule.detailBar === barWindow
+    Accessible.name: "Power profile"
+    Accessible.description: batteryLabel.text
+    onClicked: barModule.toggleDetails("profiles", batteryButton, barWindow)
 
-    color: theme.colF
-    font {
-      family: "monospace"
-      pointSize: theme.fontSizeM
+    function formatRemaining(seconds) {
+      return seconds > 0 ? `${Math.floor(seconds / 60)}m` : "";
     }
-    text: full ? "🞄" : "%" + Math.round(barModule.lib.battery.percentage) + (charging ? "🞄" : "◦")
+
+    contentItem: Text {
+      id: batteryLabel
+      text: `▰ %${Math.round(battery.percentage)} · ${battery.status}` + (battery.status === "Full" || battery.remainingSeconds
+                                                                          <= 0 ? "" : " "
+                                                                                 + batteryButton.formatRemaining(
+                                                                                   battery.remainingSeconds))
+      color: batteryButton.theme.colM
+      font.family: "monospace"
+      font.pointSize: batteryButton.theme.fontSizeM
+      verticalAlignment: Text.AlignVCenter
+    }
   }
 }
