@@ -27,7 +27,8 @@ Scope {
   }
   readonly property var focusedScreen: {
     const monitor = Hyprland.focusedMonitor;
-    return Quickshell.screens.find(screen => Hyprland.monitorFor(screen) === monitor) ?? Quickshell.screens[0] ?? null;
+    return Quickshell.screens.find(screen => Hyprland.monitorFor(screen) === monitor)
+        ?? Quickshell.screens[0] ?? null;
   }
   component MenuButton: Button {
     id: button
@@ -44,11 +45,13 @@ Scope {
     hoverEnabled: true
     contentItem: Item {
       id: content
-      readonly property real sideWidth: Math.max(symbolText.visible ? symbolText.implicitWidth : 0, valueLabel.visible
+      readonly property real sideWidth: Math.max(symbolText.visible ? symbolText.implicitWidth :
+                                                                      0, valueLabel.visible
                                                  ? valueLabel.implicitWidth : 0)
       readonly property real labelInset: sideWidth > 0 ? sideWidth + button.theme.dimS : 0
       implicitWidth: label.visible ? label.implicitWidth + labelInset * 2 : sideWidth
-      implicitHeight: Math.max(label.implicitHeight, symbolText.implicitHeight, valueLabel.implicitHeight)
+      implicitHeight: Math.max(label.implicitHeight, symbolText.implicitHeight,
+                               valueLabel.implicitHeight)
       Text {
         id: symbolText
         visible: button.symbol.length > 0
@@ -90,8 +93,8 @@ Scope {
       }
     }
     background: Rectangle {
-      color: button.selected || (button.enabled && (button.down || button.hovered)) ? button.theme.colO :
-                                                                                      button.theme.colB
+      color: button.selected || (button.enabled && (button.down || button.hovered))
+             ? button.theme.colO : button.theme.colB
     }
   }
 
@@ -110,14 +113,18 @@ Scope {
     required property var player
     readonly property int loopMode: player?.loopState ?? MprisLoopState.None
     symbol: loopMode === MprisLoopState.Track ? "↻¹" : "↻"
-    description: "Repeat: " + (loopMode === MprisLoopState.Track ? "track" : loopMode === MprisLoopState.Playlist
-                                                                   ? "playlist" : "off") + " (click to cycle)"
+    description: "Repeat: " + (loopMode === MprisLoopState.Track ? "track" : loopMode
+                                                                   === MprisLoopState.Playlist
+                                                                   ? "playlist" : "off")
+                 + " (click to cycle)"
     muted: loopMode === MprisLoopState.None
     selected: loopMode !== MprisLoopState.None
     enabled: !!player?.canControl && !!player?.loopSupported
     onClicked: {
-      player.loopState = loopMode === MprisLoopState.None ? MprisLoopState.Track : loopMode === MprisLoopState.Track
-                                                            ? MprisLoopState.Playlist : MprisLoopState.None;
+      player.loopState = loopMode === MprisLoopState.None ? MprisLoopState.Track : loopMode
+                                                            === MprisLoopState.Track
+                                                            ? MprisLoopState.Playlist :
+                                                              MprisLoopState.None;
     }
   }
 
@@ -203,7 +210,8 @@ Scope {
           id: seek
           Layout.fillWidth: true
           from: 0
-          to: playbackView.player?.lengthSupported && playbackView.player.length > 0 ? playbackView.player.length : 1
+          to: playbackView.player?.lengthSupported && playbackView.player.length > 0
+              ? playbackView.player.length : 1
           value: playbackView.playback.position
           enabled: !!playbackView.player?.canControl && !!playbackView.player?.canSeek
                    && playbackView.playback.timing.length > 0
@@ -328,9 +336,10 @@ Scope {
         }
         anchors.bottom: parent.bottom
         anchors.bottomMargin: menu.theme.dimM + menu.theme.dimS
-        x: menu.anchorCenter < 0 ? menu.theme.dimS : Math.max(menu.theme.dimS, Math.min(menu.anchorCenter - width / 2,
-                                                                                        menu.width - width
-                                                                                        - menu.theme.dimS))
+        x: menu.anchorCenter < 0 ? menu.theme.dimS : Math.max(menu.theme.dimS, Math.min(
+                                                                menu.anchorCenter - width / 2,
+                                                                menu.width - width
+                                                                - menu.theme.dimS))
         width: 480
       }
 
@@ -355,12 +364,19 @@ Scope {
     property string pairingText: ""
     property string networkError: ""
     readonly property bool scanning: scan.running || scanSettling.running
-    readonly property var wifiDevices: Networking.devices.values.filter(device => device.type === DeviceType.Wifi)
-    readonly property var wifiDevice: wifiDevices.find(device => device.connected) ?? wifiDevices[0] ?? null
-    readonly property var connectedNetwork: wifiDevice?.networks.values.find(network => network.connected) ?? null
+    readonly property var wifiDevices: Networking.devices.values.filter(device => device.type
+                                                                                  === DeviceType.Wifi)
+    readonly property var wifiDevice: wifiDevices.find(device => device.connected)
+                                      ?? wifiDevices[0] ?? null
+    readonly property var connectedNetwork: wifiDevice?.networks.values.find(network
+                                                                             => network.connected)
+                                            ?? null
     readonly property var adapter: Bluetooth.defaultAdapter
-    readonly property var audioCandidates: Pipewire.nodes.values.filter(node => !node.isStream && node.audio)
-    readonly property var audioDevices: audioCandidates.filter(node => audioMetadata.availability(node) !== "no")
+    readonly property var audioCandidates: Pipewire.nodes.values.filter(node => !node.isStream
+                                                                                && node.audio)
+    readonly property var audioDevices: audioCandidates.filter(node
+                                                               => audioMetadata.availability(
+                                                                    node) !== "no")
     signal passwordRequested
     function reset() {
       expanded = "";
@@ -420,13 +436,16 @@ Scope {
         return "Wi-Fi · " + (connectedNetwork?.name || "Not connected");
       }
       if (section === "bluetooth")
-        return !adapter ? "Bluetooth · unavailable" : !adapter.enabled ? "Bluetooth · -" : "Bluetooth · "
-                                                                         + adapter.devices.values.filter(device
-                                                                                                         => device.connected).length
+        return !adapter ? "Bluetooth · unavailable" : !adapter.enabled ? "Bluetooth · -" :
+                                                                         "Bluetooth · "
+                                                                         + adapter.devices.values.filter(
+                                                                           device => device.connected).length
                                                                          + " connected";
       if (section === "profiles")
-        return profiles.available ? `Power · ${profiles.activeProfile}` : "Power profile · unavailable";
-      return (section === "input" ? "Microphone · " : "Speaker · ") + audioMetadata.label(audioNode(section));
+        return profiles.available ? `Power · ${profiles.activeProfile}` :
+                                    "Power profile · unavailable";
+      return (section === "input" ? "Microphone · " : "Speaker · ") + audioMetadata.label(
+            audioNode(section));
     }
 
     function value(section) {
@@ -454,14 +473,16 @@ Scope {
         return adapter !== null;
       if (section === "profiles")
         return profiles.available;
-      return section === "output" ? audioDevices.length > 0 : audioDevices.some(device => !device.isSink);
+      return section === "output" ? audioDevices.length > 0 : audioDevices.some(device =>
+      !device.isSink);
     }
 
     function refreshWifi() {
       if (!wifiDevice || !Networking.wifiEnabled || !Networking.wifiHardwareEnabled || scanning)
         return;
       networkError = "";
-      scan.command = ["nmcli", "--wait", "15", "device", "wifi", "rescan", "ifname", wifiDevice.name];
+      scan.command = ["nmcli", "--wait", "15", "device", "wifi", "rescan", "ifname",
+                      wifiDevice.name];
       scan.running = true;
     }
 
@@ -498,7 +519,8 @@ Scope {
         if (code === 0 && status === 0)
           scanSettling.restart();
         else
-          controls.networkError = scanError.text.trim() || scanOutput.text.trim() || "Wi-Fi scan failed.";
+          controls.networkError = scanError.text.trim() || scanOutput.text.trim()
+              || "Wi-Fi scan failed.";
       }
     }
     // nmcli acknowledges the request before NetworkManager publishes the results.
@@ -511,7 +533,8 @@ Scope {
       target: controls.wifiDevice
       property: "scannerEnabled"
       value: true
-      when: controls.active && controls.expanded === "wifi" && controls.wifiDevice !== null && Networking.wifiEnabled
+      when: controls.active && controls.expanded === "wifi" && controls.wifiDevice !== null
+            && Networking.wifiEnabled
 
       restoreMode: Binding.RestoreBindingOrValue
     }
@@ -519,13 +542,15 @@ Scope {
       target: controls.adapter
       property: "discovering"
       value: true
-      when: controls.active && controls.expanded === "wifi" && (controls.adapter?.enabled ?? false)
+      when: controls.active && controls.expanded === "wifi" && (controls.adapter?.enabled
+                                                                ?? false)
       restoreMode: Binding.RestoreBindingOrValue
     }
     Connections {
       target: controls.pendingNetwork
       function onConnectionFailed(reason) {
-        if (reason === ConnectionFailReason.NoSecrets && [WifiSecurityType.WpaPsk, WifiSecurityType.Wpa2Psk,
+        if (reason === ConnectionFailReason.NoSecrets && [WifiSecurityType.WpaPsk,
+                                                          WifiSecurityType.Wpa2Psk,
                                                           WifiSecurityType.Sae].includes(
               controls.pendingNetwork.security)) {
           controls.passwordNetwork = controls.pendingNetwork;
@@ -613,8 +638,8 @@ Scope {
               symbol: "↻"
               Accessible.name: controls.scanning ? "Refreshing Wi-Fi" : "Scan / Refresh Wi-Fi"
               selected: controls.scanning
-              enabled: !!controls.wifiDevice && Networking.wifiEnabled && Networking.wifiHardwareEnabled &&
-                       !controls.scanning
+              enabled: !!controls.wifiDevice && Networking.wifiEnabled
+                       && Networking.wifiHardwareEnabled && !controls.scanning
 
               onClicked: controls.refreshWifi()
             }
@@ -622,12 +647,16 @@ Scope {
           SectionText {
             theme: controls.theme
             Layout.fillWidth: true
-            visible: !controls.wifiDevice || !Networking.wifiHardwareEnabled || !Networking.wifiEnabled || !(
-                       controls.wifiDevice?.networks.values.length ?? 0)
-            text: !controls.wifiDevice ? "Wi-Fi device unavailable." : !Networking.wifiHardwareEnabled
-                                         ? "Wi-Fi is blocked by the hardware switch." : !Networking.wifiEnabled
-                                           ? "Wi-Fi is off." : controls.scanning ? "Looking for networks…" :
-                                                                                   "No networks found."
+            visible: !controls.wifiDevice || !Networking.wifiHardwareEnabled ||
+                     !Networking.wifiEnabled || !(controls.wifiDevice?.networks.values.length
+                                                  ?? 0)
+            text: !controls.wifiDevice ? "Wi-Fi device unavailable." :
+                                         !Networking.wifiHardwareEnabled
+                                         ? "Wi-Fi is blocked by the hardware switch." :
+                                           !Networking.wifiEnabled ? "Wi-Fi is off." :
+                                                                     controls.scanning
+                                                                     ? "Looking for networks…" :
+                                                                       "No networks found."
             color: controls.theme.colM
           }
           Repeater {
@@ -636,8 +665,9 @@ Scope {
               theme: controls.theme
               required property var modelData
               Layout.fillWidth: true
-              text: modelData.name + (modelData.connected ? " · Disconnect" : modelData.stateChanging ? " · Working…" :
-                                                                                                        "")
+              text: modelData.name + (modelData.connected ? " · Disconnect" :
+                                                            modelData.stateChanging
+                                                            ? " · Working…" : "")
               valueText: `%${Math.round(modelData.signalStrength * 100)}`
               selected: modelData.connected
               enabled: Networking.wifiEnabled && !modelData.stateChanging
@@ -707,15 +737,16 @@ Scope {
                 theme: controls.theme
                 required property var modelData
                 Layout.fillWidth: true
-                text: (modelData.name || modelData.address) + " · " + (modelData.pairing ? "Pairing…" :
-                                                                                           modelData.connected
-                                                                                           ? "Disconnect" :
-                                                                                             modelData.paired
-                                                                                             ? "Connect" : "Pair")
+                text: (modelData.name || modelData.address) + " · " + (modelData.pairing
+                                                                       ? "Pairing…" :
+                                                                         modelData.connected
+                                                                         ? "Disconnect" :
+                                                                           modelData.paired
+                                                                           ? "Connect" : "Pair")
                 selected: modelData.connected
                 enabled: !!controls.adapter?.enabled && !pairing.busy && !modelData.pairing &&
-                         ![BluetoothDeviceState.Connecting, BluetoothDeviceState.Disconnecting].includes(
-                  modelData.state)
+                         ![BluetoothDeviceState.Connecting,
+                  BluetoothDeviceState.Disconnecting].includes(modelData.state)
                 onClicked: {
                   if (modelData.paired)
                     modelData.connected = !modelData.connected;
@@ -827,7 +858,9 @@ Scope {
     required property bool input
     readonly property var node: input ? Pipewire.defaultAudioSource : Pipewire.defaultAudioSink
     readonly property bool available: !!node?.ready && !!node?.audio
-    readonly property var devices: audioControl.controlOwner.audioDevices.filter(device => device.isSink !== input)
+    readonly property var devices: audioControl.controlOwner.audioDevices.filter(device
+                                                                                 => device.isSink
+                                                                                    !== input)
     spacing: audioControl.controlOwner.theme.dimS
     RowLayout {
       Layout.fillWidth: true
@@ -857,8 +890,8 @@ Scope {
           Rectangle {
             width: volume.visualPosition * parent.width
             height: parent.height
-            color: audioControl.available && audioControl.node.audio.muted ? audioControl.controlOwner.theme.colM :
-                                                                             audioControl.controlOwner.theme.colF
+            color: audioControl.available && audioControl.node.audio.muted
+                   ? audioControl.controlOwner.theme.colM : audioControl.controlOwner.theme.colF
           }
         }
         handle: Rectangle {
@@ -866,8 +899,8 @@ Scope {
           y: volume.topPadding + volume.availableHeight / 2 - height / 2
           implicitWidth: 14
           implicitHeight: 20
-          color: !volume.enabled || audioControl.node.audio.muted ? audioControl.controlOwner.theme.colM :
-                                                                    audioControl.controlOwner.theme.colF
+          color: !volume.enabled || audioControl.node.audio.muted
+                 ? audioControl.controlOwner.theme.colM : audioControl.controlOwner.theme.colF
         }
       }
       SectionText {
@@ -875,9 +908,11 @@ Scope {
         Layout.preferredWidth: 52
         horizontalAlignment: Text.AlignRight
         font.family: "monospace"
-        text: audioControl.available ? `%${Math.round(audioControl.node.audio.volume * 100)}` : "—"
-        color: audioControl.available && audioControl.node.audio.muted ? audioControl.controlOwner.theme.colM :
-                                                                         audioControl.controlOwner.theme.colF
+        text: audioControl.available ? `%${Math.round(audioControl.node.audio.volume * 100)}` :
+                                       "—"
+
+        color: audioControl.available && audioControl.node.audio.muted
+               ? audioControl.controlOwner.theme.colM : audioControl.controlOwner.theme.colF
       }
     }
     Repeater {
@@ -911,7 +946,8 @@ Scope {
     }
 
     function label(node) {
-      return endpoints[node?.name]?.label || node?.description || node?.nickname || node?.name || "Unavailable";
+      return endpoints[node?.name]?.label || node?.description || node?.nickname || node?.name
+          || "Unavailable";
     }
 
     function routeInfo(route, key) {
@@ -935,36 +971,44 @@ Scope {
           continue;
         const props = object.info?.props ?? {};
         // Virtual/other audio classes must not inherit a physical port's disconnected status.
-        if (props["node.virtual"] === true || props["node.virtual"] === "true" || !["Audio/Sink", "Audio/Source"].includes(
+        if (props["node.virtual"] === true || props["node.virtual"] === "true" || !["Audio/Sink",
+                                                                                    "Audio/Source"].includes(
               props["media.class"]))
           continue;
         const params = devices[String(props["device.id"])] ?? {};
         const profileDevice = props["card.profile.device"];
         const direction = props["media.class"] === "Audio/Sink" ? "Output" : "Input";
-        const routes = profileDevice === undefined ? [] : (params.EnumRoute ?? []).filter(route => route.direction
-                                                                                                   === direction && (
-                                                                                                     route.devices
-                                                                                                     ?? []).some(device
-                                                                                                                 => String(
-                                                                                                                      device)
-                                                                                                                    === String(
-                                                                                                                      profileDevice)));
+        const routes = profileDevice === undefined ? [] : (params.EnumRoute ?? []).filter(route
+                                                                                          => route.direction
+                                                                                             === direction
+                                                                                             && (route.devices
+                                                                                                 ?? []).some(
+                                                                                               device => String(
+                                                                                                           device)
+                                                                                                         === String(
+                                                                                                           profileDevice)));
         if (!routes.length)
           continue;
-        const current = (params.Route ?? []).find(route => route.direction === direction && String(route.device) === String(
+        const current = (params.Route ?? []).find(route => route.direction === direction
+                                                           && String(route.device) === String(
                                                              profileDevice));
-        const route = routes.find(candidate => candidate.index === current?.index && candidate.available !== "no")
-              ?? routes.find(candidate => candidate.available === "yes") ?? routes.find(candidate
-                                                                                        => candidate.available
-                                                                                           !== "no") ?? routes[0];
-        const availability = routes.every(candidate => candidate.available === "no") ? "no" : routes.some(candidate
-                                                                                                          => candidate.available
-                                                                                                             === "yes")
+        const route = routes.find(candidate => candidate.index === current?.index
+                                               && candidate.available !== "no") ?? routes.find(
+                candidate => candidate.available === "yes") ?? routes.find(candidate
+                                                                           => candidate.available
+                                                                              !== "no")
+              ?? routes[0];
+        const availability = routes.every(candidate => candidate.available === "no") ? "no" :
+                                                                                       routes.some(
+                                                                                         candidate
+                                                                                         => candidate.available
+                                                                                            === "yes")
                                                                                        ? "yes" : "unknown";
         const product = routeInfo(route, "device.product.name");
         result[props["node.name"]] = {
           availability: availability,
-          label: product ? `${product} · ${route.description}` : route.description || props["node.description"]
+          label: product ? `${product} · ${route.description}` : route.description
+                           || props["node.description"]
         };
       }
       endpoints = result;
@@ -1063,7 +1107,8 @@ Scope {
         status = "Paired successfully.";
         device.connect();
         agent.write("quit\n");
-      } else if (/Failed to pair|AuthenticationFailed|AuthenticationCanceled|AuthenticationRejected/.test(chunk)) {
+      } else if (new RegExp("Failed to pair|AuthenticationFailed|"
+                            + "AuthenticationCanceled|AuthenticationRejected").test(chunk)) {
         prompt = "";
         status = chunk.trim();
         agent.write("quit\n");
@@ -1071,8 +1116,9 @@ Scope {
         const display = chunk.match(/(?:Passkey|PIN code):\s*(\d+)/i);
         if (display)
           status = `Enter this code on your device: ${display[1]}`;
-        const match = clean.match(
-                /(?:Confirm passkey|Authorize service|Accept pairing|Enter PIN code|Enter passkey)[^\r\n]*[:?]\s*$/i);
+        const match = clean.match(new RegExp(
+                                    "(?:Confirm passkey|Authorize service|Accept pairing|"
+                                    + "Enter PIN code|Enter passkey)[^\\r\\n]*[:?]\\s*$", "i"));
         if (match) {
           prompt = match[0].trim();
           confirmation = /Confirm|Authorize|Accept/i.test(prompt);
@@ -1113,7 +1159,8 @@ Scope {
     property bool backendPresent: false
     readonly property var availableProfiles: backend.item?.availableProfiles ?? []
     readonly property string activeProfile: backend.item?.activeProfile ?? ""
-    readonly property bool available: (backend.item?.available ?? false) && availableProfiles.length > 0
+    readonly property bool available: (backend.item?.available ?? false)
+                                      && availableProfiles.length > 0
     readonly property string error: backend.item?.error ?? ""
     readonly property bool busy: backend.item?.busy ?? false
 
@@ -1134,8 +1181,12 @@ Scope {
         "command -v powerprofilesctl >/dev/null 2>&1 && exec busctl --system --acquired --no-pager --no-legend list"]
       running: true
       stdout: StdioCollector {
-        onStreamFinished: profiles.backendPresent =
-                          /^(net\.hadess\.PowerProfiles|org\.freedesktop\.UPower\.PowerProfiles)\s/m.test(text)
+        onStreamFinished: {
+          const servicePattern = new RegExp("^(net\\.hadess\\.PowerProfiles|"
+                                            + "org\\.freedesktop\\.UPower\\.PowerProfiles)\\s",
+                                            "m");
+          profiles.backendPresent = servicePattern.test(text);
+        }
       }
       onExited: (code, status) => {
         if (code !== 0 || status !== 0)
@@ -1172,7 +1223,8 @@ Scope {
           }
 
           function setProfile(profile) {
-            if (!available || busy || !availableProfiles.includes(profile) || profile === activeProfile)
+            if (!available || busy || !availableProfiles.includes(profile) || profile
+                === activeProfile)
               return;
             error = "";
             setProcess.command = ["powerprofilesctl", "set", profile];

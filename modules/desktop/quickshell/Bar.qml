@@ -44,10 +44,13 @@ Scope {
     anchorCenter: {
       const item = barModule.controls.selectionAnchor;
       const window = barModule.detailBar;
-      return item && window ? item.parent.mapToItem(window.contentItem, item.x + item.width / 2, 0).x : -1;
+      return item && window ? item.parent.mapToItem(window.contentItem, item.x + item.width / 2,
+                                                    0).x : -1;
     }
     menuWidth: Math.min(380, Math.max(0, width - theme.dimS * 2))
-    menuHeight: Math.min(detailBody.implicitHeight + theme.dimS * 2, Math.max(0, height - theme.dimM - theme.dimS * 2))
+    menuHeight: Math.min(detailBody.implicitHeight + theme.dimS * 2, Math.max(0, height
+                                                                              - theme.dimM
+                                                                              - theme.dimS * 2))
     onDismissRequested: barModule.closeDetails()
     onKeyPressed: event => {
       if (event.key === Qt.Key_Escape) {
@@ -96,9 +99,10 @@ Scope {
             theme: barModule.theme
             Layout.fillWidth: true
             visible: battery.status === "Charging" || battery.status === "Discharging"
-            text: battery.remainingSeconds > 0 ? (battery.status === "Charging" ? "Time until full: " : "Time remaining: ")
-                                                 + `${Math.floor(battery.remainingSeconds / 60)}m` :
-                                                 "Estimate unavailable"
+            text: battery.remainingSeconds > 0 ? (battery.status === "Charging"
+                                                  ? "Time until full: " : "Time remaining: ")
+                                                 + `
+${Math.floor(battery.remainingSeconds / 60)}m` : "Estimate unavailable"
             color: theme.colM
           }
           Lib.SectionText {
@@ -150,12 +154,13 @@ Scope {
     readonly property real position: {
       // MPRIS extrapolates position on read; it does not notify every elapsed second.
       positionTick;
-      return player?.positionSupported ? Math.max(0, Math.min(player.length > 0 ? player.length : Infinity,
-                                                              player.position)) : 0;
+      return player?.positionSupported ? Math.max(0, Math.min(player.length > 0 ? player.length :
+                                                                                  Infinity, player.position)) :
+                                         0;
     }
-    readonly property string timing: player?.lengthSupported && player?.positionSupported && Number.isFinite(
-                                       player.length) && player.length > 0 ? `${formatTime(player.length)}-${formatTime(
-                                                                               position)}` : ""
+    readonly property string timing: player?.lengthSupported && player?.positionSupported
+                                     && Number.isFinite(player.length) && player.length > 0 ? `
+${formatTime(player.length)}-${formatTime(position)}` : ""
 
     function formatTime(seconds) {
       const total = Math.max(0, Math.floor(seconds));
@@ -484,7 +489,8 @@ Scope {
     property double previousTransmitted: 0
     property double previousTime: 0
 
-    readonly property var device: Networking.devices.values.find(device => device.name === interfaceName)
+    readonly property var device: Networking.devices.values.find(device => device.name
+                                                                           === interfaceName)
     readonly property bool connected: device?.connected ?? false
 
     function update(text) {
@@ -500,7 +506,8 @@ Scope {
         const elapsedSeconds = (now - previousTime) / 1000;
         if (elapsedSeconds > 0) {
           downloadBytesPerSecond = Math.max(0, (received - previousReceived) / elapsedSeconds);
-          uploadBytesPerSecond = Math.max(0, (transmitted - previousTransmitted) / elapsedSeconds);
+          uploadBytesPerSecond = Math.max(0, (transmitted - previousTransmitted)
+                                          / elapsedSeconds);
           totalBytesPerSecond = downloadBytesPerSecond + uploadBytesPerSecond;
         }
       }
@@ -620,10 +627,12 @@ Scope {
     required property string section
     required property var barWindow
     theme: barModule.theme
-    enabled: barModule.controls.available(section) || (section === "output" && media.player !== null)
+    enabled: barModule.controls.available(section) || (section === "output" && media.player
+                                                       !== null)
     selected: barModule.controls.expanded === section && barModule.detailBar === barWindow
     muted: barModule.controls.muted(section)
-    readonly property bool disconnected: section === "wifi" && !muted && barModule.controls.wifiDevice !== null &&
+    readonly property bool disconnected: section === "wifi" && !muted
+                                         && barModule.controls.wifiDevice !== null &&
                                          !barModule.controls.connectedNetwork
 
     font.bold: disconnected
@@ -632,9 +641,9 @@ Scope {
     Accessible.name: barModule.controls.summary(section)
     suffixText: section === "output" ? media.timing : ""
     suffixColor: media.playing ? theme.colF : theme.colM
-    Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section) + (suffixText ? " · "
-                                                                                                          + suffixText :
-                                                                                                          "")
+    Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section) + (suffixText
+                                                                                             ? " · " + suffixText :
+                                                                                               "")
     onClicked: barModule.toggleDetails(section, summary, barWindow)
 
     text: {
@@ -697,7 +706,8 @@ Scope {
   }
 
   component Network: BarItem {
-    text: barModule.network.connected ? `${barModule.formatRate(barModule.network.totalBytesPerSecond)}` : ""
+    text: barModule.network.connected ? `${barModule.formatRate(
+                                          barModule.network.totalBytesPerSecond)}` : ""
   }
 
   component Temperature: BarItem {
@@ -721,14 +731,15 @@ Scope {
     id: batteryButton
     required property var barWindow
     selected: barModule.controls.expanded === "profiles" && barModule.detailBar === barWindow
-    textColor: battery.status === "Charging" || battery.status === "Discharging" ? theme.colF : theme.colM
+    textColor: battery.status === "Charging" || battery.status === "Discharging" ? theme.colF :
+                                                                                   theme.colM
     focusPolicy: Qt.StrongFocus
     Accessible.name: "Battery"
 
     Accessible.description: `%${Math.round(battery.percentage)} · ${battery.status}`
     onClicked: barModule.toggleDetails("profiles", batteryButton, barWindow)
 
-    text: battery.status === "Full" ? "🞄" : (battery.status === "Discharging" ? "-" : "") + `%${Math.round(
-                                        battery.percentage)}`
+    text: battery.status === "Full" ? "🞄" : (battery.status === "Discharging" ? "-" : "") + `%
+${Math.round(battery.percentage)}`
   }
-}
+  }

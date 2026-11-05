@@ -27,9 +27,11 @@ Scope {
     id: popupWindow
     visible: popupModel.values.length > 0
     color: "transparent"
-    implicitWidth: Math.min(notificationModule.theme.dimH, (screen?.width ?? 1920) - notificationModule.theme.dimS * 2)
-    implicitHeight: Math.min(popupColumn.implicitHeight, (screen?.height ?? 1080) - notificationModule.theme.dimM
-                             - notificationModule.theme.dimS * 2)
+    implicitWidth: Math.min(notificationModule.theme.dimH, (screen?.width ?? 1920)
+                            - notificationModule.theme.dimS * 2)
+    implicitHeight: Math.min(popupColumn.implicitHeight, (screen?.height ?? 1080)
+                             - notificationModule.theme.dimM - notificationModule.theme.dimS
+                             * 2)
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.namespace: "quickshell-notifications"
     WlrLayershell.layer: WlrLayer.Overlay
@@ -151,7 +153,8 @@ Scope {
         }
 
         Text {
-          width: parent.width - (notificationImage.visible ? notificationImage.width + parent.spacing : 0)
+          width: parent.width - (notificationImage.visible ? notificationImage.width
+                                                             + parent.spacing : 0)
                  - arrivalTime.width - parent.spacing
           color: card.theme.colF
           font.family: "sans-serif"
@@ -160,12 +163,13 @@ Scope {
           textFormat: Text.RichText
 
           function escapeHeading(value) {
-            return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g,
-                                                                                                            "<br>");
+            return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g,
+                                                                                      "&gt;").replace(
+                  /\n/g, "<br>");
           }
 
-          text: "<b>" + escapeHeading(card.notification?.appName ?? "") + "</b>: " + escapeHeading(card.notification
-                                                                                                   ?.summary ?? "")
+          text: "<b>" + escapeHeading(card.notification?.appName ?? "") + "</b>: "
+                + escapeHeading(card.notification?.summary ?? "")
         }
 
         Text {

@@ -170,7 +170,8 @@ Scope {
                 family: "monospace"
                 pointSize: theme.fontSizeL
               }
-              echoMode: pam.responseRequired && pam.responseVisible ? TextInput.Normal : TextInput.Password
+              echoMode: pam.responseRequired && pam.responseVisible ? TextInput.Normal :
+                                                                      TextInput.Password
               inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
               verticalAlignment: TextInput.AlignVCenter
               horizontalAlignment: TextInput.AlignHCenter

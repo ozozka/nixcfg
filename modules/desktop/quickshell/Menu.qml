@@ -82,7 +82,8 @@ Scope {
     Qt.callLater(() => {
       applications.resetAndFocus();
       const bottom = applications.mapToItem(content, 0, applications.height).y;
-      scroll.contentY = Math.max(0, Math.min(scroll.contentHeight - scroll.height, bottom - scroll.height));
+      scroll.contentY = Math.max(0, Math.min(scroll.contentHeight - scroll.height, bottom
+                                             - scroll.height));
     });
   }
 
@@ -113,7 +114,8 @@ Scope {
           required property var modelData
           Layout.fillWidth: true
           symbol: modelData.symbol
-          text: menuModule.pendingAction === modelData.key ? `Confirm ${modelData.name}` : modelData.name
+          text: menuModule.pendingAction === modelData.key ? `Confirm ${modelData.name}` :
+                                                             modelData.name
           selected: menuModule.pendingAction === modelData.key
           onClicked: menuModule.activatePower(modelData)
         }
@@ -142,8 +144,10 @@ Scope {
 
     theme: menuModule.theme
     menuWidth: Math.min(480, width - menuModule.theme.dimS * 2)
-    menuHeight: Math.min(content.height + menuModule.theme.dimS * 2, Math.max(0, height - menuModule.theme.dimM
-                                                                              - menuModule.theme.dimS * 2))
+    menuHeight: Math.min(content.height + menuModule.theme.dimS * 2, Math.max(0, height
+                                                                              - menuModule.theme.dimM
+                                                                              - menuModule.theme.dimS
+                                                                              * 2))
     onDismissRequested: menuModule.close()
     widgetContent: SelectionWidget {
       id: selection
@@ -215,13 +219,16 @@ Scope {
     readonly property real inset: widget.theme.dimS
 
     width: Math.min(380, menuWindow.width - inset * 2)
-    height: Math.min(body.implicitHeight + inset * 2, menuWindow.height - widget.theme.dimM - inset * 2)
+    height: Math.min(body.implicitHeight + inset * 2, menuWindow.height - widget.theme.dimM - inset
+                     * 2)
     x: {
       const beside = menuWindow.menuX + menuWindow.menuWidth + widget.theme.dimS;
-      return beside + width + inset <= menuWindow.width ? beside : Math.max(inset, menuWindow.width - width - inset);
+      return beside + width + inset <= menuWindow.width ? beside : Math.max(inset,
+                                                                            menuWindow.width
+                                                                            - width - inset);
     }
-    y: Math.max(inset, Math.min(menuWindow.menuY + menuWindow.menuHeight - height, menuWindow.height
-                                - widget.theme.dimM - inset - height))
+    y: Math.max(inset, Math.min(menuWindow.menuY + menuWindow.menuHeight - height,
+                                menuWindow.height - widget.theme.dimM - inset - height))
 
     // Consume blank-area clicks, but leave child controls interactive.
     MouseArea {
@@ -265,8 +272,8 @@ Scope {
     property Component leadingControl: null
     property int visibleResultLimit: 6
     readonly property real resultHeight: applications.theme.dimM + applications.theme.dimS
-    implicitHeight: Math.max(1, Math.min(results.count, visibleResultLimit)) * resultHeight + applications.theme.dimS
-                    + searchRow.height
+    implicitHeight: Math.max(1, Math.min(results.count, visibleResultLimit)) * resultHeight
+                    + applications.theme.dimS + searchRow.height
 
     function focusSearch() {
       search.forceActiveFocus();
@@ -290,10 +297,12 @@ Scope {
     function activate(entry) {
       if (!entry)
         return;
-      Quickshell.execDetached(["systemd-run", "--user", "--collect", "--slice=app.slice", "--property=Type=exec",
-                               "--property=ExitType=cgroup", "--property=PartOf=graphical-session.target",
-                               "--property=After=graphical-session.target", "--property=WorkingDirectory="
-                               + Quickshell.env("HOME"), "--", "gtk-launch", `${entry.application.id}.desktop`]);
+      Quickshell.execDetached(["systemd-run", "--user", "--collect", "--slice=app.slice",
+                               "--property=Type=exec", "--property=ExitType=cgroup",
+                               "--property=PartOf=graphical-session.target",
+                               "--property=After=graphical-session.target",
+                               "--property=WorkingDirectory=" + Quickshell.env("HOME"), "--",
+                               "gtk-launch", `${entry.application.id}.desktop`]);
       launched();
     }
 
@@ -308,8 +317,8 @@ Scope {
           detail: application.genericName || application.comment,
           icon: application.icon,
           application: application
-        })).filter(entry => !query || entry.name.toLowerCase().includes(query) || String(entry.detail || "").toLowerCase(
-        ).includes(query)).slice(0, 50);
+        })).filter(entry => !query || entry.name.toLowerCase().includes(query) || String(
+        entry.detail || "").toLowerCase().includes(query)).slice(0, 50);
       }
       }
 
@@ -337,7 +346,8 @@ Scope {
         readonly property bool current: ListView.isCurrentItem
         width: results.width
         height: applications.resultHeight
-        color: resultHover.hovered || resultItem.current ? applications.theme.colO : applications.theme.colB
+        color: resultHover.hovered || resultItem.current ? applications.theme.colO :
+        applications.theme.colB
         HoverHandler {
         id: resultHover
       }
