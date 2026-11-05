@@ -6,7 +6,7 @@
 (deftheme my "My custom theme.")
 
 (let* (
-       (my-theme-title-base `(:inherit variable-pitch-text :foreground ,my-theme-col-s :weight bold))
+       (my-theme-title-base `(:inherit variable-pitch-text :foreground ,my-theme-col-f :weight bold))
        (my-theme-poster `(,@my-theme-title-base :height ,my-theme-font-size-h))
        (my-theme-title `(,@my-theme-title-base :height ,my-theme-font-size-x))
        (my-theme-heading `(,@my-theme-title-base :height ,my-theme-font-size-l))
@@ -75,14 +75,14 @@
    `(completions-common-part ((t (:foreground ,my-theme-col-m))))
    `(completions-first-difference ((t (:foreground ,my-theme-col-p :weight bold))))
 
-   `(font-lock-constant-face ((t (:foreground ,my-theme-col-p))))
-   `(font-lock-number-face ((t (:foreground ,my-theme-col-p))))
-   `(font-lock-string-face ((t (:foreground ,my-theme-col-p))))
+   `(font-lock-constant-face ((t (:foreground ,my-theme-col-s))))
+   `(font-lock-number-face ((t (:foreground ,my-theme-col-s))))
+   `(font-lock-string-face ((t (:foreground ,my-theme-col-s))))
    `(font-lock-comment-face ((t (:inherit variable-pitch :foreground ,my-theme-col-m))))
    `(font-lock-keyword-face ((t (:foreground ,my-theme-col-m :weight bold))))
    `(font-lock-builtin-face ((t (:foreground ,my-theme-col-m))))
-   `(font-lock-function-name-face ((t (:foreground ,my-theme-col-s))))
-   `(font-lock-property-use-face ((t (:foreground ,my-theme-col-s))))
+   `(font-lock-function-name-face ((t (:foreground ,my-theme-col-p))))
+   `(font-lock-property-use-face ((t (:foreground ,my-theme-col-p))))
    `(font-lock-variable-name-face ((t (:foreground ,my-theme-col-f))))
    `(font-lock-type-face ((t (:foreground ,my-theme-col-f))))
 
@@ -94,7 +94,7 @@
    `(lazy-highlight ((t (:background ,my-theme-col-o :weight bold :underline (:color ,my-theme-col-p :style dashes)))))
 
    `(log-view-message ((t (:foreground ,my-theme-col-m))))
-   `(change-log-list ((t (:foreground ,my-theme-col-s))))
+   `(change-log-list ((t (:foreground ,my-theme-col-p :weight bold))))
 
    `(log-edit-header ((t (:inherit variable-pitch-text :foreground ,my-theme-col-m))))
    `(log-edit-headers-separator ((t (:background ,my-theme-col-o :foreground ,my-theme-col-o :height 18))))
@@ -103,8 +103,8 @@
    `(vc-dir-header ((t (:foreground ,my-theme-col-m))))
    `(vc-dir-file ((t (:inherit fixed-pitch))))
    `(vc-dir-directory ((t (:inherit dired-directory :foreground ,my-theme-col-m))))
-   `(vc-dir-mark-indicator ((t (:foreground ,my-theme-col-p :weight bold))))
-   `(vc-dir-status-edited ((t (:foreground ,my-theme-col-s))))
+   `(vc-dir-mark-indicator ((t (:foreground ,my-theme-col-s :weight bold))))
+   `(vc-dir-status-edited ((t (:foreground ,my-theme-col-p))))
 
    `(diff-header ((t (:background ,my-theme-col-o :foreground ,my-theme-col-f :extend nil :extend t))))
    `(diff-file-header ((t (:background ,my-theme-col-o :foreground ,my-theme-col-f :weight bold :underline (:style dots)))))
@@ -175,9 +175,9 @@
    `(markdown-ts-heading-4 ((t ,my-theme-subheading)))
    `(markdown-ts-heading-5 ((t (:inherit markdown-ts-heading-4))))
    `(markdown-ts-heading-6 ((t (:inherit markdown-ts-heading-5))))
-   `(markdown-ts-code-span ((t (:inherit fixed-pitch :foreground ,my-theme-col-p))))
+   `(markdown-ts-code-span ((t (:inherit fixed-pitch :foreground ,my-theme-col-s))))
    `(markdown-ts-code-block ((t (:inherit fixed-pitch))))
-   `(markdown-ts-code-block-markup-hidden ((t (:inherit fixed-pitch :background ,my-theme-col-o))))
+   `(markdown-ts-code-block-markup-hidden ((t (:inherit fixed-pitch))))
    `(markdown-ts-table-delimiter-cell ((t (:inherit markdown-ts-table :foreground ,my-theme-col-m))))
    `(markdown-ts-delimiter ((t (:foreground ,my-theme-col-m))))
    `(markdown-ts-task-checked ((t (:inherit fixed-pitch :foreground ,my-theme-col-p :weight bold))))
