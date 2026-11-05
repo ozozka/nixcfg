@@ -21,6 +21,7 @@ let
 
     (defgroup my-options nil "Options for my theme." :group 'convenience)
 
+    (defcustom my-nix-program "${config.nix.package}/bin/nix" "Nix executable used for development shells." :type 'file :group 'my-options)
     (defcustom my-treesit-query-root "${treesitRoot}" "Directory containing tree-sitter/queries." :type 'directory :group 'my-options)
 
     (defcustom my-user-fullname "${cfg.user.fullname}" "User full name." :type 'string :group 'my-options)
@@ -125,7 +126,7 @@ in
   system.checks = [
     (pkgs.runCommand "emacs-config-check" { nativeBuildInputs = [ emacs ]; } ''
       export HOME="$TMPDIR"
-      emacs --batch -l ${./test-config.el} -f ert-run-tests-batch-and-exit
+      emacs --batch -l ${./test-config.el} -l ${./test-env.el} -f ert-run-tests-batch-and-exit
       touch "$out"
     '')
   ];

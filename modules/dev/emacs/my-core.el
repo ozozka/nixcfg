@@ -37,7 +37,14 @@
   ("C-c m" . (lambda () (interactive) (flymake-start t)))
   ("C-c C-m" . (lambda (directory)
                  (interactive (list (read-directory-name "Trust directory: " default-directory default-directory t)))
-                 (add-to-list 'trusted-content (abbreviate-file-name (file-name-as-directory (file-truename directory))))
+                 ;; Saved to `custom-file', so trust survives restarts.
+                 (let ((trusted (abbreviate-file-name (file-name-as-directory (file-truename directory))))
+                       (current (if (listp trusted-content) trusted-content nil)))
+                   (customize-save-variable
+                    'trusted-content
+                    (if (member trusted current) current (cons trusted current))))
+                 (when (fboundp 'my-env-refresh)
+                   (my-env-refresh))
                  (message "Trusted content: %s" trusted-content)))
 
   :config
