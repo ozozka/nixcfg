@@ -39,15 +39,37 @@ in
       };
     };
 
-    systemd.services.mpd.serviceConfig.ExecStart = lib.mkForce [
-      ""
-      (toString (
-        pkgs.writeShellScript "mpd-start" ''
-          export XDG_RUNTIME_DIR="/run/user/$(${pkgs.coreutils}/bin/id -u)"
-          exec ${pkgs.mpd}/bin/mpd --systemd /run/mpd/mpd.conf
-        ''
-      ))
-    ];
+    systemd = {
+      services.mpd.serviceConfig.ExecStart = lib.mkForce [
+        ""
+        (toString (
+          pkgs.writeShellScript "mpd-start" ''
+            export XDG_RUNTIME_DIR="/run/user/$(${pkgs.coreutils}/bin/id -u)"
+            exec ${pkgs.mpd}/bin/mpd --systemd /run/mpd/mpd.conf
+          ''
+        ))
+      ];
+
+      user.services = {
+        mpd-mpris = {
+          description = "MPD MPRIS bridge";
+          wantedBy = [ "default.target" ];
+          serviceConfig = {
+            ExecStart = "${lib.getExe pkgs.mpd-mpris} -no-instance";
+            Restart = "on-failure";
+          };
+        };
+
+        playerctld = {
+          description = "Playerctl daemon";
+          wantedBy = [ "default.target" ];
+          serviceConfig = {
+            ExecStart = "${pkgs.playerctl}/bin/playerctld daemon";
+            Restart = "on-failure";
+          };
+        };
+      };
+    };
 
     environment.systemPackages = with pkgs; [ mpc ]; # rmpc
   };
