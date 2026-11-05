@@ -346,6 +346,7 @@
   (keymap-set term-raw-map "C-S-c" #'kill-ring-save)
   (keymap-set term-raw-map "C-S-v" #'term-paste)
   (keymap-set term-raw-map "<escape>" (lambda () (interactive) (term-send-raw-string "\e")))
+  (keymap-set term-raw-map "<backtab>" (lambda () (interactive) (term-send-raw-string "\e[Z")))
   (keymap-set term-raw-map "S-<return>" (lambda () (interactive) (term-send-raw-string "\026\n")))
   (keymap-set term-raw-map "C-c d" (keymap-lookup global-map "C-c d"))
   (keymap-set term-raw-map "C-c z" (keymap-lookup global-map "C-c z"))
