@@ -2,29 +2,39 @@
 
 let
   settingsFormat = pkgs.formats.json { };
+  python = "${pkgs.python3}/bin/python3";
   notification = {
     type = "command";
-    command = "${pkgs.python3}/bin/python3 ${./notify.py} ${pkgs.systemd}/bin/busctl";
+    command = "${python} ${./notify.py} ${pkgs.systemd}/bin/busctl";
     timeout = 6;
   };
 in
 {
-  imports = [ ../../home.nix ];
-
   nixpkgs.config.allowUnfreePackages = [ "claude-code" ];
 
   environment.systemPackages = with pkgs; [ claude-code ];
 
-  ozozka.home.profiles.claude.files.".claude/settings.json" =
-    settingsFormat.generate "claude-settings.json"
+  # Managed settings take precedence over user settings, and hooks from both run.
+  # ~/.claude/settings.json stays writable for Claude's own UI state (theme, etc).
+  environment.etc."claude-code/managed-settings.json".source =
+    settingsFormat.generate "claude-managed-settings.json"
       {
+        statusLine = {
+          type = "command";
+          command = "${python} ${./statusline.py} ${pkgs.git}/bin/git";
+          padding = 0;
+          # Keep reset countdowns moving while the session is idle.
+          refreshInterval = 30;
+        };
         hooks = {
           SessionStart = [
             {
+              # Resumed sessions already carry the documentation in their transcript.
+              matcher = "^(startup|clear|compact)$";
               hooks = [
                 {
                   type = "command";
-                  command = "${pkgs.python3}/bin/python3 ${./docs.py}";
+                  command = "${python} ${./docs.py}";
                   timeout = 10;
                 }
               ];
