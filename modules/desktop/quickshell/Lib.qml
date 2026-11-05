@@ -213,7 +213,7 @@ Scope {
 
     function title(section) {
       return ({
-                wifi: "Wi-Fi",
+                wifi: "Connections",
                 bluetooth: "Bluetooth",
                 profiles: "Power profile",
                 output: "Audio",
@@ -263,6 +263,8 @@ Scope {
     }
 
     function muted(section) {
+      if (section === "wifi")
+        return !Networking.wifiEnabled || !Networking.wifiHardwareEnabled;
       if (section === "bluetooth")
         return !!adapter && !adapter.enabled;
       if (section !== "input" && section !== "output")
@@ -273,7 +275,7 @@ Scope {
 
     function available(section) {
       if (section === "wifi")
-        return wifiDevice !== null;
+        return wifiDevice !== null || adapter !== null;
       if (section === "bluetooth")
         return adapter !== null;
       if (section === "profiles")
@@ -343,7 +345,7 @@ Scope {
       target: controls.adapter
       property: "discovering"
       value: true
-      when: controls.active && controls.expanded === "bluetooth" && (controls.adapter?.enabled ?? false)
+      when: controls.active && controls.expanded === "wifi" && (controls.adapter?.enabled ?? false)
       restoreMode: Binding.RestoreBindingOrValue
     }
     Connections {
@@ -403,10 +405,22 @@ Scope {
           }
         }
 
+        Loader {
+          Layout.fillWidth: true
+          visible: controls.expanded === "wifi"
+          sourceComponent: visible ? bluetoothDetails : null
+        }
+
         ColumnLayout {
           Layout.fillWidth: true
           visible: controls.expanded === "wifi"
           spacing: controls.theme.dimS
+          SectionText {
+            theme: controls.theme
+            Layout.fillWidth: true
+            text: "Wi-Fi"
+            font.bold: true
+          }
           RowLayout {
             Layout.fillWidth: true
             MenuButton {
@@ -496,91 +510,99 @@ Scope {
           }
         }
 
-        ColumnLayout {
-          Layout.fillWidth: true
-          visible: controls.expanded === "bluetooth"
-          spacing: controls.theme.dimS
-          MenuButton {
-            theme: controls.theme
-            Layout.fillWidth: true
-            text: controls.adapter?.enabled ? "Turn Bluetooth off" : "Turn Bluetooth on"
-            enabled: controls.adapter !== null && !pairing.busy
-            onClicked: controls.adapter.enabled = !controls.adapter.enabled
-          }
-          Repeater {
-            model: controls.adapter?.devices.values ?? []
+        Component {
+          id: bluetoothDetails
+          ColumnLayout {
+            spacing: controls.theme.dimS
+            SectionText {
+              theme: controls.theme
+              Layout.fillWidth: true
+              text: "Bluetooth"
+              font.bold: true
+            }
             MenuButton {
               theme: controls.theme
-              required property var modelData
               Layout.fillWidth: true
-              text: (modelData.name || modelData.address) + " · " + (modelData.pairing ? "Pairing…" :
-                                                                                         modelData.connected
-                                                                                         ? "Disconnect" :
-                                                                                           modelData.paired ? "Connect" :
-                                                                                                              "Pair")
-              selected: modelData.connected
-              enabled: !!controls.adapter?.enabled && !pairing.busy && !modelData.pairing &&
-                       ![BluetoothDeviceState.Connecting, BluetoothDeviceState.Disconnecting].includes(modelData.state)
-              onClicked: {
-                if (modelData.paired)
-                  modelData.connected = !modelData.connected;
-                else
-                  pairing.pair(modelData);
+              text: controls.adapter?.enabled ? "Turn Bluetooth off" : "Turn Bluetooth on"
+              enabled: controls.adapter !== null && !pairing.busy
+              onClicked: controls.adapter.enabled = !controls.adapter.enabled
+            }
+            Repeater {
+              model: controls.adapter?.devices.values ?? []
+              MenuButton {
+                theme: controls.theme
+                required property var modelData
+                Layout.fillWidth: true
+                text: (modelData.name || modelData.address) + " · " + (modelData.pairing ? "Pairing…" :
+                                                                                           modelData.connected
+                                                                                           ? "Disconnect" :
+                                                                                             modelData.paired
+                                                                                             ? "Connect" : "Pair")
+                selected: modelData.connected
+                enabled: !!controls.adapter?.enabled && !pairing.busy && !modelData.pairing &&
+                         ![BluetoothDeviceState.Connecting, BluetoothDeviceState.Disconnecting].includes(
+                  modelData.state)
+                onClicked: {
+                  if (modelData.paired)
+                    modelData.connected = !modelData.connected;
+                  else
+                    pairing.pair(modelData);
+                }
               }
             }
-          }
-          SectionText {
-            theme: controls.theme
-            Layout.fillWidth: true
-            visible: text.length > 0
-            text: pairing.status
-            color: controls.theme.colM
-          }
-          SectionText {
-            theme: controls.theme
-            Layout.fillWidth: true
-            visible: text.length > 0
-            text: pairing.prompt
-            font.bold: true
-          }
-          TextField {
-            Layout.fillWidth: true
-            visible: pairing.busy && pairing.prompt.length > 0 && !pairing.confirmation
-            text: controls.pairingText
-            onTextEdited: controls.pairingText = text
-            placeholderText: "PIN / passkey"
-            color: controls.theme.colF
-            placeholderTextColor: controls.theme.colM
-            font.family: "monospace"
-            background: Rectangle {
-              color: controls.theme.colO
-            }
-            onAccepted: {
-              pairing.respond(text);
-              controls.pairingText = "";
-            }
-          }
-          RowLayout {
-            visible: pairing.busy && pairing.prompt.length > 0
-            MenuButton {
+            SectionText {
               theme: controls.theme
-              text: pairing.confirmation ? "Confirm" : "Send"
-              onClicked: {
-                pairing.respond(pairing.confirmation ? "yes" : controls.pairingText);
+              Layout.fillWidth: true
+              visible: text.length > 0
+              text: pairing.status
+              color: controls.theme.colM
+            }
+            SectionText {
+              theme: controls.theme
+              Layout.fillWidth: true
+              visible: text.length > 0
+              text: pairing.prompt
+              font.bold: true
+            }
+            TextField {
+              Layout.fillWidth: true
+              visible: pairing.busy && pairing.prompt.length > 0 && !pairing.confirmation
+              text: controls.pairingText
+              onTextEdited: controls.pairingText = text
+              placeholderText: "PIN / passkey"
+              color: controls.theme.colF
+              placeholderTextColor: controls.theme.colM
+              font.family: "monospace"
+              background: Rectangle {
+                color: controls.theme.colO
+              }
+              onAccepted: {
+                pairing.respond(text);
                 controls.pairingText = "";
               }
             }
+            RowLayout {
+              visible: pairing.busy && pairing.prompt.length > 0
+              MenuButton {
+                theme: controls.theme
+                text: pairing.confirmation ? "Confirm" : "Send"
+                onClicked: {
+                  pairing.respond(pairing.confirmation ? "yes" : controls.pairingText);
+                  controls.pairingText = "";
+                }
+              }
+              MenuButton {
+                theme: controls.theme
+                text: "Cancel"
+                onClicked: pairing.cancel()
+              }
+            }
             MenuButton {
               theme: controls.theme
-              text: "Cancel"
+              visible: pairing.busy && !pairing.prompt
+              text: "Cancel pairing"
               onClicked: pairing.cancel()
             }
-          }
-          MenuButton {
-            theme: controls.theme
-            visible: pairing.busy && !pairing.prompt
-            text: "Cancel pairing"
-            onClicked: pairing.cancel()
           }
         }
         ColumnLayout {

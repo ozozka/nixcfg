@@ -164,7 +164,7 @@ Scope {
           }
         }
         Repeater {
-          model: ["wifi", "bluetooth", "output"]
+          model: ["wifi", "output"]
 
           ControlSummary {
             required property string modelData
@@ -527,12 +527,23 @@ Scope {
     enabled: barModule.controls.available(section)
     selected: barModule.controls.expanded === section && barModule.detailBar === barWindow
     muted: barModule.controls.muted(section)
+    readonly property bool disconnected: section === "wifi" && !muted && barModule.controls.wifiDevice !== null &&
+                                         !barModule.controls.connectedNetwork
+
+    font.bold: disconnected
+    textColor: !enabled || muted || disconnected ? theme.colM : theme.colF
     focusPolicy: Qt.StrongFocus
     Accessible.name: barModule.controls.summary(section)
     Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section)
     onClicked: barModule.toggleDetails(section, summary, barWindow)
 
     text: {
+      if (section === "wifi") {
+        if (muted)
+          return "-";
+        if (disconnected)
+          return "~";
+      }
       if (section === "wifi" || section === "bluetooth")
         return barModule.controls.summary(section).replace(/^(Wi-Fi|Bluetooth) · /, "");
       return barModule.controls.value(section);
