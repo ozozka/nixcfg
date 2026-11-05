@@ -107,27 +107,21 @@ Scope {
       Row {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
-        spacing: barModule.theme.dimS
+        spacing: 0
 
         Workspaces {
 
           theme: barModule.theme
         }
-        Text {
-          anchors.verticalCenter: parent.verticalCenter
+        BarItem {
+          theme: barModule.theme
           text: bar.showingDate ? clockStats.date : clockStats.time
-          color: barModule.theme.colF
-          font.family: "monospace"
-          font.pointSize: barModule.theme.fontSizeM
+          focusPolicy: Qt.StrongFocus
+          onClicked: Quickshell.execDetached(["qs", "ipc", "call", "menu", "toggle"])
 
           TapHandler {
-            acceptedButtons: Qt.LeftButton | Qt.RightButton
-            onTapped: (eventPoint, button) => {
-              if (button === Qt.LeftButton)
-                Quickshell.execDetached(["qs", "ipc", "call", "menu", "toggle"]);
-              else if (button === Qt.RightButton)
-                bar.showingDate = !bar.showingDate;
-            }
+            acceptedButtons: Qt.RightButton
+            onTapped: bar.showingDate = !bar.showingDate
           }
         }
         Repeater {
@@ -143,12 +137,10 @@ Scope {
           theme: barModule.theme
           barWindow: bar
         }
-        Text {
-          text: "⌨ " + keyboard.layout
-          color: barModule.theme.colM
-          font.family: "monospace"
-          font.pointSize: barModule.theme.fontSizeM
-          anchors.verticalCenter: parent.verticalCenter
+        BarItem {
+          theme: barModule.theme
+          text: keyboard.layout ? "⌨ " + keyboard.layout : ""
+          textColor: theme.colM
         }
         Submap {
           theme: barModule.theme
@@ -157,9 +149,8 @@ Scope {
 
       Row {
         anchors.right: parent.right
-        anchors.rightMargin: barModule.theme.dimS
         anchors.verticalCenter: parent.verticalCenter
-        spacing: barModule.theme.dimS
+        spacing: 0
 
         Network {
 
@@ -469,84 +460,72 @@ Scope {
     return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)}M/s`;
   }
 
-  component ControlSummary: Lib.MenuButton {
-    id: summary
-    required property string section
-    required property var barWindow
-    theme: barModule.theme
-    opensMenu: true
-    enabled: barModule.controls.available(section)
-    selected: barModule.controls.expanded === section && barModule.detailBar === barWindow
-    muted: barModule.controls.muted(section)
+  component BarItem: Lib.MenuButton {
+    id: item
+    property color textColor: !enabled || muted ? theme.colM : theme.colF
     implicitHeight: theme.dimM
-    implicitWidth: summaryLabel.implicitWidth
+    implicitWidth: text.length > 0 ? label.implicitWidth : 0
+    visible: text.length > 0
     padding: 0
-    Accessible.name: barModule.controls.summary(section)
-    Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section)
-    onClicked: barModule.toggleDetails(section, summary, barWindow)
+    focusPolicy: Qt.NoFocus
+    font.family: "monospace"
+    font.pointSize: theme.fontSizeM
 
     contentItem: Text {
-      id: summaryLabel
-      text: {
-        const symbol = barModule.controls.symbol(summary.section);
-        if (summary.section === "wifi" || summary.section === "bluetooth")
-          return symbol + " " + barModule.controls.summary(summary.section).replace(/^(Wi-Fi|Bluetooth) · /, "");
-        const value = summary.section === "input" || summary.section === "output" ? barModule.controls.value(
-                                                                                      summary.section) :
-                                                                                    barModule.controls.summary(
-                                                                                      summary.section);
-        return symbol + " " + value;
-      }
-      color: !summary.enabled || summary.muted ? summary.theme.colM : summary.theme.colF
-      font.family: "monospace"
-      font.pointSize: summary.theme.fontSizeM
+      id: label
+      text: item.text.length > 0 ? " " + item.text + " " : ""
+      color: item.textColor
+      font: item.font
       verticalAlignment: Text.AlignVCenter
     }
   }
 
+  component ControlSummary: BarItem {
+    id: summary
+    required property string section
+    required property var barWindow
+    theme: barModule.theme
+    enabled: barModule.controls.available(section)
+    selected: barModule.controls.expanded === section && barModule.detailBar === barWindow
+    muted: barModule.controls.muted(section)
+    focusPolicy: Qt.StrongFocus
+    Accessible.name: barModule.controls.summary(section)
+    Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section)
+    onClicked: barModule.toggleDetails(section, summary, barWindow)
+
+    text: {
+      const symbol = barModule.controls.symbol(section);
+      if (section === "wifi" || section === "bluetooth")
+        return symbol + " " + barModule.controls.summary(section).replace(/^(Wi-Fi|Bluetooth) · /, "");
+      return symbol + " " + barModule.controls.value(section);
+    }
+  }
+
   component Workspaces: Row {
+    id: workspaces
     required property T theme
     spacing: 0
 
     Repeater {
       model: 6
 
-      Rectangle {
-        id: workspace
+      BarItem {
         required property int index
         readonly property var ws: Hyprland.workspaces.values.find(w => w.id === index + 1)
-        readonly property bool isActive: Hyprland.focusedWorkspace?.id === (index + 1)
         readonly property bool occupied: (ws?.toplevels.values.length ?? 0) > 0
-        width: glyph.implicitWidth
-        height: theme.dimM
-        color: workspace.isActive ? theme.colO : theme.colB
-
-        Text {
-          id: glyph
-          anchors.centerIn: parent
-          text: " 🞄 "
-          color: workspace.occupied ? theme.colF : theme.colM
-          font {
-            family: "monospace"
-            pointSize: theme.fontSizeM
-            bold: true
-          }
-        }
+        theme: workspaces.theme
+        selected: Hyprland.focusedWorkspace?.id === (index + 1)
+        text: "🞄"
+        textColor: occupied ? theme.colF : theme.colM
+        font.bold: true
       }
     }
   }
 
-  component Submap: Text {
+  component Submap: BarItem {
     id: submapDisplay
-    required property T theme
-
     property string submap: "default"
 
-    color: theme.colF
-    font {
-      family: "monospace"
-      pointSize: theme.fontSizeM
-    }
     text: submap
     visible: submap !== "default" && submap !== ""
 
@@ -568,87 +547,44 @@ Scope {
     }
   }
 
-  component Network: Text {
-    required property T theme
-
-    color: theme.colF
-    font {
-      family: "monospace"
-      pointSize: theme.fontSizeM
-    }
+  component Network: BarItem {
     text: barModule.network.connected ? `${barModule.formatRate(barModule.network.totalBytesPerSecond)}` : ""
   }
 
-  component Temperature: Text {
-    required property T theme
-    color: theme.colF
-    font {
-      family: "monospace"
-      pointSize: theme.fontSizeM
-    }
+  component Temperature: BarItem {
     text: `${Math.round(barModule.temperature.celsius)}°C`
   }
 
-  component Processes: Text {
-    required property T theme
-    color: theme.colF
-    font {
-      family: "monospace"
-      pointSize: theme.fontSizeM
-    }
+  component Processes: BarItem {
     text: `${barModule.processes.count}`
     Accessible.name: `${barModule.processes.count} processes`
   }
 
-  component Cpu: Text {
-    required property T theme
-    color: theme.colF
-    font {
-      family: "monospace"
-      pointSize: theme.fontSizeM
-    }
+  component Cpu: BarItem {
     text: `%${barModule.cpu.usage.toFixed(2)}`
   }
 
-  component Memory: Text {
-    required property T theme
-
-    color: theme.colF
-    font {
-      family: "monospace"
-      pointSize: theme.fontSizeM
-    }
+  component Memory: BarItem {
     text: `${(barModule.memory.usedBytes / (1024 * 1024 * 1024)).toFixed(2)}`
   }
 
-  component Battery: Lib.MenuButton {
+  component Battery: BarItem {
     id: batteryButton
-    opensMenu: true
     required property var barWindow
-    anchors.verticalCenter: parent.verticalCenter
-    implicitHeight: theme.dimM
-    implicitWidth: batteryLabel.implicitWidth
-    padding: 0
     enabled: barModule.controls.available("profiles")
     selected: barModule.controls.expanded === "profiles" && barModule.detailBar === barWindow
+    textColor: theme.colM
+    focusPolicy: Qt.StrongFocus
     Accessible.name: "Power profile"
-    Accessible.description: batteryLabel.text
+    Accessible.description: text
     onClicked: barModule.toggleDetails("profiles", batteryButton, barWindow)
 
     function formatRemaining(seconds) {
       return seconds > 0 ? `${Math.floor(seconds / 60)}m` : "";
     }
 
-    contentItem: Text {
-      id: batteryLabel
-      text: `▰ %${Math.round(battery.percentage)} · ${battery.status}` + (battery.status === "Full" || battery.remainingSeconds
-                                                                          <= 0 ? "" : " "
-                                                                                 + batteryButton.formatRemaining(
-                                                                                   battery.remainingSeconds))
-      color: batteryButton.theme.colM
-      font.family: "monospace"
-      font.pointSize: batteryButton.theme.fontSizeM
-      verticalAlignment: Text.AlignVCenter
-    }
+    text: `▰ %${Math.round(battery.percentage)} · ${battery.status}` + (battery.status === "Full" || battery.remainingSeconds
+                                                                        <= 0 ? "" : " " + formatRemaining(
+                                                                                 battery.remainingSeconds))
   }
 }

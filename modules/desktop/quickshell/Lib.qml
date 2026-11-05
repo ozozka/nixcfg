@@ -32,7 +32,6 @@ Scope {
     id: button
     required property T theme
     property bool selected: false
-    property bool opensMenu: false
     property string symbol: ""
     property string symbolFamily: "monospace"
     property string valueText: ""
@@ -90,8 +89,8 @@ Scope {
       }
     }
     background: Rectangle {
-      color: button.selected || (button.enabled && (button.down || (button.hovered && !button.opensMenu)))
-             ? button.theme.colO : button.theme.colB
+      color: button.selected || (button.enabled && (button.down || button.hovered)) ? button.theme.colO :
+                                                                                      button.theme.colB
     }
   }
 

@@ -193,7 +193,6 @@ Scope {
             Lib.MenuButton {
               theme: menuModule.theme
               symbol: "⏻"
-              opensMenu: true
               implicitHeight: menuModule.theme.dimM + menuModule.theme.dimS
               implicitWidth: implicitHeight
               Accessible.name: "Power actions"
