@@ -373,13 +373,6 @@ Scope {
       active: controls.active
       nodes: controls.audioCandidates
     }
-    Connections {
-      target: controls.profiles
-      function onBackendPresentChanged() {
-        if (!controls.profiles.backendPresent && controls.expanded === "profiles")
-          controls.reset();
-      }
-    }
 
     // Instantiated by the bar's detail popup; backend state remains shared.
     property Component details: Component {

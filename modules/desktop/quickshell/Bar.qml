@@ -69,11 +69,50 @@ Scope {
 
         Text {
           Layout.fillWidth: true
-          text: barModule.controls.title(barModule.controls.expanded)
+          text: barModule.controls.expanded === "profiles" ? "Battery" : barModule.controls.title(
+                                                               barModule.controls.expanded)
           color: barModule.theme.colF
           font.family: "sans-serif"
           font.pointSize: barModule.theme.fontSizeM
           font.bold: true
+        }
+        ColumnLayout {
+          Layout.fillWidth: true
+          visible: barModule.controls.expanded === "profiles"
+          spacing: barModule.theme.dimS
+
+          Lib.SectionText {
+            theme: barModule.theme
+            Layout.fillWidth: true
+            text: `Charge: %${Math.round(battery.percentage)}`
+          }
+          Lib.SectionText {
+            theme: barModule.theme
+            Layout.fillWidth: true
+            text: `Status: ${battery.status}`
+          }
+          Lib.SectionText {
+            theme: barModule.theme
+            Layout.fillWidth: true
+            visible: battery.status === "Charging" || battery.status === "Discharging"
+            text: battery.remainingSeconds > 0 ? (battery.status === "Charging" ? "Time until full: " : "Time remaining: ")
+                                                 + `${Math.floor(battery.remainingSeconds / 60)}m` :
+                                                 "Estimate unavailable"
+            color: theme.colM
+          }
+          Lib.SectionText {
+            theme: barModule.theme
+            Layout.fillWidth: true
+            text: "Power profiles"
+            font.bold: true
+          }
+          Lib.SectionText {
+            theme: barModule.theme
+            Layout.fillWidth: true
+            visible: !barModule.controls.profiles.available
+            text: "Power profiles unavailable"
+            color: theme.colM
+          }
         }
         Loader {
           Layout.fillWidth: true
@@ -570,21 +609,15 @@ Scope {
   component Battery: BarItem {
     id: batteryButton
     required property var barWindow
-    enabled: barModule.controls.available("profiles")
     selected: barModule.controls.expanded === "profiles" && barModule.detailBar === barWindow
-    textColor: theme.colM
+    textColor: battery.status === "Charging" || battery.status === "Discharging" ? theme.colF : theme.colM
     focusPolicy: Qt.StrongFocus
-    Accessible.name: "Power profile"
-    Accessible.description: text
+    Accessible.name: "Battery"
+
+    Accessible.description: `%${Math.round(battery.percentage)} · ${battery.status}`
     onClicked: barModule.toggleDetails("profiles", batteryButton, barWindow)
 
-    function formatRemaining(seconds) {
-      return seconds > 0 ? `${Math.floor(seconds / 60)}m` : "";
-    }
-
-    text: `%${Math.round(battery.percentage)} · ${battery.status}` + (battery.status === "Full"
-                                                                      || battery.remainingSeconds <= 0 ? "" : " "
-                                                                                                         + formatRemaining(
-                                                                                                           battery.remainingSeconds))
+    text: battery.status === "Full" ? "🞄" : (battery.status === "Discharging" ? "-" : "") + `%${Math.round(
+                                        battery.percentage)}`
   }
 }
