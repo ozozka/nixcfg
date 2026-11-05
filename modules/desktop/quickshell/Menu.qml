@@ -362,7 +362,6 @@ Scope {
       }
         text: modelData.name
         color: resultItem.current ? applications.theme.colF : applications.theme.colM
-        font.bold: resultItem.current
         font.family: "sans-serif"
         font.pointSize: applications.theme.fontSizeM
         elide: Text.ElideRight

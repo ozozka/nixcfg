@@ -8,6 +8,7 @@ import Quickshell.Wayland
 import Quickshell.Networking
 import Quickshell.Bluetooth
 import Quickshell.Services.Pipewire
+import Quickshell.Services.Mpris
 
 Scope {
   id: shared
@@ -34,6 +35,7 @@ Scope {
     property bool selected: false
     property string symbol: ""
     property string symbolFamily: "monospace"
+    property real symbolSize: theme.fontSizeM
     property string valueText: ""
     property bool muted: false
     implicitHeight: button.theme.dimM + button.theme.dimS
@@ -56,7 +58,7 @@ Scope {
         anchors.verticalCenter: parent.verticalCenter
         color: label.color
         font.family: button.symbolFamily
-        font.pointSize: button.theme.fontSizeM
+        font.pointSize: button.symbolSize
       }
       Text {
         id: label
@@ -70,7 +72,6 @@ Scope {
         color: !button.enabled || button.muted ? button.theme.colM : button.theme.colF
         font.family: "sans-serif"
         font.pointSize: button.theme.fontSizeM
-        font.bold: button.selected || button.activeFocus
         elide: Text.ElideRight
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
@@ -91,6 +92,179 @@ Scope {
     background: Rectangle {
       color: button.selected || (button.enabled && (button.down || button.hovered)) ? button.theme.colO :
                                                                                       button.theme.colB
+    }
+  }
+
+  component PlaybackButton: MenuButton {
+    required property string description
+    symbolSize: theme.fontSizeL
+    implicitWidth: theme.dimM + theme.dimS
+    implicitHeight: theme.dimM + theme.dimS
+    padding: 0
+    Accessible.name: description
+    ToolTip.visible: hovered
+    ToolTip.text: description
+  }
+
+  component PlaybackRepeatButton: PlaybackButton {
+    required property var player
+    readonly property int loopMode: player?.loopState ?? MprisLoopState.None
+    symbol: loopMode === MprisLoopState.Track ? "↻¹" : "↻"
+    description: "Repeat: " + (loopMode === MprisLoopState.Track ? "track" : loopMode === MprisLoopState.Playlist
+                                                                   ? "playlist" : "off") + " (click to cycle)"
+    muted: loopMode === MprisLoopState.None
+    selected: loopMode !== MprisLoopState.None
+    enabled: !!player?.canControl && !!player?.loopSupported
+    onClicked: {
+      player.loopState = loopMode === MprisLoopState.None ? MprisLoopState.Track : loopMode === MprisLoopState.Track
+                                                            ? MprisLoopState.Playlist : MprisLoopState.None;
+    }
+  }
+
+  component PlaybackDetails: ColumnLayout {
+    id: playbackView
+    required property T theme
+    required property var playback
+    readonly property var player: playback.player
+    spacing: theme.dimS
+
+    SectionText {
+      theme: playbackView.theme
+      Layout.fillWidth: true
+      text: "Playback"
+      font.bold: true
+    }
+    SectionText {
+      theme: playbackView.theme
+      Layout.fillWidth: true
+      visible: !playbackView.player
+      text: "No media player available"
+      color: theme.colM
+    }
+    ColumnLayout {
+      Layout.fillWidth: true
+      visible: playbackView.playback.players.length > 1
+      spacing: playbackView.theme.dimS
+      Repeater {
+        model: playbackView.playback.players
+        MenuButton {
+          required property var modelData
+          theme: playbackView.theme
+          Layout.fillWidth: true
+          text: modelData.identity || modelData.dbusName
+          selected: playbackView.player === modelData
+          onClicked: playbackView.playback.select(modelData)
+        }
+      }
+    }
+    ColumnLayout {
+      Layout.fillWidth: true
+      visible: !!playbackView.player
+      spacing: playbackView.theme.dimS
+
+      ColumnLayout {
+        Layout.fillWidth: true
+        Layout.minimumWidth: 0
+        spacing: playbackView.theme.dimS / 2
+
+        SectionText {
+          theme: playbackView.theme
+          Layout.fillWidth: true
+          Layout.minimumWidth: 0
+          text: playbackView.player?.identity || playbackView.player?.dbusName || ""
+          visible: playbackView.playback.players.length === 1
+          textFormat: Text.PlainText
+          font.pointSize: theme.fontSizeS
+          color: theme.colM
+        }
+        SectionText {
+          theme: playbackView.theme
+          Layout.fillWidth: true
+          Layout.minimumWidth: 0
+          text: playbackView.player?.trackTitle || "No track information"
+          horizontalAlignment: Text.AlignHCenter
+          textFormat: Text.PlainText
+          font.pointSize: theme.fontSizeS
+          font.bold: true
+          color: theme.colM
+        }
+      }
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: playbackView.theme.dimS
+        SectionText {
+          theme: playbackView.theme
+          text: playbackView.playback.timing || "Timing unavailable"
+          font.family: "monospace"
+          font.pointSize: theme.fontSizeS
+          color: playbackView.playback.playing ? theme.colF : theme.colM
+        }
+        Slider {
+          id: seek
+          Layout.fillWidth: true
+          from: 0
+          to: playbackView.player?.lengthSupported && playbackView.player.length > 0 ? playbackView.player.length : 1
+          value: playbackView.playback.position
+          enabled: !!playbackView.player?.canControl && !!playbackView.player?.canSeek
+                   && playbackView.playback.timing.length > 0
+          onMoved: playbackView.player.position = value
+          background: Rectangle {
+            x: seek.leftPadding
+            y: seek.topPadding + seek.availableHeight / 2 - height / 2
+            width: seek.availableWidth
+            height: playbackView.theme.dimT
+            color: playbackView.theme.colO
+            Rectangle {
+              width: seek.visualPosition * parent.width
+              height: parent.height
+              color: seek.enabled ? playbackView.theme.colF : playbackView.theme.colM
+            }
+          }
+          handle: Rectangle {
+            x: seek.leftPadding + seek.visualPosition * (seek.availableWidth - width)
+            y: seek.topPadding + seek.availableHeight / 2 - height / 2
+            implicitWidth: playbackView.theme.dimT
+            implicitHeight: playbackView.theme.dimS
+            color: seek.enabled ? playbackView.theme.colF : playbackView.theme.colM
+          }
+          Accessible.name: "Playback position"
+        }
+        PlaybackRepeatButton {
+          theme: playbackView.theme
+          player: playbackView.player
+        }
+      }
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: playbackView.theme.dimS
+        Item {
+          Layout.fillWidth: true
+        }
+        PlaybackButton {
+          theme: playbackView.theme
+          symbol: "⏮"
+          description: "Previous track"
+          enabled: !!playbackView.player?.canGoPrevious && !!playbackView.player?.canControl
+          onClicked: playbackView.player.previous()
+        }
+        PlaybackButton {
+          theme: playbackView.theme
+          symbol: playbackView.playback.playing ? "⏸" : "▶"
+          description: playbackView.playback.playing ? "Pause" : "Play"
+          enabled: !!playbackView.player?.canControl && !!playbackView.player?.canTogglePlaying
+          onClicked: playbackView.player.togglePlaying()
+        }
+        PlaybackButton {
+          theme: playbackView.theme
+          symbol: "⏭"
+          description: "Next track"
+          enabled: !!playbackView.player?.canGoNext && !!playbackView.player?.canControl
+          onClicked: playbackView.player.next()
+        }
+        Item {
+          Layout.fillWidth: true
+        }
+      }
     }
   }
 
@@ -624,6 +798,7 @@ Scope {
           SectionText {
             theme: controls.theme
             Layout.fillWidth: true
+            Layout.topMargin: controls.theme.dimS
             text: "Speaker"
             font.bold: true
           }
@@ -654,15 +829,17 @@ Scope {
     readonly property bool available: !!node?.ready && !!node?.audio
     readonly property var devices: audioControl.controlOwner.audioDevices.filter(device => device.isSink !== input)
     spacing: audioControl.controlOwner.theme.dimS
-    SectionText {
-      theme: audioControl.theme
-      Layout.fillWidth: true
-      text: audioControl.controlOwner.audioMetadata.label(audioControl.node)
-      color: audioControl.available && audioControl.node.audio.muted ? audioControl.controlOwner.theme.colM :
-                                                                       audioControl.controlOwner.theme.colF
-    }
     RowLayout {
       Layout.fillWidth: true
+      spacing: audioControl.theme.dimS
+      MenuButton {
+        theme: audioControl.theme
+        Layout.alignment: Qt.AlignVCenter
+        text: audioControl.available && audioControl.node.audio.muted ? "Unmute" : "Mute"
+        selected: audioControl.available && audioControl.node.audio.muted
+        enabled: audioControl.available
+        onClicked: audioControl.node.audio.muted = !audioControl.node.audio.muted
+      }
       Slider {
         id: volume
         Layout.fillWidth: true
@@ -681,7 +858,7 @@ Scope {
             width: volume.visualPosition * parent.width
             height: parent.height
             color: audioControl.available && audioControl.node.audio.muted ? audioControl.controlOwner.theme.colM :
-                                                                             audioControl.controlOwner.theme.colP
+                                                                             audioControl.controlOwner.theme.colF
           }
         }
         handle: Rectangle {
@@ -690,9 +867,7 @@ Scope {
           implicitWidth: 14
           implicitHeight: 20
           color: !volume.enabled || audioControl.node.audio.muted ? audioControl.controlOwner.theme.colM :
-                                                                    volume.activeFocus
-                                                                    ? audioControl.controlOwner.theme.colF :
-                                                                      audioControl.controlOwner.theme.colP
+                                                                    audioControl.controlOwner.theme.colF
         }
       }
       SectionText {
@@ -704,18 +879,6 @@ Scope {
         color: audioControl.available && audioControl.node.audio.muted ? audioControl.controlOwner.theme.colM :
                                                                          audioControl.controlOwner.theme.colF
       }
-    }
-    MenuButton {
-      theme: audioControl.theme
-      text: audioControl.available && audioControl.node.audio.muted ? "Unmute" : "Mute"
-      selected: audioControl.available && audioControl.node.audio.muted
-      enabled: audioControl.available
-      onClicked: audioControl.node.audio.muted = !audioControl.node.audio.muted
-    }
-    SectionText {
-      theme: audioControl.theme
-      text: "Devices"
-      font.bold: true
     }
     Repeater {
       model: audioControl.devices

@@ -5,6 +5,7 @@ import QtQuick.Layouts
 import Quickshell.Io
 import Quickshell.Networking
 import Quickshell.Hyprland
+import Quickshell.Services.Mpris
 
 Scope {
   id: barModule
@@ -69,8 +70,8 @@ Scope {
 
         Text {
           Layout.fillWidth: true
-          text: barModule.controls.expanded === "profiles" ? "Battery" : barModule.controls.title(
-                                                               barModule.controls.expanded)
+          visible: barModule.controls.expanded === "profiles"
+          text: "Battery"
           color: barModule.theme.colF
           font.family: "sans-serif"
           font.pointSize: barModule.theme.fontSizeM
@@ -116,7 +117,87 @@ Scope {
         }
         Loader {
           Layout.fillWidth: true
+          Layout.bottomMargin: visible ? barModule.theme.dimS : 0
+          visible: barModule.controls.expanded === "output"
+          sourceComponent: visible ? playbackDetails : null
+        }
+        Loader {
+          Layout.fillWidth: true
           sourceComponent: details.visible ? barModule.controls.details : null
+        }
+      }
+    }
+  }
+
+  Component {
+    id: playbackDetails
+    Lib.PlaybackDetails {
+      theme: barModule.theme
+      playback: media
+    }
+  }
+
+  Scope {
+    id: media
+    // playerctld mirrors the active real player, including its identity and metadata.
+    readonly property var players: Mpris.players.values.filter(player => player.dbusName
+                                                                         !== "org.mpris.MediaPlayer2.playerctld")
+    property var selectedPlayer: null
+    property bool manualSelection: false
+    readonly property var player: players.includes(selectedPlayer) ? selectedPlayer : null
+    readonly property bool playing: player?.isPlaying ?? false
+    property int positionTick: 0
+    readonly property real position: {
+      // MPRIS extrapolates position on read; it does not notify every elapsed second.
+      positionTick;
+      return player?.positionSupported ? Math.max(0, Math.min(player.length > 0 ? player.length : Infinity,
+                                                              player.position)) : 0;
+    }
+    readonly property string timing: player?.lengthSupported && player?.positionSupported && Number.isFinite(
+                                       player.length) && player.length > 0 ? `${formatTime(player.length)}-${formatTime(
+                                                                               position)}` : ""
+
+    function formatTime(seconds) {
+      const total = Math.max(0, Math.floor(seconds));
+      const minutes = Math.floor(total / 60);
+      return `${minutes}:${String(total % 60).padStart(2, "0")}`;
+    }
+
+    function select(target) {
+      manualSelection = true;
+      selectedPlayer = target;
+    }
+
+    function reconcile() {
+      if (!players.includes(selectedPlayer)) {
+        manualSelection = false;
+        selectedPlayer = players.find(candidate => candidate.isPlaying) ?? players[0] ?? null;
+      } else if (!manualSelection && !selectedPlayer.isPlaying) {
+        selectedPlayer = players.find(candidate => candidate.isPlaying) ?? selectedPlayer;
+      }
+    }
+
+    onPlayersChanged: reconcile()
+    Component.onCompleted: reconcile()
+
+    Timer {
+      interval: 1000
+      running: media.playing && (media.player?.positionSupported ?? false)
+      repeat: true
+      onTriggered: media.positionTick++
+    }
+    Variants {
+      model: media.players
+      Scope {
+        required property var modelData
+        Connections {
+          target: modelData
+          function onIsPlayingChanged() {
+            if (!media.manualSelection && modelData.isPlaying)
+              media.selectedPlayer = modelData;
+            else
+              media.reconcile();
+          }
         }
       }
     }
@@ -502,20 +583,35 @@ Scope {
   component BarItem: Lib.MenuButton {
     id: item
     property color textColor: !enabled || muted ? theme.colM : theme.colF
+    property string suffixText: ""
+    property color suffixColor: textColor
     implicitHeight: theme.dimM
-    implicitWidth: text.length > 0 ? label.implicitWidth : 0
+    implicitWidth: text.length > 0 ? label.implicitWidth + suffix.implicitWidth : 0
     visible: text.length > 0
     padding: 0
     focusPolicy: Qt.NoFocus
     font.family: "monospace"
     font.pointSize: theme.fontSizeM
 
-    contentItem: Text {
-      id: label
-      text: item.text.length > 0 ? " " + item.text + " " : ""
-      color: item.textColor
-      font: item.font
-      verticalAlignment: Text.AlignVCenter
+    contentItem: Row {
+      Text {
+        id: label
+        text: item.text.length > 0 ? " " + item.text + (item.suffixText ? "" : " ") : ""
+        textFormat: Text.PlainText
+        color: item.textColor
+        font: item.font
+        height: item.height
+        verticalAlignment: Text.AlignVCenter
+      }
+      Text {
+        id: suffix
+        text: item.suffixText ? " " + item.suffixText + " " : ""
+        textFormat: Text.PlainText
+        color: item.suffixColor
+        font: item.font
+        height: item.height
+        verticalAlignment: Text.AlignVCenter
+      }
     }
   }
 
@@ -524,7 +620,7 @@ Scope {
     required property string section
     required property var barWindow
     theme: barModule.theme
-    enabled: barModule.controls.available(section)
+    enabled: barModule.controls.available(section) || (section === "output" && media.player !== null)
     selected: barModule.controls.expanded === section && barModule.detailBar === barWindow
     muted: barModule.controls.muted(section)
     readonly property bool disconnected: section === "wifi" && !muted && barModule.controls.wifiDevice !== null &&
@@ -534,7 +630,11 @@ Scope {
     textColor: !enabled || muted || disconnected ? theme.colM : theme.colF
     focusPolicy: Qt.StrongFocus
     Accessible.name: barModule.controls.summary(section)
-    Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section)
+    suffixText: section === "output" ? media.timing : ""
+    suffixColor: media.playing ? theme.colF : theme.colM
+    Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section) + (suffixText ? " · "
+                                                                                                          + suffixText :
+                                                                                                          "")
     onClicked: barModule.toggleDetails(section, summary, barWindow)
 
     text: {
