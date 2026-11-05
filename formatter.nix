@@ -41,8 +41,8 @@ pkgs.treefmt.withConfig {
         command = lib.getExe pkgs.ruff;
         includes = [ "*.py" ];
         options = [
-          "--no-cache"
           "check"
+          "--no-cache"
           "--line-length"
           "96"
           "--fix"
@@ -54,8 +54,8 @@ pkgs.treefmt.withConfig {
         command = lib.getExe pkgs.ruff;
         includes = [ "*.py" ];
         options = [
-          "--no-cache"
           "format"
+          "--no-cache"
           "--line-length"
           "96"
         ];
