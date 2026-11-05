@@ -1,7 +1,7 @@
 { pkgs, lib, ... }:
 
 let
-  lineWidth = 120;
+  lineWidth = 96;
 in
 pkgs.treefmt.withConfig {
   settings = {
