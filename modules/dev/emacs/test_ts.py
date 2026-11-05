@@ -2,7 +2,7 @@
 
 import unittest
 
-from convert import (
+from ts import (
     NIX_FUNCTION,
     NIX_REMOVALS,
     capture,

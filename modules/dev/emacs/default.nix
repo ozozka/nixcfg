@@ -2,6 +2,7 @@
 
 let
   cfg = config.ozozka;
+  ts = pkgs.callPackage ./ts.nix { };
 in
 {
   imports = [
@@ -27,13 +28,14 @@ in
     startWithGraphical = true;
     package = (pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages (epkgs: [
       (epkgs.treesit-grammars.with-grammars (
-        grammars: with grammars; [
+        grammars:
+        with grammars;
+        [
           tree-sitter-bash
           tree-sitter-c
           tree-sitter-cpp
           tree-sitter-css
           tree-sitter-dockerfile
-          tree-sitter-gitattributes
           # tree-sitter-git-config
           # tree-sitter-git-rebase
           tree-sitter-gitattributes
@@ -43,18 +45,17 @@ in
           tree-sitter-javascript
           tree-sitter-jsdoc
           tree-sitter-json
-          tree-sitter-just
           tree-sitter-lua
           tree-sitter-markdown
           tree-sitter-markdown-inline
-          tree-sitter-nix
           tree-sitter-python
           tree-sitter-rust
           tree-sitter-tsx
           tree-sitter-typescript
-          tree-sitter-typst
           tree-sitter-yaml
         ]
+        # Grammars for the converted highlighting queries.
+        ++ ts.grammars
       ))
     ]);
   };
@@ -101,7 +102,7 @@ in
         (provide 'my-options)
         ;;; my-options.el ends here
       '';
-      "tree-sitter/queries" = pkgs.ozozka.emacs-ts;
+      "tree-sitter/queries" = ts;
     };
   };
 }

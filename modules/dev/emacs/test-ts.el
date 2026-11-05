@@ -1,4 +1,4 @@
-;;; test-emacs.el --- Query integration checks -*- lexical-binding: t; -*-
+;;; test-ts.el --- Query integration checks -*- lexical-binding: t; -*-
 
 (require 'ert)
 (require 'treesit-x)
@@ -68,4 +68,4 @@
     (emacs-ts-test-face "42" 'font-lock-number-face)
     (emacs-ts-test-face "true" 'font-lock-constant-face)))
 
-;;; test-emacs.el ends here
+;;; test-ts.el ends here

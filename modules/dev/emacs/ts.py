@@ -1,13 +1,13 @@
-"""Adapt the pinned Nix, Just and Typst highlight queries for Emacs treesit-x.
+"""Adapt pinned upstream highlight queries for Emacs treesit-x.
 
 This is deliberately not a general query/regexp translator. Unknown predicates
 and regexp constructs, or changes to required Nix patterns, fail the build so
 upstream changes require review. Balanced query forms are parsed before mapping
 captures and predicates; strings and comments are never substituted.
 
-Source paths and build dependencies belong to default.nix. This standard-library
-converter runs only at build time; grammar selection and mode definitions remain
-in modules/dev/emacs/.
+Languages, source paths and build dependencies belong to ts.nix. This
+standard-library converter runs only at build time; mode definitions live in
+my-modes.el.
 """
 
 import argparse
@@ -250,8 +250,6 @@ def patterns(nodes: list) -> list[list]:
 
 
 def convert_query(source: str, language: str) -> str:
-    if language not in {"nix", "just", "typst"}:
-        raise ValueError(f"unsupported language {language!r}")
     output = []
     priority = []
     removed = set()
@@ -279,7 +277,7 @@ def convert_query(source: str, language: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("language", choices=["nix", "just", "typst"])
+    parser.add_argument("language")
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
     args = parser.parse_args()

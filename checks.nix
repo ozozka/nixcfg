@@ -11,10 +11,10 @@ let
   };
 
   formatter = pkgs.callPackage ./formatter.nix { };
-  emacsTs = pkgs.callPackage ./pkgs/emacs-ts { };
+  emacsTs = pkgs.callPackage ./modules/dev/emacs/ts.nix { };
 in
 {
-  emacs-ts = emacsTs;
+  emacs-ts = emacsTs.tests.unit;
   emacs-ts-emacs = emacsTs.tests.emacs;
 
   codex-hooks = pkgs.runCommand "codex-hooks-check" { nativeBuildInputs = [ pkgs.python3 ]; } ''
