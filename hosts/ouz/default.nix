@@ -67,7 +67,6 @@ inputs.nixpkgs.lib.nixosSystem {
         };
         home.users = {
           ouz = {
-            codex = true;
             emacs = true;
             pi = true;
           };
