@@ -16,25 +16,22 @@ in
 
   environment.systemPackages = with pkgs; [ claude-code ];
 
-  # Managed settings take precedence over user settings, and hooks from both run.
-  # ~/.claude/settings.json stays writable for Claude's own state.
+  # Managed settings take precedence over user settings, and hooks from both run. ~/.claude/settings.json stays writable for Claude's own state.
   environment.etc."claude-code/managed-settings.json".source =
     settingsFormat.generate "claude-managed-settings.json"
       {
-        # ANSI themes follow the terminal palette, like the Pi theme.
         theme = if config.ozozka.col.isDark then "dark-ansi" else "light-ansi";
+        tui = "default";
         statusLine = {
           type = "command";
           command = "${python} ${./statusline.py} ${pkgs.git}/bin/git";
           padding = 0;
-          # Keep reset countdowns moving while the session is idle.
           refreshInterval = 30;
         };
         hooks = {
           SessionStart = [
             {
-              # Resumed sessions already carry the documentation in their transcript.
-              matcher = "^(startup|clear|compact)$";
+              matcher = "^(startup|clear|compact)$"; # Resumed sessions already carry the documentation in their transcript.
               hooks = [
                 {
                   type = "command";
