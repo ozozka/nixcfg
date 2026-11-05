@@ -133,7 +133,6 @@ Scope {
     readonly property var players: Mpris.players.values.filter(player => player.dbusName
                                                                          !== "org.mpris.MediaPlayer2.playerctld")
     property var selectedPlayer: null
-    property bool manualSelection: false
     readonly property var player: players.includes(selectedPlayer) ? selectedPlayer : null
     readonly property bool playing: player?.isPlaying ?? false
     property int positionTick: 0
@@ -156,15 +155,14 @@ Scope {
     }
 
     function select(target) {
-      manualSelection = true;
-      selectedPlayer = target;
+      if (players.includes(target))
+        selectedPlayer = target;
     }
 
     function reconcile() {
       if (!players.includes(selectedPlayer)) {
-        manualSelection = false;
         selectedPlayer = players.find(candidate => candidate.isPlaying) ?? players[0] ?? null;
-      } else if (!manualSelection && !selectedPlayer.isPlaying) {
+      } else if (!selectedPlayer.isPlaying) {
         selectedPlayer = players.find(candidate => candidate.isPlaying) ?? selectedPlayer;
       }
     }
@@ -185,8 +183,9 @@ Scope {
         Connections {
           target: modelData
           function onIsPlayingChanged() {
-            if (!media.manualSelection && modelData.isPlaying)
-              media.selectedPlayer = modelData;
+            // New playback activity always takes precedence over manual selection.
+            if (modelData.isPlaying)
+              media.select(modelData);
             else
               media.reconcile();
           }
