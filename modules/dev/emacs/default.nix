@@ -82,8 +82,8 @@ in
         (defcustom my-theme-col-p "#${cfg.col.p.hex}" "Primary color." :type 'color :group 'my-options)
         (defcustom my-theme-col-s "#${cfg.col.s.hex}" "Secondary color." :type 'color :group 'my-options)
         (defcustom my-theme-col-f "#${cfg.col.f.hex}" "Foreground color." :type 'color :group 'my-options)
-        (defcustom my-theme-col-m "#${cfg.col.m.hex}" "Muted foreground color." :type 'color :group 'my-options)
-        (defcustom my-theme-col-o "#${cfg.col.o.hex}" "Overlay/background accent color." :type 'color :group 'my-options)
+        (defcustom my-theme-col-m "#${cfg.col.m.hex}" "Muted color." :type 'color :group 'my-options)
+        (defcustom my-theme-col-o "#${cfg.col.o.hex}" "Overlay color." :type 'color :group 'my-options)
         (defcustom my-theme-col-b "#${cfg.col.b.hex}" "Background color." :type 'color :group 'my-options)
 
         (defcustom my-theme-fonts-mono "${cfg.font.mono.name}" "Monospace font family." :type 'string :group 'my-options)
@@ -91,12 +91,12 @@ in
         (defcustom my-theme-fonts-sans "${cfg.font.sans.name}" "Sans-serif font family." :type 'string :group 'my-options)
         (defcustom my-theme-fonts-emoji "${cfg.font.emoji.name}" "Emoji font family." :type 'string :group 'my-options)
 
-        (defcustom my-theme-font-size-t ${toString (cfg.fontSize.t * 10)} "Tiny font height." :type 'integer :group 'my-options)
-        (defcustom my-theme-font-size-s ${toString (cfg.fontSize.s * 10)} "Small font height." :type 'integer :group 'my-options)
-        (defcustom my-theme-font-size-m ${toString (cfg.fontSize.m * 10)} "Medium font height." :type 'integer :group 'my-options)
-        (defcustom my-theme-font-size-l ${toString (cfg.fontSize.l * 10)} "Large font height." :type 'integer :group 'my-options)
-        (defcustom my-theme-font-size-x ${toString (cfg.fontSize.x * 10)} "Extra font height." :type 'integer :group 'my-options)
-        (defcustom my-theme-font-size-h ${toString (cfg.fontSize.h * 10)} "Huge font height." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-t ${toString (cfg.fontSize.t * 10)} "Tiny font size." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-s ${toString (cfg.fontSize.s * 10)} "Small font size." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-m ${toString (cfg.fontSize.m * 10)} "Medium font size." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-l ${toString (cfg.fontSize.l * 10)} "Large font size." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-x ${toString (cfg.fontSize.x * 10)} "Extra font size." :type 'integer :group 'my-options)
+        (defcustom my-theme-font-size-h ${toString (cfg.fontSize.h * 10)} "Huge font size." :type 'integer :group 'my-options)
 
         (provide 'my-options)
         ;;; my-options.el ends here
