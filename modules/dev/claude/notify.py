@@ -42,7 +42,7 @@ def notify(event, cwd, busctl):
                 "org.freedesktop.Notifications",
                 "Notify",
                 "susssasa{sv}i",
-                "Claude Code",
+                "Claude",
                 "0",
                 "",
                 cwd.name or str(cwd),

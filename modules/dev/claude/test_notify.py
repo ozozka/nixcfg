@@ -45,7 +45,7 @@ class NotifyTest(unittest.TestCase):
             notify.notify(event, self.root, "/injected/busctl")
             args = run.call_args.args[0]
             self.assertEqual(args[0], "/injected/busctl")
-            self.assertIn("Claude Code", args)
+            self.assertIn("Claude", args)
             self.assertIn(self.root.name, args)
             self.assertIn(message, args)
             self.assertEqual(args[-1], "-1")
