@@ -155,25 +155,18 @@ Scope {
             height: theme.dimM * 2
             color: theme.colB
 
-            TextInput {
+            Lib.AuthInput {
               id: password
+              theme: lockModule.theme
               anchors {
                 fill: parent
                 margins: theme.dimS
               }
               focus: true
               enabled: !pam.active || lockModule.awaitingUserResponse
-              color: theme.colF
-              selectionColor: theme.colP
-              selectedTextColor: theme.colB
-              font {
-                family: "monospace"
-                pointSize: theme.fontSizeL
-              }
+              font.pointSize: theme.fontSizeL
               echoMode: pam.responseRequired && pam.responseVisible ? TextInput.Normal :
                                                                       TextInput.Password
-              inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
-              verticalAlignment: TextInput.AlignVCenter
               horizontalAlignment: TextInput.AlignHCenter
 
               onTextChanged: lockModule.authenticationFailed = false
@@ -184,27 +177,21 @@ Scope {
             }
           }
 
-          Text {
+          Lib.Label {
+            theme: lockModule.theme
             width: parent.width
             visible: lockModule.authenticationFailed
             color: theme.colS
             horizontalAlignment: Text.AlignHCenter
-            font {
-              family: "sans-serif"
-              pointSize: theme.fontSizeM
-            }
             text: "Authentication failed"
           }
 
-          Text {
+          Lib.Label {
+            theme: lockModule.theme
             width: parent.width
             visible: lockModule.authenticating
             color: theme.colM
             horizontalAlignment: Text.AlignHCenter
-            font {
-              family: "sans-serif"
-              pointSize: theme.fontSizeM
-            }
             text: lockModule.awaitingUserResponse ? pam.message : "Authenticating"
           }
         }

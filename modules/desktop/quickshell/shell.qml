@@ -17,7 +17,6 @@ ShellRoot {
   Menu {
     id: menu
     theme: root.theme
-    lib: root.lib
     focusedScreen: root.lib.focusedScreen
     onOpened: bar.closeDetails()
   }

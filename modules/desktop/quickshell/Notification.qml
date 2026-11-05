@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -68,10 +69,6 @@ Scope {
     }
   }
 
-  NotificationStore {
-    id: store
-  }
-
   IpcHandler {
     target: "notifications"
     function dismissAll(): void {
@@ -138,28 +135,26 @@ Scope {
       }
       spacing: card.theme.dimS
 
-      Row {
+      RowLayout {
         width: parent.width
         spacing: card.theme.dimS
 
         Image {
           id: notificationImage
-          width: card.theme.dimM
-          height: card.theme.dimM
+          Layout.preferredWidth: card.theme.dimM
+          Layout.preferredHeight: card.theme.dimM
+          Layout.alignment: Qt.AlignTop
           visible: source.toString().length > 0
           source: card.imageSource()
           fillMode: Image.PreserveAspectCrop
           asynchronous: true
         }
 
-        Text {
-          width: parent.width - (notificationImage.visible ? notificationImage.width
-                                                             + parent.spacing : 0)
-                 - arrivalTime.width - parent.spacing
-          color: card.theme.colF
-          font.family: "sans-serif"
-          font.pointSize: card.theme.fontSizeM
-          wrapMode: Text.Wrap
+        Lib.SectionText {
+          theme: card.theme
+          Layout.fillWidth: true
+          Layout.minimumWidth: 0
+          Layout.alignment: Qt.AlignTop
           textFormat: Text.RichText
 
           function escapeHeading(value) {
@@ -172,32 +167,29 @@ Scope {
                 + escapeHeading(card.notification?.summary ?? "")
         }
 
-        Text {
-          id: arrivalTime
+        Lib.Label {
+          theme: card.theme
+          Layout.alignment: Qt.AlignTop
+          Layout.minimumWidth: implicitWidth
           text: Qt.formatDateTime(card.notificationState.receivedAt, "HH:mm")
           color: card.theme.colM
           font.family: "monospace"
-          font.pointSize: card.theme.fontSizeM
           horizontalAlignment: Text.AlignRight
         }
       }
 
-      Text {
+      Lib.SectionText {
+        theme: card.theme
         width: parent.width
         visible: text.length > 0
-        color: card.theme.colF
-        font {
-          family: "serif"
-          pointSize: card.theme.fontSizeM
-        }
-        wrapMode: Text.Wrap
+        font.family: "serif"
         textFormat: Text.PlainText
         text: card.notification?.body ?? ""
       }
     }
   }
 
-  component NotificationStore: Scope {
+  Scope {
     id: store
     property var states: []
     signal promoted

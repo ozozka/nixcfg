@@ -3,12 +3,38 @@ import Quickshell
 import Quickshell.Services.Polkit
 
 Scope {
+  id: polkitModule
   required property T theme
+
+  component ActionButton: Rectangle {
+    id: button
+    required property T theme
+    required property string text
+    property color foreground: theme.colF
+    property bool bold: false
+    signal clicked
+    width: label.implicitWidth + theme.dimS * 2
+    height: theme.dimM
+    Lib.Label {
+      id: label
+      theme: button.theme
+      anchors.centerIn: parent
+      text: button.text
+      color: button.foreground
+      font.family: "monospace"
+      font.bold: button.bold
+    }
+    TapHandler {
+      onTapped: button.clicked()
+    }
+  }
+
   PolkitAgent {
     id: agent
   }
 
   FloatingWindow {
+    id: dialog
     visible: agent.isActive
     title: "quickshell-polkit"
     color: "transparent"
@@ -35,64 +61,44 @@ Scope {
         }
         spacing: theme.dimS
 
-        Text {
+        Lib.Heading {
+          theme: polkitModule.theme
           width: parent.width
-          color: theme.colF
-          font {
-            family: "monospace"
-            pointSize: theme.fontSizeL
-            bold: true
-          }
-          wrapMode: Text.Wrap
+          font.family: "monospace"
+          font.pointSize: theme.fontSizeL
           text: "Authentication required"
         }
 
-        Text {
+        Lib.SectionText {
+          theme: polkitModule.theme
           width: parent.width
-          color: theme.colF
-          font {
-            family: "sans-serif"
-            pointSize: theme.fontSizeM
-          }
-          wrapMode: Text.Wrap
           textFormat: Text.PlainText
           text: agent.flow?.message ?? ""
         }
 
-        Text {
+        Lib.SectionText {
+          theme: polkitModule.theme
           width: parent.width
           visible: text.length > 0
           color: theme.colM
-          font {
-            family: "sans-serif"
-            pointSize: theme.fontSizeM
-          }
-          wrapMode: Text.Wrap
           textFormat: Text.PlainText
           text: agent.flow?.inputPrompt ?? ""
         }
 
-        Text {
+        Lib.SectionText {
+          theme: polkitModule.theme
           width: parent.width
           visible: text.length > 0
           color: agent.flow?.supplementaryIsError ? theme.colS : theme.colM
-          font {
-            family: "sans-serif"
-            pointSize: theme.fontSizeM
-          }
-          wrapMode: Text.Wrap
           textFormat: Text.PlainText
           text: agent.flow?.supplementaryMessage ?? ""
         }
 
-        Text {
+        Lib.Label {
+          theme: polkitModule.theme
           width: parent.width
           visible: agent.flow?.failed ?? false
           color: theme.colS
-          font {
-            family: "sans-serif"
-            pointSize: theme.fontSizeM
-          }
           text: "Authentication failed"
         }
 
@@ -101,23 +107,15 @@ Scope {
           height: theme.dimM * 1.5
           color: theme.colB
 
-          TextInput {
+          Lib.AuthInput {
             id: response
+            theme: polkitModule.theme
             anchors {
               fill: parent
               margins: theme.dimS
             }
             enabled: agent.flow?.isResponseRequired ?? false
-            color: theme.colF
-            selectionColor: theme.colP
-            selectedTextColor: theme.colB
-            font {
-              family: "monospace"
-              pointSize: theme.fontSizeM
-            }
             echoMode: agent.flow?.responseVisible ? TextInput.Normal : TextInput.Password
-            inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
-            verticalAlignment: TextInput.AlignVCenter
 
             function submit() {
               if (!agent.flow?.isResponseRequired)
@@ -135,60 +133,35 @@ Scope {
           anchors.right: parent.right
           spacing: theme.dimS
 
-          Rectangle {
-            width: cancelText.implicitWidth + theme.dimS * 2
-            height: theme.dimM
+          ActionButton {
+            theme: polkitModule.theme
+            text: "Cancel"
             color: theme.colO
-
-            Text {
-              id: cancelText
-              anchors.centerIn: parent
-              color: theme.colF
-              font {
-                family: "monospace"
-                pointSize: theme.fontSizeM
-              }
-              text: "Cancel"
-            }
-
-            TapHandler {
-              onTapped: agent.flow?.cancelAuthenticationRequest()
-            }
+            onClicked: agent.flow?.cancelAuthenticationRequest()
           }
-
-          Rectangle {
-            width: authenticateText.implicitWidth + theme.dimS * 2
-            height: theme.dimM
+          ActionButton {
+            theme: polkitModule.theme
+            text: "Authenticate"
             color: agent.flow?.isResponseRequired ? theme.colP : theme.colM
-
-            Text {
-              id: authenticateText
-              anchors.centerIn: parent
-              color: theme.colB
-              font {
-                family: "monospace"
-                pointSize: theme.fontSizeM
-                bold: true
-              }
-              text: "Authenticate"
-            }
-
-            TapHandler {
-              enabled: agent.flow?.isResponseRequired ?? false
-              onTapped: response.submit()
-            }
+            foreground: theme.colB
+            bold: true
+            enabled: agent.flow?.isResponseRequired ?? false
+            onClicked: response.submit()
           }
         }
       }
     }
 
+    function resetResponse() {
+      response.text = "";
+      if (agent.flow?.isResponseRequired)
+        Qt.callLater(() => response.forceActiveFocus());
+    }
+
     Connections {
       target: agent
-
       function onFlowChanged() {
-        response.text = "";
-        if (agent.flow?.isResponseRequired)
-          Qt.callLater(() => response.forceActiveFocus());
+        dialog.resetResponse();
       }
     }
 
@@ -196,9 +169,7 @@ Scope {
       target: agent.flow
 
       function onIsResponseRequiredChanged() {
-        response.text = "";
-        if (agent.flow?.isResponseRequired)
-          Qt.callLater(() => response.forceActiveFocus());
+        dialog.resetResponse();
       }
 
       function onAuthenticationSucceeded() {

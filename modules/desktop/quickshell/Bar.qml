@@ -11,11 +11,6 @@ Scope {
   id: barModule
   required property T theme
   required property Lib lib
-  readonly property alias cpu: cpu
-  readonly property alias memory: memory
-  readonly property alias network: network
-  readonly property alias processes: processes
-  readonly property alias temperature: temperature
   readonly property var controls: lib.controls
   property var detailBar: null
   signal controlsOpened
@@ -48,9 +43,8 @@ Scope {
                                                     0).x : -1;
     }
     menuWidth: Math.min(380, Math.max(0, width - theme.dimS * 2))
-    menuHeight: Math.min(detailBody.implicitHeight + theme.dimS * 2, Math.max(0, height
-                                                                              - theme.dimM
-                                                                              - theme.dimS * 2))
+    menuHeight: Math.min(detailBody.implicitHeight, Math.max(0, height - theme.dimM - theme.dimS
+                                                             * 2))
     onDismissRequested: barModule.closeDetails()
     onKeyPressed: event => {
       if (event.key === Qt.Key_Escape) {
@@ -59,76 +53,65 @@ Scope {
       }
     }
 
-    Flickable {
+    Lib.ScrollColumn {
+      id: detailBody
+      theme: barModule.theme
       anchors.fill: parent
-      anchors.margins: barModule.theme.dimS
-      contentHeight: detailBody.implicitHeight
-      clip: true
-      boundsBehavior: Flickable.StopAtBounds
 
+      Lib.Heading {
+        theme: barModule.theme
+        Layout.fillWidth: true
+        visible: barModule.controls.expanded === "profiles"
+        text: "Battery"
+      }
       ColumnLayout {
-        id: detailBody
-        width: parent.width
+        Layout.fillWidth: true
+        visible: barModule.controls.expanded === "profiles"
         spacing: barModule.theme.dimS
 
-        Text {
+        Lib.SectionText {
+          theme: barModule.theme
           Layout.fillWidth: true
-          visible: barModule.controls.expanded === "profiles"
-          text: "Battery"
-          color: barModule.theme.colF
-          font.family: "sans-serif"
-          font.pointSize: barModule.theme.fontSizeM
+          text: `Charge: %${Math.round(battery.percentage)}`
+        }
+        Lib.SectionText {
+          theme: barModule.theme
+          Layout.fillWidth: true
+          text: `Status: ${battery.status}`
+        }
+        Lib.SectionText {
+          theme: barModule.theme
+          Layout.fillWidth: true
+          visible: battery.status === "Charging" || battery.status === "Discharging"
+          text: battery.remainingSeconds > 0 ? (battery.status === "Charging"
+                                                ? "Time until full: " : "Time remaining: ")
+                                               + Math.floor(battery.remainingSeconds / 60)
+                                               + "m" : "Estimate unavailable"
+          color: theme.colM
+        }
+        Lib.SectionText {
+          theme: barModule.theme
+          Layout.fillWidth: true
+          text: "Power profiles"
           font.bold: true
         }
-        ColumnLayout {
+        Lib.SectionText {
+          theme: barModule.theme
           Layout.fillWidth: true
-          visible: barModule.controls.expanded === "profiles"
-          spacing: barModule.theme.dimS
-
-          Lib.SectionText {
-            theme: barModule.theme
-            Layout.fillWidth: true
-            text: `Charge: %${Math.round(battery.percentage)}`
-          }
-          Lib.SectionText {
-            theme: barModule.theme
-            Layout.fillWidth: true
-            text: `Status: ${battery.status}`
-          }
-          Lib.SectionText {
-            theme: barModule.theme
-            Layout.fillWidth: true
-            visible: battery.status === "Charging" || battery.status === "Discharging"
-            text: battery.remainingSeconds > 0 ? (battery.status === "Charging"
-                                                  ? "Time until full: " : "Time remaining: ")
-                                                 + `
-${Math.floor(battery.remainingSeconds / 60)}m` : "Estimate unavailable"
-            color: theme.colM
-          }
-          Lib.SectionText {
-            theme: barModule.theme
-            Layout.fillWidth: true
-            text: "Power profiles"
-            font.bold: true
-          }
-          Lib.SectionText {
-            theme: barModule.theme
-            Layout.fillWidth: true
-            visible: !barModule.controls.profiles.available
-            text: "Power profiles unavailable"
-            color: theme.colM
-          }
+          visible: !barModule.controls.profiles.available
+          text: "Power profiles unavailable"
+          color: theme.colM
         }
-        Loader {
-          Layout.fillWidth: true
-          Layout.bottomMargin: visible ? barModule.theme.dimS : 0
-          visible: barModule.controls.expanded === "output"
-          sourceComponent: visible ? playbackDetails : null
-        }
-        Loader {
-          Layout.fillWidth: true
-          sourceComponent: details.visible ? barModule.controls.details : null
-        }
+      }
+      Loader {
+        Layout.fillWidth: true
+        Layout.bottomMargin: visible ? barModule.theme.dimS : 0
+        visible: barModule.controls.expanded === "output"
+        sourceComponent: visible ? playbackDetails : null
+      }
+      Loader {
+        Layout.fillWidth: true
+        sourceComponent: details.visible ? barModule.controls.details : null
       }
     }
   }
@@ -159,8 +142,9 @@ ${Math.floor(battery.remainingSeconds / 60)}m` : "Estimate unavailable"
                                          0;
     }
     readonly property string timing: player?.lengthSupported && player?.positionSupported
-                                     && Number.isFinite(player.length) && player.length > 0 ? `
-${formatTime(player.length)}-${formatTime(position)}` : ""
+                                     && Number.isFinite(player.length) && player.length > 0
+                                     ? formatTime(player.length) + "-" + formatTime(position) :
+                                       ""
 
     function formatTime(seconds) {
       const total = Math.max(0, Math.floor(seconds));
@@ -267,8 +251,10 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
           text: keyboard.layout
           textColor: theme.colM
         }
-        Submap {
+        BarItem {
           theme: barModule.theme
+          text: submap.name
+          visible: text !== "default" && text !== ""
         }
       }
 
@@ -277,23 +263,39 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
         anchors.verticalCenter: parent.verticalCenter
         spacing: 0
 
-        Network {
-
+        BarItem {
           theme: barModule.theme
+          text: network.connected ? barModule.formatRate(network.totalBytesPerSecond) : ""
         }
-        Temperature {
+        BarItem {
           theme: barModule.theme
+          text: Math.round(temperature.celsius) + "°C"
         }
-        Processes {
+        BarItem {
           theme: barModule.theme
+          text: processes.count
+          Accessible.name: processes.count + " processes"
         }
-        Cpu {
+        BarItem {
           theme: barModule.theme
+          text: "%" + cpu.usage.toFixed(2)
         }
-        Memory {
+        BarItem {
           theme: barModule.theme
+          text: (memory.usedBytes / (1024 * 1024 * 1024)).toFixed(2)
         }
       }
+    }
+  }
+
+  Timer {
+    interval: 600
+    running: true
+    repeat: true
+    onTriggered: {
+      for (const file of [capacityFile, statusFile, energyFile, fullEnergyFile, powerFile,
+                          statFile, meminfoFile, networkFile, temperatureFile])
+        file.reload();
     }
   }
 
@@ -343,18 +345,6 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
       id: powerFile
       path: "/sys/class/power_supply/BAT1/power_now"
       onLoaded: battery.updateNumber(this, "power")
-    }
-    Timer {
-      interval: 600
-      running: true
-      repeat: true
-      onTriggered: {
-        capacityFile.reload();
-        statusFile.reload();
-        energyFile.reload();
-        fullEnergyFile.reload();
-        powerFile.reload();
-      }
     }
   }
 
@@ -435,13 +425,6 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
       path: "/proc/stat"
       onLoaded: cpu.update(text())
     }
-
-    Timer {
-      interval: 600
-      running: true
-      repeat: true
-      onTriggered: statFile.reload()
-    }
   }
 
   Scope {
@@ -468,13 +451,6 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
       id: meminfoFile
       path: "/proc/meminfo"
       onLoaded: memory.update(text())
-    }
-
-    Timer {
-      interval: 600
-      running: true
-      repeat: true
-      onTriggered: meminfoFile.reload()
     }
   }
 
@@ -522,13 +498,6 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
       path: "/proc/net/dev"
       onLoaded: network.update(text())
     }
-
-    Timer {
-      interval: 600
-      running: true
-      repeat: true
-      onTriggered: networkFile.reload()
-    }
   }
 
   Scope {
@@ -569,13 +538,6 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
         if (!Number.isNaN(millidegrees))
           temperature.celsius = millidegrees / 1000;
       }
-    }
-
-    Timer {
-      interval: 600
-      running: true
-      repeat: true
-      onTriggered: temperatureFile.reload()
     }
   }
 
@@ -626,37 +588,28 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
     id: summary
     required property string section
     required property var barWindow
+    readonly property var owner: barModule.controls
     theme: barModule.theme
-    enabled: barModule.controls.available(section) || (section === "output" && media.player
-                                                       !== null)
-    selected: barModule.controls.expanded === section && barModule.detailBar === barWindow
-    muted: barModule.controls.muted(section)
-    readonly property bool disconnected: section === "wifi" && !muted
-                                         && barModule.controls.wifiDevice !== null &&
-                                         !barModule.controls.connectedNetwork
+    enabled: owner.available(section) || (section === "output" && media.player !== null)
+    selected: owner.expanded === section && barModule.detailBar === barWindow
+    muted: owner.muted(section)
+    readonly property bool disconnected: section === "wifi" && !muted && owner.wifiDevice
+                                         !== null && !owner.connectedNetwork
 
     font.bold: disconnected
     textColor: !enabled || muted || disconnected ? theme.colM : theme.colF
     focusPolicy: Qt.StrongFocus
-    Accessible.name: barModule.controls.summary(section)
+    Accessible.name: owner.summary(section)
     suffixText: section === "output" ? media.timing : ""
     suffixColor: media.playing ? theme.colF : theme.colM
-    Accessible.description: (muted ? "Muted · " : "") + barModule.controls.value(section) + (suffixText
-                                                                                             ? " · " + suffixText :
-                                                                                               "")
+    Accessible.description: (muted ? "Muted · " : "") + owner.value(section) + (suffixText
+                                                                                ? " · " + suffixText :
+                                                                                  "")
     onClicked: barModule.toggleDetails(section, summary, barWindow)
 
-    text: {
-      if (section === "wifi") {
-        if (muted)
-          return "-";
-        if (disconnected)
-          return "~";
-      }
-      if (section === "wifi" || section === "bluetooth")
-        return barModule.controls.summary(section).replace(/^(Wi-Fi|Bluetooth) · /, "");
-      return barModule.controls.value(section);
-    }
+    text: section !== "wifi" ? owner.value(section) : muted ? "-" : disconnected ? "~" :
+                                                                                   owner.wifiStatus
+
   }
 
   component Workspaces: Row {
@@ -680,51 +633,24 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
     }
   }
 
-  component Submap: BarItem {
-    id: submapDisplay
-    property string submap: "default"
-
-    text: submap
-    visible: submap !== "default" && submap !== ""
+  Scope {
+    id: submap
+    property string name: "default"
 
     Process {
-      id: submapProcess
       command: ["hyprctl", "submap"]
       running: true
       stdout: StdioCollector {
-        onStreamFinished: submapDisplay.submap = this.text.trim()
+        onStreamFinished: submap.name = text.trim()
       }
     }
-
     Connections {
       target: Hyprland
       function onRawEvent(event) {
         if (event.name === "submap")
-          submapDisplay.submap = event.data || "default";
+          submap.name = event.data || "default";
       }
     }
-  }
-
-  component Network: BarItem {
-    text: barModule.network.connected ? `${barModule.formatRate(
-                                          barModule.network.totalBytesPerSecond)}` : ""
-  }
-
-  component Temperature: BarItem {
-    text: `${Math.round(barModule.temperature.celsius)}°C`
-  }
-
-  component Processes: BarItem {
-    text: `${barModule.processes.count}`
-    Accessible.name: `${barModule.processes.count} processes`
-  }
-
-  component Cpu: BarItem {
-    text: `%${barModule.cpu.usage.toFixed(2)}`
-  }
-
-  component Memory: BarItem {
-    text: `${(barModule.memory.usedBytes / (1024 * 1024 * 1024)).toFixed(2)}`
   }
 
   component Battery: BarItem {
@@ -739,7 +665,7 @@ ${formatTime(player.length)}-${formatTime(position)}` : ""
     Accessible.description: `%${Math.round(battery.percentage)} · ${battery.status}`
     onClicked: barModule.toggleDetails("profiles", batteryButton, barWindow)
 
-    text: battery.status === "Full" ? "🞄" : (battery.status === "Discharging" ? "-" : "") + `%
-${Math.round(battery.percentage)}`
+    text: battery.status === "Full" ? "🞄" : (battery.status === "Discharging" ? "-%" : "%")
+                                      + Math.round(battery.percentage)
   }
-  }
+}

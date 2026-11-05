@@ -19,7 +19,6 @@ Scope {
     id: controls
     theme: shared.theme
     profiles: powerProfiles
-    active: true
   }
 
   PowerProfiles {
@@ -135,11 +134,10 @@ Scope {
     readonly property var player: playback.player
     spacing: theme.dimS
 
-    SectionText {
+    Heading {
       theme: playbackView.theme
       Layout.fillWidth: true
       text: "Playback"
-      font.bold: true
     }
     SectionText {
       theme: playbackView.theme
@@ -206,8 +204,12 @@ Scope {
           font.pointSize: theme.fontSizeS
           color: playbackView.playback.playing ? theme.colF : theme.colM
         }
-        Slider {
-          id: seek
+        ThemedSlider {
+          theme: playbackView.theme
+          trackThickness: theme.dimT
+          handleWidth: theme.dimT
+          handleHeight: theme.dimS
+          fillColor: enabled ? theme.colF : theme.colM
           Layout.fillWidth: true
           from: 0
           to: playbackView.player?.lengthSupported && playbackView.player.length > 0
@@ -216,25 +218,6 @@ Scope {
           enabled: !!playbackView.player?.canControl && !!playbackView.player?.canSeek
                    && playbackView.playback.timing.length > 0
           onMoved: playbackView.player.position = value
-          background: Rectangle {
-            x: seek.leftPadding
-            y: seek.topPadding + seek.availableHeight / 2 - height / 2
-            width: seek.availableWidth
-            height: playbackView.theme.dimT
-            color: playbackView.theme.colO
-            Rectangle {
-              width: seek.visualPosition * parent.width
-              height: parent.height
-              color: seek.enabled ? playbackView.theme.colF : playbackView.theme.colM
-            }
-          }
-          handle: Rectangle {
-            x: seek.leftPadding + seek.visualPosition * (seek.availableWidth - width)
-            y: seek.topPadding + seek.availableHeight / 2 - height / 2
-            implicitWidth: playbackView.theme.dimT
-            implicitHeight: playbackView.theme.dimS
-            color: seek.enabled ? playbackView.theme.colF : playbackView.theme.colM
-          }
           Accessible.name: "Playback position"
         }
         PlaybackRepeatButton {
@@ -355,7 +338,8 @@ Scope {
     required property T theme
     required property var profiles
     readonly property alias audioMetadata: audioMetadata
-    property bool active: false
+    readonly property var output: Pipewire.defaultAudioSink
+    readonly property bool outputAvailable: !!output?.ready && !!output?.audio
     property string expanded: ""
     property var selectionAnchor: null
     property var pendingNetwork: null
@@ -401,80 +385,34 @@ Scope {
         profiles.refresh();
     }
 
-    function title(section) {
-      return ({
-                wifi: "Connections",
-                bluetooth: "Bluetooth",
-                profiles: "Power profile",
-                output: "Audio",
-                input: "Microphone"
-              })[section] ?? "";
-    }
-
-    function symbol(section) {
-      return ({
-                wifi: "≋",
-                bluetooth: "⋈",
-                profiles: "⚡︎",
-                output: "♫",
-                input: "♩"
-              })[section] ?? "";
-    }
-
-    function audioNode(section) {
-      return section === "input" ? Pipewire.defaultAudioSource : Pipewire.defaultAudioSink;
+    readonly property string wifiStatus: {
+      if (!wifiDevice)
+        return "unavailable";
+      if (!Networking.wifiHardwareEnabled)
+        return "blocked";
+      if (!Networking.wifiEnabled)
+        return "off";
+      return connectedNetwork?.name || "Not connected";
     }
 
     function summary(section) {
-      if (section === "wifi") {
-        if (!wifiDevice)
-          return "Wi-Fi · unavailable";
-        if (!Networking.wifiHardwareEnabled)
-          return "Wi-Fi · blocked";
-        if (!Networking.wifiEnabled)
-          return "Wi-Fi · off";
-        return "Wi-Fi · " + (connectedNetwork?.name || "Not connected");
-      }
-      if (section === "bluetooth")
-        return !adapter ? "Bluetooth · unavailable" : !adapter.enabled ? "Bluetooth · -" :
-                                                                         "Bluetooth · "
-                                                                         + adapter.devices.values.filter(
-                                                                           device => device.connected).length
-                                                                         + " connected";
-      if (section === "profiles")
-        return profiles.available ? `Power · ${profiles.activeProfile}` :
-                                    "Power profile · unavailable";
-      return (section === "input" ? "Microphone · " : "Speaker · ") + audioMetadata.label(
-            audioNode(section));
+      return section === "wifi" ? "Wi-Fi · " + wifiStatus : "Speaker · " + audioMetadata.label(
+                                    output);
     }
 
     function value(section) {
-      if (section !== "input" && section !== "output")
-        return "";
-      const node = audioNode(section);
-      return node?.ready && node?.audio ? `%${Math.round(node.audio.volume * 100)}` : "—";
+      return section !== "output" ? "" : outputAvailable ? "%" + Math.round(output.audio.volume
+                                                                            * 100) : "—";
     }
 
     function muted(section) {
-      if (section === "wifi")
-        return !Networking.wifiEnabled || !Networking.wifiHardwareEnabled;
-      if (section === "bluetooth")
-        return !!adapter && !adapter.enabled;
-      if (section !== "input" && section !== "output")
-        return false;
-      const node = audioNode(section);
-      return !!node?.ready && !!node?.audio && node.audio.muted;
+      return section === "wifi" ? !Networking.wifiEnabled || !Networking.wifiHardwareEnabled :
+                                  outputAvailable && output.audio.muted;
     }
 
     function available(section) {
-      if (section === "wifi")
-        return wifiDevice !== null || adapter !== null;
-      if (section === "bluetooth")
-        return adapter !== null;
-      if (section === "profiles")
-        return profiles.available;
-      return section === "output" ? audioDevices.length > 0 : audioDevices.some(device =>
-      !device.isSink);
+      return section === "wifi" ? wifiDevice !== null || adapter !== null : audioDevices.length
+                                  > 0;
     }
 
     function refreshWifi() {
@@ -514,7 +452,7 @@ Scope {
         id: scanError
       }
       onExited: (code, status) => {
-        if (!controls.active || controls.expanded !== "wifi")
+        if (controls.expanded !== "wifi")
           return;
         if (code === 0 && status === 0)
           scanSettling.restart();
@@ -533,7 +471,7 @@ Scope {
       target: controls.wifiDevice
       property: "scannerEnabled"
       value: true
-      when: controls.active && controls.expanded === "wifi" && controls.wifiDevice !== null
+      when: controls.expanded === "wifi" && controls.wifiDevice !== null
             && Networking.wifiEnabled
 
       restoreMode: Binding.RestoreBindingOrValue
@@ -542,8 +480,7 @@ Scope {
       target: controls.adapter
       property: "discovering"
       value: true
-      when: controls.active && controls.expanded === "wifi" && (controls.adapter?.enabled
-                                                                ?? false)
+      when: controls.expanded === "wifi" && (controls.adapter?.enabled ?? false)
       restoreMode: Binding.RestoreBindingOrValue
     }
     Connections {
@@ -571,54 +508,57 @@ Scope {
     }
     AudioDevices {
       id: audioMetadata
-      active: controls.active
+      active: true
       nodes: controls.audioCandidates
     }
 
-    // Instantiated by the bar's detail popup; backend state remains shared.
-    property Component details: Component {
+    // Only the selected view is instantiated; backend state remains shared.
+    readonly property Component details: expanded === "wifi" ? connectionDetails : expanded
+                                                               === "output" ? audioDetails :
+                                                                              profileDetails
+
+    Component {
+      id: profileDetails
       ColumnLayout {
         spacing: controls.theme.dimS
-        ColumnLayout {
-          Layout.fillWidth: true
-          visible: controls.expanded === "profiles"
-          spacing: controls.theme.dimS
-          Repeater {
-            model: controls.profiles.availableProfiles
-            MenuButton {
-              theme: controls.theme
-              required property string modelData
-              Layout.fillWidth: true
-              text: modelData
-              selected: controls.profiles.activeProfile === modelData
-              enabled: controls.profiles.available && !controls.profiles.busy
-              onClicked: controls.profiles.setProfile(modelData)
-            }
-          }
-          SectionText {
+        Repeater {
+          model: controls.profiles.availableProfiles
+          MenuButton {
             theme: controls.theme
+            required property string modelData
             Layout.fillWidth: true
-            visible: text.length > 0
-            color: controls.theme.colS
-            text: controls.profiles.error
+            text: modelData
+            selected: controls.profiles.activeProfile === modelData
+            enabled: controls.profiles.available && !controls.profiles.busy
+            onClicked: controls.profiles.setProfile(modelData)
           }
         }
+        SectionText {
+          theme: controls.theme
+          Layout.fillWidth: true
+          visible: text.length > 0
+          color: controls.theme.colS
+          text: controls.profiles.error
+        }
+      }
+    }
 
+    Component {
+      id: connectionDetails
+      ColumnLayout {
+        spacing: controls.theme.dimS
         Loader {
           Layout.fillWidth: true
-          visible: controls.expanded === "wifi"
-          sourceComponent: visible ? bluetoothDetails : null
+          sourceComponent: bluetoothDetails
         }
 
         ColumnLayout {
           Layout.fillWidth: true
-          visible: controls.expanded === "wifi"
           spacing: controls.theme.dimS
-          SectionText {
+          Heading {
             theme: controls.theme
             Layout.fillWidth: true
             text: "Wi-Fi"
-            font.bold: true
           }
           RowLayout {
             Layout.fillWidth: true
@@ -681,23 +621,18 @@ Scope {
             text: controls.networkError
             color: controls.passwordNetwork ? controls.theme.colM : controls.theme.colS
           }
-          TextField {
+          Field {
             id: password
+            theme: controls.theme
             Layout.fillWidth: true
             visible: controls.passwordNetwork !== null
             text: controls.passwordText
             onTextEdited: controls.passwordText = text
             placeholderText: "Wi-Fi password"
+            font.pointSize: controls.theme.fontSizeM
             echoMode: TextInput.Password
-            color: controls.theme.colF
-            placeholderTextColor: controls.theme.colM
             selectionColor: controls.theme.colP
             selectedTextColor: controls.theme.colB
-            font.family: "sans-serif"
-            font.pointSize: controls.theme.fontSizeM
-            background: Rectangle {
-              color: controls.theme.colO
-            }
             onAccepted: controls.submitPassword()
             Connections {
               target: controls
@@ -718,11 +653,10 @@ Scope {
           id: bluetoothDetails
           ColumnLayout {
             spacing: controls.theme.dimS
-            SectionText {
+            Heading {
               theme: controls.theme
               Layout.fillWidth: true
               text: "Bluetooth"
-              font.bold: true
             }
             MenuButton {
               theme: controls.theme
@@ -769,18 +703,14 @@ Scope {
               text: pairing.prompt
               font.bold: true
             }
-            TextField {
+            Field {
+              theme: controls.theme
               Layout.fillWidth: true
               visible: pairing.busy && pairing.prompt.length > 0 && !pairing.confirmation
               text: controls.pairingText
               onTextEdited: controls.pairingText = text
               placeholderText: "PIN / passkey"
-              color: controls.theme.colF
-              placeholderTextColor: controls.theme.colM
               font.family: "monospace"
-              background: Rectangle {
-                color: controls.theme.colO
-              }
               onAccepted: {
                 pairing.respond(text);
                 controls.pairingText = "";
@@ -810,45 +740,109 @@ Scope {
             }
           }
         }
-        ColumnLayout {
-          Layout.fillWidth: true
-          visible: controls.expanded === "output"
-          spacing: controls.theme.dimS
-
-          SectionText {
-            theme: controls.theme
-            Layout.fillWidth: true
-            text: "Microphone"
-            font.bold: true
-          }
+      }
+    }
+    Component {
+      id: audioDetails
+      ColumnLayout {
+        spacing: controls.theme.dimS
+        Repeater {
+          model: [true, false]
           AudioOptions {
+            required property bool modelData
             controlOwner: controls
+            input: modelData
             Layout.fillWidth: true
-            input: true
-          }
-          SectionText {
-            theme: controls.theme
-            Layout.fillWidth: true
-            Layout.topMargin: controls.theme.dimS
-            text: "Speaker"
-            font.bold: true
-          }
-          AudioOptions {
-            controlOwner: controls
-            Layout.fillWidth: true
-            input: false
+            Layout.topMargin: input ? 0 : theme.dimS
           }
         }
       }
     }
   }
 
-  component SectionText: Text {
+  component Label: Text {
     required property T theme
     color: theme.colF
     font.family: "sans-serif"
     font.pointSize: theme.fontSizeM
+  }
+
+  component SectionText: Label {
     wrapMode: Text.Wrap
+  }
+
+  component Heading: SectionText {
+    font.bold: true
+  }
+
+  component Field: TextField {
+    required property T theme
+    color: theme.colF
+    placeholderTextColor: theme.colM
+    font.family: "sans-serif"
+    background: Rectangle {
+      color: theme.colO
+    }
+  }
+
+  component AuthInput: TextInput {
+    required property T theme
+    color: theme.colF
+    selectionColor: theme.colP
+    selectedTextColor: theme.colB
+    font.family: "monospace"
+    font.pointSize: theme.fontSizeM
+    inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
+    verticalAlignment: TextInput.AlignVCenter
+  }
+
+  component ThemedSlider: Slider {
+    id: slider
+    required property T theme
+    property bool muted: false
+    property real trackThickness: 4
+    property real handleWidth: 14
+    property real handleHeight: 20
+    property color fillColor: muted ? theme.colM : theme.colF
+    background: Rectangle {
+      x: slider.leftPadding
+      y: slider.topPadding + slider.availableHeight / 2 - height / 2
+      width: slider.availableWidth
+      height: slider.trackThickness
+      color: slider.theme.colO
+      Rectangle {
+        width: slider.visualPosition * parent.width
+        height: parent.height
+        color: slider.fillColor
+      }
+    }
+    handle: Rectangle {
+      x: slider.leftPadding + slider.visualPosition * (slider.availableWidth - width)
+      y: slider.topPadding + slider.availableHeight / 2 - height / 2
+      implicitWidth: slider.handleWidth
+      implicitHeight: slider.handleHeight
+      color: !slider.enabled || slider.muted ? slider.theme.colM : slider.theme.colF
+    }
+  }
+
+  component ScrollColumn: Item {
+    id: scroll
+    required property T theme
+    default property alias contents: column.data
+    property real inset: theme.dimS
+    implicitHeight: column.implicitHeight + inset * 2
+    Flickable {
+      anchors.fill: parent
+      anchors.margins: scroll.inset
+      contentHeight: column.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      ColumnLayout {
+        id: column
+        width: parent.width
+        spacing: scroll.theme.dimS
+      }
+    }
   }
 
   component AudioOptions: ColumnLayout {
@@ -858,50 +852,36 @@ Scope {
     required property bool input
     readonly property var node: input ? Pipewire.defaultAudioSource : Pipewire.defaultAudioSink
     readonly property bool available: !!node?.ready && !!node?.audio
+    readonly property bool muted: available && node.audio.muted
     readonly property var devices: audioControl.controlOwner.audioDevices.filter(device
                                                                                  => device.isSink
                                                                                     !== input)
-    spacing: audioControl.controlOwner.theme.dimS
+    spacing: theme.dimS
+    Heading {
+      theme: audioControl.theme
+      Layout.fillWidth: true
+      text: audioControl.input ? "Microphone" : "Speaker"
+    }
     RowLayout {
       Layout.fillWidth: true
       spacing: audioControl.theme.dimS
       MenuButton {
         theme: audioControl.theme
         Layout.alignment: Qt.AlignVCenter
-        text: audioControl.available && audioControl.node.audio.muted ? "Unmute" : "Mute"
-        selected: audioControl.available && audioControl.node.audio.muted
+        text: audioControl.muted ? "Unmute" : "Mute"
+        selected: audioControl.muted
         enabled: audioControl.available
         onClicked: audioControl.node.audio.muted = !audioControl.node.audio.muted
       }
-      Slider {
-        id: volume
+      ThemedSlider {
+        theme: audioControl.theme
+        muted: audioControl.muted
         Layout.fillWidth: true
         from: 0
         to: 1.5
         value: audioControl.available ? audioControl.node.audio.volume : 0
         enabled: audioControl.available
         onMoved: audioControl.node.audio.volume = value
-        background: Rectangle {
-          x: volume.leftPadding
-          y: volume.topPadding + volume.availableHeight / 2 - height / 2
-          width: volume.availableWidth
-          height: 4
-          color: audioControl.controlOwner.theme.colO
-          Rectangle {
-            width: volume.visualPosition * parent.width
-            height: parent.height
-            color: audioControl.available && audioControl.node.audio.muted
-                   ? audioControl.controlOwner.theme.colM : audioControl.controlOwner.theme.colF
-          }
-        }
-        handle: Rectangle {
-          x: volume.leftPadding + volume.visualPosition * (volume.availableWidth - width)
-          y: volume.topPadding + volume.availableHeight / 2 - height / 2
-          implicitWidth: 14
-          implicitHeight: 20
-          color: !volume.enabled || audioControl.node.audio.muted
-                 ? audioControl.controlOwner.theme.colM : audioControl.controlOwner.theme.colF
-        }
       }
       SectionText {
         theme: audioControl.theme
@@ -911,8 +891,7 @@ Scope {
         text: audioControl.available ? `%${Math.round(audioControl.node.audio.volume * 100)}` :
                                        "—"
 
-        color: audioControl.available && audioControl.node.audio.muted
-               ? audioControl.controlOwner.theme.colM : audioControl.controlOwner.theme.colF
+        color: audioControl.muted ? theme.colM : theme.colF
       }
     }
     Repeater {
@@ -970,40 +949,40 @@ Scope {
         if (object.type !== "PipeWire:Interface:Node")
           continue;
         const props = object.info?.props ?? {};
+        const mediaClass = props["media.class"];
         // Virtual/other audio classes must not inherit a physical port's disconnected status.
         if (props["node.virtual"] === true || props["node.virtual"] === "true" || !["Audio/Sink",
                                                                                     "Audio/Source"].includes(
-              props["media.class"]))
+              mediaClass))
           continue;
         const params = devices[String(props["device.id"])] ?? {};
         const profileDevice = props["card.profile.device"];
-        const direction = props["media.class"] === "Audio/Sink" ? "Output" : "Input";
+        const deviceId = String(profileDevice);
+        const direction = mediaClass === "Audio/Sink" ? "Output" : "Input";
         const routes = profileDevice === undefined ? [] : (params.EnumRoute ?? []).filter(route
-                                                                                          => route.direction
-                                                                                             === direction
-                                                                                             && (route.devices
-                                                                                                 ?? []).some(
-                                                                                               device => String(
-                                                                                                           device)
-                                                                                                         === String(
-                                                                                                           profileDevice)));
+                                                                                          => {
+                                                                                            return route.direction
+                                                                                                === direction
+                                                                                                && (route.devices
+                                                                                                    ?? []).some(
+                                                                                                  device => String(
+                                                                                                              device)
+                                                                                                            === deviceId);
+                                                                                          });
         if (!routes.length)
           continue;
         const current = (params.Route ?? []).find(route => route.direction === direction
-                                                           && String(route.device) === String(
-                                                             profileDevice));
+                                                           && String(route.device)
+                                                           === deviceId);
         const route = routes.find(candidate => candidate.index === current?.index
                                                && candidate.available !== "no") ?? routes.find(
                 candidate => candidate.available === "yes") ?? routes.find(candidate
                                                                            => candidate.available
                                                                               !== "no")
               ?? routes[0];
-        const availability = routes.every(candidate => candidate.available === "no") ? "no" :
-                                                                                       routes.some(
-                                                                                         candidate
-                                                                                         => candidate.available
-                                                                                            === "yes")
-                                                                                       ? "yes" : "unknown";
+        const allUnavailable = routes.every(route => route.available === "no");
+        const anyAvailable = routes.some(route => route.available === "yes");
+        const availability = allUnavailable ? "no" : anyAvailable ? "yes" : "unknown";
         const product = routeInfo(route, "device.product.name");
         result[props["node.name"]] = {
           availability: availability,
