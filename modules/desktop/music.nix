@@ -29,6 +29,7 @@ in
       startWhenNeeded = true;
       settings = {
         music_directory = cfg.directory;
+        auto_update = "yes";
         audio_output = [
           {
             name = "PipeWire Output";
@@ -37,6 +38,16 @@ in
         ];
       };
     };
+
+    systemd.services.mpd.serviceConfig.ExecStart = lib.mkForce [
+      ""
+      (toString (
+        pkgs.writeShellScript "mpd-start" ''
+          export XDG_RUNTIME_DIR="/run/user/$(${pkgs.coreutils}/bin/id -u)"
+          exec ${pkgs.mpd}/bin/mpd --systemd /run/mpd/mpd.conf
+        ''
+      ))
+    ];
 
     environment.systemPackages = with pkgs; [ mpc ]; # rmpc
   };
