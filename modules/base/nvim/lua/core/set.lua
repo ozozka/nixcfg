@@ -65,7 +65,8 @@ key("i", "<Tab>", function ()
   else
     return "<Tab>"
   end
-end, { expr = true, silent = true })
+end, { expr = true, silent = true }
+)
 
 -- symbols
 opt.list = true

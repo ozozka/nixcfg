@@ -11,9 +11,10 @@ api.nvim_create_autocmd({
   "LspDetach",
   "DiagnosticChanged",
   "VimResized",
-}, {
-  callback = function () vim.cmd "redrawstatus" end,
-})
+},
+  {
+    callback = function () vim.cmd "redrawstatus" end,
+  })
 
 local modes = {
   i = con { col "OzStatModeI", " I " },
@@ -26,9 +27,10 @@ local modes = {
 }
 
 local function get_buf_color (buf)
-  return buf.hidden == 1 and (buf.changed == 1 and "OzBufHiddenChanged" or "OzBufHidden")
-    or buf.changed == 1 and "OzBufChanged"
-    or "OzBuf"
+  if buf.hidden == 1 then
+    return buf.changed == 1 and "OzBufHiddenChanged" or "OzBufHidden"
+  end
+  return buf.changed == 1 and "OzBufChanged" or "OzBuf"
 end
 
 function OzStatusline ()

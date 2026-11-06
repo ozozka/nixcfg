@@ -46,7 +46,7 @@ local Rule = setmetatable({}, {
       pats = {},
       headp = headp,
       tailp = tailp,
-      headp_len = api.nvim_strwidth(headp), --strdisplaywidth
+      headp_len = api.nvim_strwidth(headp), -- strdisplaywidth
       tailp_len = api.nvim_strwidth(tailp),
       ft = ft,
       not_ft = not_ft,
@@ -76,24 +76,29 @@ end
 
 local function Pair (...)
   local rule = Rule(...)
+  local tail_key = rule.tailp:match "[%z\1-\127\194-\244][\128-\191]*"
+  local head_key = rule.headp:match "[^\128-\191][\128-\191]*$"
+
+  local function at_tail (meta)
+    return meta.key == meta.nextc and meta.key == meta.pat.tailp
+  end
+  local function in_pair (meta)
+    return meta.pat.headp == meta.prevc and meta.pat.tailp == meta.nextc
+  end
+  local function move (meta)
+    return keys.jr:rep(meta.pat.tailp_len)
+  end
+  local function delete (meta)
+    return keys.bs:rep(meta.pat.headp_len) .. keys.del:rep(meta.pat.tailp_len)
+  end
+  local function pair (meta)
+    return meta.key .. meta.pat.tailp .. keys.jl:rep(meta.pat.tailp_len)
+  end
+
   return rule
-    :Pat("move", rule.tailp:match "[%z\1-\127\194-\244][\128-\191]*", {
-      function (meta) return meta.key == meta.nextc and meta.key == meta.pat.tailp end,
-    }, function (meta) return keys.jr:rep(meta.pat.tailp_len) end)
-    :Pat(
-      "del",
-      keys.bs,
-      {
-        function (meta) return meta.pat.headp == meta.prevc and meta.pat.tailp == meta.nextc end,
-      },
-      function (meta) return keys.bs:rep(meta.pat.headp_len) .. keys.del:rep(meta.pat.tailp_len) end
-    )
-    :Pat(
-      "pair",
-      rule.headp:match "[^\128-\191][\128-\191]*$",
-      {},
-      function (meta) return meta.key .. meta.pat.tailp .. keys.jl:rep(meta.pat.tailp_len) end
-    )
+    :Pat("move", tail_key, { at_tail }, move)
+    :Pat("del", keys.bs, { in_pair }, delete)
+    :Pat("pair", head_key, {}, pair)
 end
 
 local function Quote (startp, ft, not_ft)
@@ -125,7 +130,8 @@ local function Bracket (...)
           return false
         end
       end,
-    }, function (_) return keys.cr .. keys.nest end)
+    }, function (_) return keys.cr .. keys.nest end
+    )
     :add_cond("pair", function (meta)
       local balance = 0
 
@@ -150,18 +156,21 @@ local function Bracket (...)
 end
 
 local function Endwise (...)
-  return Rule(...):Pat("end", keys.cr, {
-    function (meta)
-      local end_text = meta.line:sub(meta.col + 1)
+  return Rule(...):Pat(
+    "end",
+    keys.cr,
+    {
+      function (meta)
+        local end_text = meta.line:sub(meta.col + 1)
 
-      if
-        not meta.line:match(meta.pat.headp)
-        or (end_text ~= "" and end_text:match "^%s+$" == nil)
-      then
-        return false
-      end
-    end,
-  }, function (meta) return keys.cr .. meta.pat.tailp .. keys.nest end)
+        if not meta.line:match(meta.pat.headp)
+          or (end_text ~= "" and end_text:match "^%s+$" == nil) then
+          return false
+        end
+      end,
+    },
+    function (meta) return keys.cr .. meta.pat.tailp .. keys.nest end
+  )
 end
 
 local Buf = setmetatable({}, {
@@ -203,12 +212,8 @@ function Buf:add_map (pat)
 end
 
 function Buf:map_exec (key)
-  if
-    fn.reg_recording() ~= ""
-    or fn.reg_executing() ~= ""
-    or fn.visualmode() == "^V"
-    or vim.v.count > 0
-  then
+  if fn.reg_recording() ~= "" or fn.reg_executing() ~= ""
+    or fn.visualmode() == "^V" or vim.v.count > 0 then
     return
   end
 
@@ -255,19 +260,12 @@ for _, rule in ipairs(rules) do
   end
 end
 
-table.sort(
-  state.pats,
-  function (a, b)
-    return (
-      a.headp == b.headp
-      and (((not b.key) and a.key) or ((not a.key) and b.key) or (#a.key < #b.key))
-    )
-      or (
-        (a.headp_len == b.headp_len and a.headp:byte() > b.headp:byte())
-        or a.headp_len > b.headp_len
-      )
-  end
-)
+table.sort(state.pats, function (a, b)
+  return (a.headp == b.headp
+    and (((not b.key) and a.key) or ((not a.key) and b.key) or (#a.key < #b.key)))
+    or ((a.headp_len == b.headp_len and a.headp:byte() > b.headp:byte())
+      or a.headp_len > b.headp_len)
+end)
 
 api.nvim_create_autocmd("FileType", {
   callback = function (param) Buf(param.buf, param.match) end,

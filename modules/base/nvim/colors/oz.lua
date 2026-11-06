@@ -298,7 +298,7 @@ h("@markup.raw.markdown_inline", c.t, c.p)
 ht("@markup.strong.markdown_inline", c.t, c.p, bold)
 ht("@markup.italic.markdown_inline", c.t, c.m, italic)
 
---customs
+-- customs
 hl("@property.css", "@keyword")
 hl("@property.json", "@keyword")
 hl("@property.yaml", "@function")
