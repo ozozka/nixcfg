@@ -2,7 +2,6 @@
 
 import json
 import math
-import os
 import subprocess
 import sys
 import time
@@ -46,7 +45,7 @@ def branch(path, git):
             timeout=1,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         return None
     if result.returncode:
         return None
@@ -110,7 +109,7 @@ def context(window):
 
 def status(event, git, home, now):
     workspace = record(event.get("workspace"))
-    path = workspace.get("current_dir") or event.get("cwd") or os.getcwd()
+    path = workspace.get("current_dir") or event.get("cwd") or str(Path.cwd())
     limits = record(event.get("rate_limits"))
     parts = [
         color(CYAN, directory(path, home)),

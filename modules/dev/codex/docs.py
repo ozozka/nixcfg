@@ -22,7 +22,7 @@ def trusted(cwd):
         with (home / "config.toml").open("rb") as source:
             projects = tomllib.load(source).get("projects", {})
         return projects.get(str(cwd), {}).get("trust_level") == "trusted"
-    except (OSError, ValueError, TypeError, AttributeError):
+    except OSError, ValueError, TypeError, AttributeError:
         pass
     return False
 

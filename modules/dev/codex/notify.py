@@ -51,7 +51,7 @@ def notify(event, cwd, busctl):
         )
         if result.returncode:
             print("Codex: could not send desktop notification", file=sys.stderr)
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         print("Codex: could not send desktop notification", file=sys.stderr)
 
 
