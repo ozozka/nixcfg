@@ -219,7 +219,6 @@ Scope {
       Lib.Message {
         width: parent.width
         font.family: "serif"
-        textFormat: Text.PlainText
         text: card.notification?.body ?? ""
       }
     }

@@ -51,12 +51,7 @@ Scope {
     menuWidth: Math.min(380, Math.max(0, width - T.dimS * 2))
     menuHeight: Math.min(detailBody.implicitHeight, Math.max(0, height - T.dimM - T.dimS * 2))
     onDismissRequested: barModule.closeDetails()
-    onKeyPressed: event => {
-      if (event.key === Qt.Key_Escape) {
-        barModule.closeDetails();
-        event.accepted = true;
-      }
-    }
+    onEscapePressed: barModule.closeDetails()
 
     Lib.ScrollColumn {
       id: detailBody
@@ -246,7 +241,7 @@ Scope {
               readonly property bool occupied: (ws?.toplevels.values.length ?? 0) > 0
               selected: Hyprland.focusedWorkspace?.id === (index + 1)
               text: "🞄"
-              textColor: occupied ? T.colF : T.colM
+              foreground: occupied ? T.colF : T.colM
               font.bold: true
             }
           }
@@ -270,7 +265,7 @@ Scope {
           barWindow: bar
           enabled: !!controls.wifiDevice || !!controls.adapter
           muted: off
-          textColor: !enabled || off || disconnected ? T.colM : T.colF
+          foreground: !enabled || off || disconnected ? T.colM : T.colF
           font.bold: disconnected
           text: off ? "-" : disconnected ? "~" : controls.wifiStatus
           Accessible.name: "Wi-Fi · " + controls.wifiStatus
@@ -336,48 +331,47 @@ Scope {
     running: true
     repeat: true
     onTriggered: {
-      for (const file of [capacityFile, statusFile, energyFile, fullEnergyFile, powerFile,
-                          statFile, meminfoFile, networkFile, temperatureFile])
+      for (const file of [capacityFile, statusFile, energyFile, fullEnergyFile, powerFile, cpu,
+                          memory, network, temperatureFile])
         file.reload();
     }
   }
 
   Scope {
     id: battery
-
+    readonly property string dir: "/sys/class/power_supply/BAT1/"
     readonly property real percentage: capacityFile.value
     property string status: "Unknown"
-    readonly property real energy: energyFile.value
-    readonly property real fullEnergy: fullEnergyFile.value
-    readonly property real power: powerFile.value
 
     readonly property real remainingSeconds: {
+      const energy = energyFile.value;
+      const power = powerFile.value;
       if (power <= 0)
         return 0;
-      const remainingEnergy = status === "Charging" ? fullEnergy - energy : energy;
+      const remainingEnergy = status === "Charging" ? fullEnergyFile.value - energy : energy;
       return Math.max(0, 3600 * remainingEnergy / power);
     }
 
     NumberFile {
       id: capacityFile
-      path: "/sys/class/power_supply/BAT1/capacity"
+      path: battery.dir + "capacity"
     }
     FileView {
       id: statusFile
-      path: "/sys/class/power_supply/BAT1/status"
+      path: battery.dir + "status"
       onLoaded: battery.status = text().trim()
     }
     NumberFile {
       id: energyFile
-      path: "/sys/class/power_supply/BAT1/energy_now"
+      path: battery.dir + "energy_now"
     }
     NumberFile {
       id: fullEnergyFile
-      path: "/sys/class/power_supply/BAT1/energy_full"
+      path: battery.dir + "energy_full"
     }
     NumberFile {
       id: powerFile
-      path: "/sys/class/power_supply/BAT1/power_now"
+      path: battery.dir + "power_now"
     }
   }
 
@@ -421,15 +415,16 @@ Scope {
     precision: SystemClock.Seconds
   }
 
-  Scope {
+  FileView {
     id: cpu
+    path: "/proc/stat"
 
     property real usage: 0
     property double previousTotal: 0
     property double previousIdle: 0
 
-    function update(text) {
-      const line = text.split("\n").find(line => line.startsWith("cpu "));
+    onLoaded: {
+      const line = text().split("\n").find(line => line.startsWith("cpu "));
       if (!line)
         return;
       const values = line.trim().split(/\s+/).slice(1).map(Number);
@@ -446,41 +441,29 @@ Scope {
       previousTotal = total;
       previousIdle = idle;
     }
-
-    FileView {
-      id: statFile
-      path: "/proc/stat"
-      onLoaded: cpu.update(text())
-    }
   }
 
-  Scope {
+  FileView {
     id: memory
+    path: "/proc/meminfo"
 
     property real usedBytes: 0
 
-    function update(text) {
+    onLoaded: {
       const values = {};
-      for (const line of text.split("\n")) {
+      for (const line of text().split("\n")) {
         const match = line.match(/^(MemTotal|MemAvailable):\s+(\d+)/);
         if (match)
           values[match[1]] = Number(match[2]) * 1024;
       }
-
-      if (values.MemTotal && values.MemAvailable !== undefined) {
+      if (values.MemTotal && values.MemAvailable !== undefined)
         usedBytes = values.MemTotal - values.MemAvailable;
-      }
-    }
-
-    FileView {
-      id: meminfoFile
-      path: "/proc/meminfo"
-      onLoaded: memory.update(text())
     }
   }
 
-  Scope {
+  FileView {
     id: network
+    path: "/proc/net/dev"
 
     property string interfaceName: "wlan0"
     property real totalBytesPerSecond: 0
@@ -492,35 +475,25 @@ Scope {
                                                                            === interfaceName)
     readonly property bool connected: device?.connected ?? false
 
-    function update(text) {
-      const line = text.split("\n").find(line => line.trim().startsWith(`${interfaceName}:`));
+    onLoaded: {
+      const line = text().split("\n").find(line => line.trim().startsWith(`${interfaceName}:`));
       if (!line)
         return;
       const values = line.replace(/.*:\s*/, "").trim().split(/\s+/).map(Number);
       const received = values[0];
       const transmitted = values[8];
       const now = Date.now();
+      const elapsedSeconds = (now - previousTime) / 1000;
 
-      if (previousTime > 0) {
-        const elapsedSeconds = (now - previousTime) / 1000;
-        if (elapsedSeconds > 0) {
-          const downloadBytesPerSecond = Math.max(0, (received - previousReceived)
-                                                  / elapsedSeconds);
-          const uploadBytesPerSecond = Math.max(0, (transmitted - previousTransmitted)
-                                                / elapsedSeconds);
-          totalBytesPerSecond = downloadBytesPerSecond + uploadBytesPerSecond;
-        }
+      if (previousTime > 0 && elapsedSeconds > 0) {
+        const download = Math.max(0, (received - previousReceived) / elapsedSeconds);
+        const upload = Math.max(0, (transmitted - previousTransmitted) / elapsedSeconds);
+        totalBytesPerSecond = download + upload;
       }
 
       previousReceived = received;
       previousTransmitted = transmitted;
       previousTime = now;
-    }
-
-    FileView {
-      id: networkFile
-      path: "/proc/net/dev"
-      onLoaded: network.update(text())
     }
   }
 
@@ -573,23 +546,21 @@ Scope {
 
   component BarItem: Lib.MenuButton {
     id: item
-    property color textColor: !enabled || muted ? T.colM : T.colF
     property string suffixText: ""
-    property color suffixColor: textColor
+    property color suffixColor: foreground
     implicitHeight: T.dimM
-    implicitWidth: text.length > 0 ? label.implicitWidth + suffix.implicitWidth : 0
+    implicitWidth: label.implicitWidth + suffix.implicitWidth
     visible: text.length > 0
     padding: 0
     focusPolicy: Qt.NoFocus
     font.family: "monospace"
-    font.pointSize: T.fontSizeM
 
     contentItem: Row {
       Text {
         id: label
-        text: item.text.length > 0 ? " " + item.text + (item.suffixText ? "" : " ") : ""
+        text: " " + item.text + (item.suffixText ? "" : " ")
         textFormat: Text.PlainText
-        color: item.textColor
+        color: item.foreground
         font: item.font
         height: item.height
         verticalAlignment: Text.AlignVCenter

@@ -3,25 +3,11 @@ import Quickshell
 import Quickshell.Services.Polkit
 
 Scope {
-  component ActionButton: Rectangle {
-    id: button
-    required property string text
-    property color foreground: T.colF
-    property bool bold: false
-    signal clicked
-    width: label.implicitWidth + T.dimS * 2
-    height: T.dimM
-    Lib.Label {
-      id: label
-      anchors.centerIn: parent
-      text: button.text
-      color: button.foreground
-      font.family: "monospace"
-      font.bold: button.bold
-    }
-    TapHandler {
-      onTapped: button.clicked()
-    }
+  component ActionButton: Lib.MenuButton {
+    implicitHeight: T.dimM
+    topPadding: 0
+    bottomPadding: 0
+    font.family: "monospace"
   }
 
   PolkitAgent {
@@ -55,21 +41,18 @@ Scope {
 
       Lib.SectionText {
         width: parent.width
-        textFormat: Text.PlainText
         text: agent.flow?.message ?? ""
       }
 
       Lib.Message {
         width: parent.width
         color: T.colM
-        textFormat: Text.PlainText
         text: agent.flow?.inputPrompt ?? ""
       }
 
       Lib.Message {
         width: parent.width
         color: agent.flow?.supplementaryIsError ? T.colS : T.colM
-        textFormat: Text.PlainText
         text: agent.flow?.supplementaryMessage ?? ""
       }
 
@@ -105,14 +88,14 @@ Scope {
 
         ActionButton {
           text: "Cancel"
-          color: T.colO
+          fill: T.colO
           onClicked: agent.flow?.cancelAuthenticationRequest()
         }
         ActionButton {
           text: "Authenticate"
-          color: agent.flow?.isResponseRequired ? T.colP : T.colM
+          fill: enabled ? T.colP : T.colM
           foreground: T.colB
-          bold: true
+          font.bold: true
           enabled: agent.flow?.isResponseRequired ?? false
           onClicked: response.submit()
         }

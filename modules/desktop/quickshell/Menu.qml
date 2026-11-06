@@ -7,47 +7,39 @@ import Quickshell.Widgets
 Scope {
   id: menuModule
   required property var focusedScreen
+  // Name of the destructive power entry awaiting confirmation.
   property string pendingAction: ""
   property bool powerExpanded: false
   signal opened
   readonly property var powerEntries: [
     {
-      key: "lock",
       symbol: "⎋",
       name: "Lock",
-      command: ["qs", "ipc", "call", "lock", "lock"],
-      destructive: false
+      command: ["qs", "ipc", "call", "lock", "lock"]
     },
     {
-      key: "monitors",
       symbol: "🆥",
       name: "Monitors off",
-      command: ["hyprctl", "dispatch", "dpms", "off"],
-      destructive: false
+      command: ["hyprctl", "dispatch", "dpms", "off"]
     },
     {
-      key: "suspend",
       symbol: "⏾",
       name: "Suspend",
-      command: ["qs", "ipc", "call", "lock", "suspend"],
-      destructive: false
+      command: ["qs", "ipc", "call", "lock", "suspend"]
     },
     {
-      key: "logout",
       symbol: "⏎",
       name: "Logout",
       command: ["hyprctl", "dispatch", "exit"],
       destructive: true
     },
     {
-      key: "reboot",
       symbol: "⏼",
       name: "Reboot",
       command: ["systemctl", "reboot"],
       destructive: true
     },
     {
-      key: "shutdown",
       symbol: "⏻",
       name: "Shutdown",
       command: ["systemctl", "poweroff"],
@@ -55,14 +47,15 @@ Scope {
     }
   ]
 
+  // A pending confirmation only exists while the power actions are shown.
+  onPowerExpandedChanged: pendingAction = ""
+
   function dismissSelection() {
-    pendingAction = "";
     powerExpanded = false;
     applications.focusSearch();
   }
 
   function togglePower() {
-    pendingAction = "";
     powerExpanded = !powerExpanded;
     if (powerExpanded)
       Qt.callLater(() => selection.forceActiveFocus());
@@ -71,7 +64,6 @@ Scope {
   }
 
   function open() {
-    pendingAction = "";
     powerExpanded = false;
     if (focusedScreen)
       panel.screen = focusedScreen;
@@ -85,14 +77,13 @@ Scope {
 
   function close() {
     panel.visible = false;
-    pendingAction = "";
     applications.query = "";
     powerExpanded = false;
   }
 
   function activatePower(entry) {
-    if (entry.destructive && pendingAction !== entry.key) {
-      pendingAction = entry.key;
+    if (entry.destructive && pendingAction !== entry.name) {
+      pendingAction = entry.name;
       return;
     }
     Quickshell.execDetached(entry.command);
@@ -108,10 +99,7 @@ Scope {
       menuModule.close();
     }
     function toggle(): void {
-      if (panel.visible)
-        menuModule.close();
-      else
-        menuModule.open();
+      panel.visible ? menuModule.close() : menuModule.open();
     }
   }
 
@@ -160,9 +148,8 @@ Scope {
                 required property var modelData
                 Layout.fillWidth: true
                 symbol: modelData.symbol
-                text: menuModule.pendingAction === modelData.key ? `Confirm ${modelData.name}` :
-                                                                   modelData.name
-                selected: menuModule.pendingAction === modelData.key
+                text: selected ? `Confirm ${modelData.name}` : modelData.name
+                selected: menuModule.pendingAction === modelData.name
                 onClicked: menuModule.activatePower(modelData)
               }
             }
@@ -170,16 +157,7 @@ Scope {
         }
       }
     }
-    onKeyPressed: event => {
-      if (event.key === Qt.Key_Escape) {
-        if (selection.visible) {
-          menuModule.dismissSelection();
-        } else {
-          menuModule.close();
-        }
-        event.accepted = true;
-      }
-    }
+    onEscapePressed: selection.visible ? menuModule.dismissSelection() : menuModule.close()
 
     Flickable {
       id: scroll

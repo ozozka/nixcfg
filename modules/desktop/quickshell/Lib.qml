@@ -14,14 +14,17 @@ Scope {
     id: button
     property bool selected: false
     property string symbol: ""
-    property string symbolFamily: "monospace"
     property real symbolSize: T.fontSizeM
     property string valueText: ""
     property bool muted: false
+    property color foreground: !enabled || muted ? T.colM : T.colF
+    property color fill: selected || (enabled && (down || hovered)) ? T.colO : T.colB
     implicitHeight: T.dimM + T.dimS
     implicitWidth: contentItem.implicitWidth + T.dimS * 2
     padding: T.dimS
     hoverEnabled: true
+    font.family: "sans-serif"
+    font.pointSize: T.fontSizeM
     contentItem: Item {
       id: content
       // Empty texts have no width, so hidden side texts do not need a visibility check.
@@ -38,8 +41,8 @@ Scope {
         anchors.left: label.visible ? parent.left : undefined
         anchors.horizontalCenter: label.visible ? undefined : parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
-        color: label.color
-        font.family: button.symbolFamily
+        color: button.foreground
+        font.family: "monospace"
         font.pointSize: button.symbolSize
       }
       Text {
@@ -51,9 +54,8 @@ Scope {
           rightMargin: content.labelInset
         }
         text: button.text
-        color: !button.enabled || button.muted ? T.colM : T.colF
-        font.family: "sans-serif"
-        font.pointSize: T.fontSizeM
+        color: button.foreground
+        font: button.font
         elide: Text.ElideRight
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
@@ -66,15 +68,13 @@ Scope {
           verticalCenter: parent.verticalCenter
         }
         text: button.valueText
-        color: label.color
+        color: button.foreground
         font.family: "monospace"
         font.pointSize: T.fontSizeM
       }
     }
     background: Rectangle {
-      color: button.selected || (button.enabled && (button.down || button.hovered)) ? T.colO :
-                                                                                      T.colB
-
+      color: button.fill
     }
   }
 
@@ -132,7 +132,6 @@ Scope {
           Layout.minimumWidth: 0
           text: view.player?.identity || view.player?.dbusName || ""
           visible: view.playback.players.length === 1
-          textFormat: Text.PlainText
           font.pointSize: T.fontSizeS
           color: T.colM
         }
@@ -140,7 +139,6 @@ Scope {
           Layout.minimumWidth: 0
           text: view.player?.trackTitle || "No track information"
           horizontalAlignment: Text.AlignHCenter
-          textFormat: Text.PlainText
           font.pointSize: T.fontSizeS
           font.bold: true
           color: T.colM
@@ -227,7 +225,7 @@ Scope {
       item: inputRegion
     }
 
-    signal keyPressed(var event)
+    signal escapePressed
     signal dismissRequested
 
     visible: false
@@ -246,7 +244,7 @@ Scope {
 
     data: FocusScope {
       anchors.fill: parent
-      Keys.onPressed: event => menu.keyPressed(event)
+      Keys.onEscapePressed: menu.escapePressed()
 
       Item {
         id: inputRegion
@@ -593,6 +591,7 @@ Scope {
   }
 
   component Label: Text {
+    textFormat: Text.PlainText
     color: T.colF
     font.family: "sans-serif"
     font.pointSize: T.fontSizeM
