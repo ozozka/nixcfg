@@ -27,7 +27,7 @@ pkgs.treefmt.withConfig {
         options = [
           "--indent-type=Spaces"
           "--indent-width=2"
-          "--column-width=120"
+          "--column-width=${toString lineWidth}"
           "--quote-style=ForceDouble"
           "--call-parentheses=None"
           "--collapse-simple-statement=Always"
