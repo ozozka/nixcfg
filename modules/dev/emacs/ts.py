@@ -5,7 +5,7 @@ and regexp constructs, or changes to required Nix patterns, fail the build so
 upstream changes require review. Balanced query forms are parsed before mapping
 captures and predicates; strings and comments are never substituted.
 
-Languages, source paths and build dependencies belong to ts.nix. This
+Languages and source paths are listed in default.nix. This
 standard-library converter runs only at build time; mode definitions live in
 my-modes.el.
 """

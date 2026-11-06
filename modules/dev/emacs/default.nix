@@ -7,11 +7,34 @@
 
 let
   cfg = config.ozozka;
-  ts = pkgs.callPackage ./ts.nix { };
   emacsPackages = pkgs.emacsPackagesFor pkgs.emacs-pgtk;
 
+  # Highlighting queries for treesit-x generic modes, converted from the pinned
+  # Nixpkgs grammar sources. ts.py fails the build on anything it cannot
+  # convert; upstream query changes may need deliberate adaptation.
+  treesitLanguages = with pkgs.tree-sitter-grammars; {
+    nix = {
+      grammar = tree-sitter-nix;
+      query = "queries/highlights.scm";
+    };
+    just = {
+      grammar = tree-sitter-just;
+      query = "queries/just/highlights.scm";
+    };
+    typst = {
+      grammar = tree-sitter-typst;
+      query = "queries/typst/highlights.scm";
+    };
+  };
+
   # treesit-x expects <root>/tree-sitter/queries/<language>/highlights.scm.
-  treesitRoot = pkgs.linkFarm "emacs-treesit-root" { "tree-sitter/queries" = ts; };
+  treesitRoot = pkgs.runCommand "emacs-treesit-root" { nativeBuildInputs = [ pkgs.python3 ]; } (
+    lib.concatLines (
+      lib.mapAttrsToList (name: language: ''
+        python ${./ts.py} ${name} ${language.grammar.src}/${language.query} "$out/tree-sitter/queries/${name}/highlights.scm"
+      '') treesitLanguages
+    )
+  );
 
   myOptions = pkgs.writeText "my-options.el" ''
     ;;; my-options.el --- Nix generated options -*- lexical-binding: t; -*-
@@ -103,7 +126,7 @@ let
         tree-sitter-yaml
       ]
       # Grammars for the converted highlighting queries.
-      ++ ts.grammars
+      ++ lib.mapAttrsToList (_: language: language.grammar) treesitLanguages
     ))
   ]);
 in
