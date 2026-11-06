@@ -30,15 +30,14 @@ pkgs.treefmt.withConfig {
     on-unmatched = "debug";
 
     formatter = {
-      qmlformat = {
-        command = "${pkgs.qt6.qtdeclarative}/bin/qmlformat";
-        includes = [ "*.qml" ];
+      rustfmt = {
+        command = lib.getExe pkgs.rustfmt;
+        includes = [ "*.rs" ];
         options = [
-          "--inplace"
-          "--indent-width"
-          "2"
-          "--column-width"
-          "${toString lineWidth}"
+          "--edition"
+          "2024"
+          "--config"
+          "max_width=${toString lineWidth},use_small_heuristics=Max"
         ];
       };
 
