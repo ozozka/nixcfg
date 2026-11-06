@@ -78,7 +78,7 @@ Scope {
     }
   }
 
-  component PlaybackButton: MenuButton {
+  component IconButton: MenuButton {
     required property string description
     symbolSize: theme.fontSizeL
     implicitWidth: theme.dimM + theme.dimS
@@ -175,7 +175,7 @@ Scope {
           onMoved: playbackView.player.position = value
           Accessible.name: "Playback position"
         }
-        PlaybackButton {
+        IconButton {
           theme: playbackView.theme
           readonly property var player: playbackView.player
           readonly property int loopMode: player?.loopState ?? MprisLoopState.None
@@ -202,21 +202,21 @@ Scope {
         Item {
           Layout.fillWidth: true
         }
-        PlaybackButton {
+        IconButton {
           theme: playbackView.theme
           symbol: "⏮"
           description: "Previous track"
           enabled: !!playbackView.player?.canGoPrevious && !!playbackView.player?.canControl
           onClicked: playbackView.player.previous()
         }
-        PlaybackButton {
+        IconButton {
           theme: playbackView.theme
           symbol: playbackView.playback.playing ? "⏸" : "▶"
           description: playbackView.playback.playing ? "Pause" : "Play"
           enabled: !!playbackView.player?.canControl && !!playbackView.player?.canTogglePlaying
           onClicked: playbackView.player.togglePlaying()
         }
-        PlaybackButton {
+        IconButton {
           theme: playbackView.theme
           symbol: "⏭"
           description: "Next track"
