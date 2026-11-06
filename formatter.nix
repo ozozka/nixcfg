@@ -133,12 +133,29 @@ pkgs.treefmt.withConfig {
 
       biome = {
         command = lib.getExe pkgs.biome;
-        includes = [ "*.{json,jsonc,yaml,yml,css,html,js,jsx,mjs,cjs,ts,tsx,mts,cts}" ];
+        includes = [ "*.{json,jsonc,css,html,js,jsx,mjs,cjs,ts,tsx,mts,cts}" ];
         options = [
           "check"
           "--write"
-          "--indent-style=space"
-          "--line-width=96"
+          "--config-path=${
+            (pkgs.formats.json { }).generate "biome.json" {
+              formatter = {
+                indentStyle = "space";
+                inherit lineWidth;
+              };
+              html.formatter.enabled = true;
+              linter.rules = {
+                recommended = true;
+                style = {
+                  useConsistentTypeDefinitions = {
+                    level = "error";
+                    options.style = "type";
+                  };
+                  useNumericSeparators = "error";
+                };
+              };
+            }
+          }"
         ];
       };
 
