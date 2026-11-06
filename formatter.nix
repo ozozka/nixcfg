@@ -63,7 +63,7 @@ pkgs.treefmt.withConfig {
 
       biome = {
         command = lib.getExe pkgs.biome;
-        includes = [ "*.{js,jsx,mjs,cjs,ts,tsx,mts,cts,json,jsonc,css}" ];
+        includes = [ "*.{md,json,jsonc,yaml,yml,css,html,js,jsx,mjs,cjs,ts,tsx,mts,cts}" ];
         options = [
           "check"
           "--write"
