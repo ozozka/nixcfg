@@ -273,7 +273,6 @@ Scope {
         BarItem {
           theme: barModule.theme
           text: keyboard.layout
-          textColor: theme.colM
         }
         BarItem {
           theme: barModule.theme
