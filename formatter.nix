@@ -21,20 +21,71 @@ pkgs.treefmt.withConfig {
         ];
       };
 
-      stylua = {
-        command = lib.getExe pkgs.stylua;
+      luafmt = {
+        command = lib.getExe pkgs.emmylua-formatter;
         includes = [ "*.lua" ];
         options = [
-          "--indent-type=Spaces"
-          "--indent-width=2"
-          "--column-width=${toString lineWidth}"
-          "--quote-style=ForceDouble"
-          "--call-parentheses=None"
-          "--collapse-simple-statement=Always"
-          "--space-after-function-names=Definitions"
-          "--preserve-block-newline-gaps=Never"
+          "--config"
+          "${(pkgs.formats.toml { }).generate "luafmt.toml" {
+            syntax.level = "LuaJIT";
+            indent = {
+              kind = "Space";
+              width = 2;
+            };
+            layout = {
+              max_line_width = lineWidth;
+              max_blank_lines = 1;
+              prefer_table_layout_from_source = true;
+              prefer_call_args_layout_from_source = true;
+            };
+            output = {
+              quote_style = "Double";
+              trailing_comma = "Multiline";
+              single_arg_call_parens = "Preserve";
+            };
+            spacing.space_before_func_paren = true;
+          }}"
+          "--write"
           "--verify"
         ];
+      };
+
+      emmylua-check = {
+        command = pkgs.writeShellScript "emmylua-check" ''
+          status=0
+          ${lib.concatLines (
+            lib.mapAttrsToList
+              (
+                dir:
+                {
+                  env ? { },
+                  config ? { },
+                }:
+                ''
+                  ${
+                    lib.concatMapAttrsStringSep " " (name: value: "${name}=${lib.escapeShellArg value}") env
+                  } ${lib.getExe pkgs.emmylua-check} ${dir} \
+                    -c ${dir}/.emmyrc.lua \
+                    -c ${pkgs.writeText "emmyrc.json" (builtins.toJSON config)} || status=1
+                ''
+              )
+              # Each workspace gets what its .emmyrc.lua expects from a running system:
+              # environment variables, and config merged on top for paths that only exist there.
+              {
+                "modules/base/nvim".env.VIMRUNTIME = "${pkgs.neovim-unwrapped}/share/nvim/runtime";
+                "modules/desktop/hyprland".config.workspace.library = [
+                  "${pkgs.hyprland}/share/hypr/stubs"
+                  (pkgs.writeTextDir "options.lua" ''
+                    return { monitor = 1, keyboard = { layout = "", options = "" } }
+                  '')
+                ];
+              }
+          )}
+          exit $status
+        '';
+        includes = [ "*.lua" ];
+        no-positional-arg-support = true;
+        priority = 1;
       };
 
       ruff-check = {
@@ -63,7 +114,7 @@ pkgs.treefmt.withConfig {
 
       biome = {
         command = lib.getExe pkgs.biome;
-        includes = [ "*.{md,json,jsonc,yaml,yml,css,html,js,jsx,mjs,cjs,ts,tsx,mts,cts}" ];
+        includes = [ "*.{json,jsonc,yaml,yml,css,html,js,jsx,mjs,cjs,ts,tsx,mts,cts}" ];
         options = [
           "check"
           "--write"
@@ -74,10 +125,7 @@ pkgs.treefmt.withConfig {
 
       prettier = {
         command = lib.getExe pkgs.prettier;
-        includes = [
-          "*.html"
-          "*.md"
-        ];
+        includes = [ "*.md" ];
         options = [
           "--write"
           "--ignore-unknown"
