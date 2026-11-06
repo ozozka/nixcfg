@@ -139,17 +139,17 @@ hl.config {
 }
 
 hl.window_rule {
-  name = "float-quickshell-polkit",
-  match = { title = "^quickshell-polkit$" },
+  name = "float-ozshell-polkit",
+  match = { title = "^ozshell-polkit$" },
   float = true,
   center = true,
 }
 
 local mainMod = "SUPER"
 
-hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd "qs ipc call notifications dismissAll")
-hl.bind(mainMod .. " + SHIFT + Escape", hl.dsp.exec_cmd "qs ipc call lock lock")
-hl.bind(mainMod .. " + A", hl.dsp.exec_cmd "qs ipc call menu toggle")
+hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd "ozshell msg notifications dismissAll")
+hl.bind(mainMod .. " + SHIFT + Escape", hl.dsp.exec_cmd "ozshell msg lock lock")
+hl.bind(mainMod .. " + A", hl.dsp.exec_cmd "ozshell msg menu toggle")
 hl.bind(
   mainMod .. " + P",
   hl.dsp.exec_cmd [[sh -c 'geometry=$(slurp) || exit; dir="$HOME/Pictures/Screenshots"; mkdir -p "$dir" && file="$dir/$(date +%Y-%m-%d_%H-%M-%S_%N).png" && grim -g "$geometry" "$file" && wl-copy --type image/png < "$file"']]
