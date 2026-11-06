@@ -2,33 +2,17 @@
 
 ## About
 
-### Background
-
 The main reason I use Nix is its declarative model. It lets me describe how my system and
 project environments should be configured, rather than maintain a sequence of setup steps. I
 treat system infrastructure and project dependencies as part of the same approach: both should
 be explicit, versioned, and reproducible, rather than depend on accumulated machine state or
 manual setup. Nix brings system configuration and package management together, replacing
-fragmented tools and installation methods with a unified approach. This keeps my setup lean and
-consistent, while reproducible configurations and rollbacks make changes easier to manage.
+fragmented tools and installation methods with a unified approach.
 
-### Principles
-
-- **Lean:** Maximize value while minimizing complexity, maintenance surface, and dependencies.
-- **Simplicity:** Prefer built-in capabilities over additional layers and add-ons.
-- **Cohesion:** Manage software centrally through Nixpkgs and custom Nix packages.
-- **Consistency:** Centralize shared settings and maintain consistent behavior system-wide.
-- **Reliability:** Use reproducible configurations and rollbacks with rolling releases.
-- **Recency:** Track recent releases for new features and performance improvements.
-
-### Constraints
-
-- No third-party program extensions, plugins, or mods, or additional flake dependencies.
-- Modules and programs must contain and manage their dotfiles and configuration.
-- All dotfiles must be managed declaratively through Nix, without imperative setup.
-- Options and constants must be managed and injected by Nix.
-- Home management must be configurable for each host and user.
-- Flake outputs must be directly reusable without project-specific special arguments.
+I aim to keep the setup lean: maximize value while minimizing complexity, maintenance surface,
+and dependencies. I prefer built-in capabilities over additional layers and add-ons, manage
+software centrally, and share settings to keep behavior consistent across the system. Changes
+should be predictable and easy to recover from, while keeping the system up to date.
 
 ## Manual
 
@@ -36,7 +20,9 @@ Most of the required commands are wrapped as Nix flake apps for ease of use. `ni
 lists the available apps, while the `r` shell alias provides a shorthand for running them.
 
 ```bash
-nix run              # Run the default app
+nix run              # Build and activate the current host configuration
+r ls                 # List system generations
+r gc                 # Delete old generations and collect unused store paths
 r info               # Run the info app
 r nixpkgs#hello      # Run an external flake app
 ```
@@ -74,6 +60,15 @@ nix flake new -t .#<template> ./new-project
 
 ## Architecture
 
+### Principles
+
+- No third-party program extensions, plugins, or mods, or additional flake dependencies.
+- Modules and programs must contain and manage their dotfiles and configuration.
+- All dotfiles must be managed declaratively through Nix, without imperative setup.
+- Options and constants must be managed and injected by Nix.
+- Home management must be configurable for each host and user.
+- Flake outputs must be directly reusable without project-specific special arguments.
+
 ### Imports
 
 `flake.nix` discovers hosts and modules through `lib.paths`. A directory with `default.nix` is a
@@ -108,8 +103,24 @@ public and store-backed; profiles must not contain secrets.
 
 ## Development
 
-- `nix fmt`: Runs formatters and linters for the languages used.
-- `nix flake check`: Checks flake, format, and evaluates individual modules.
+### Updates
+
+`nix flake update` updates the inputs pinned in [flake.lock](flake.lock).
+
+### Formatting
+
+[formatter.nix](formatter.nix) configures treefmt with language-specific formatters and linters.
+`nix fmt` runs them across the repository, applying formatting and supported fixes.
+
+### Checks
+
+[checks.nix](checks.nix) checks formatting and evaluates each exported NixOS module independently.
+`nix flake check` runs these checks alongside the standard flake validation.
+
+### Package Maintenance
+
+Custom packages live in [pkgs/](pkgs/). `r hash <hash>` converts a SHA-256 hash to SRI format
+for package definitions.
 
 ## Roadmap
 
