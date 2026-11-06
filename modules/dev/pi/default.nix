@@ -14,8 +14,6 @@ in
 
   ozozka.home.profiles.pi.files = {
     ".pi/agent" = {
-      "prompts" = ./prompts;
-      # "skills" = ./skills;
       "extensions" = ./extensions;
       # "APPEND_SYSTEM.md"
 
