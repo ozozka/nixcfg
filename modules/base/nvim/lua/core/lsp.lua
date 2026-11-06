@@ -5,11 +5,11 @@ v.lsp.enable {
   "clangd",
   "cssls",
   "dockerls",
+  "emmylua_ls",
   "eslint",
   "html",
   "jsonls",
   "just",
-  "luals",
   "marksman",
   "nixd",
   "rust-analyzer",
@@ -52,7 +52,8 @@ api.nvim_create_autocmd("LspAttach", {
     api.nvim_buf_create_user_command(args.buf, "FormatBuf", function ()
       v.lsp.buf.format { bufnr = args.buf, id = client.id, timeout_ms = 1000 }
       print "Formatted"
-    end, {})
+    end, {}
+    )
 
     -- if client:supports_method 'textDocument/formatting'
     --     and not client:supports_method 'textDocument/willSaveWaitUntil' then
