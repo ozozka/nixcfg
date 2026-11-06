@@ -165,10 +165,6 @@ Scope {
         }
         ThemedSlider {
           theme: playbackView.theme
-          trackThickness: theme.dimT
-          handleWidth: theme.dimT
-          handleHeight: theme.dimS
-          fillColor: enabled ? theme.colF : theme.colM
           Layout.fillWidth: true
           from: 0
           to: playbackView.player?.lengthSupported && playbackView.player.length > 0
@@ -765,28 +761,27 @@ Scope {
     id: slider
     required property T theme
     property bool muted: false
-    property real trackThickness: 4
-    property real handleWidth: 14
-    property real handleHeight: 20
-    property color fillColor: muted ? theme.colM : theme.colF
+    readonly property color activeColor: !enabled || muted ? theme.colM : theme.colF
+    implicitHeight: theme.dimM
+    padding: 0
     background: Rectangle {
       x: slider.leftPadding
       y: slider.topPadding + slider.availableHeight / 2 - height / 2
       width: slider.availableWidth
-      height: slider.trackThickness
+      height: slider.theme.dimT
       color: slider.theme.colO
       Rectangle {
         width: slider.visualPosition * parent.width
         height: parent.height
-        color: slider.fillColor
+        color: slider.activeColor
       }
     }
     handle: Rectangle {
       x: slider.leftPadding + slider.visualPosition * (slider.availableWidth - width)
       y: slider.topPadding + slider.availableHeight / 2 - height / 2
-      implicitWidth: slider.handleWidth
-      implicitHeight: slider.handleHeight
-      color: !slider.enabled || slider.muted ? slider.theme.colM : slider.theme.colF
+      implicitWidth: slider.theme.dimT
+      implicitHeight: slider.theme.dimS
+      color: slider.activeColor
     }
   }
 
@@ -846,6 +841,7 @@ Scope {
         value: audioControl.available ? audioControl.node.audio.volume : 0
         enabled: audioControl.available
         onMoved: audioControl.node.audio.volume = value
+        Accessible.name: audioControl.input ? "Microphone volume" : "Speaker volume"
       }
       SectionText {
         theme: audioControl.theme
