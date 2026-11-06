@@ -22,6 +22,10 @@ in
         theme = if config.ozozka.col.isDark then "dark-ansi" else "light-ansi";
         tui = "default";
         disableAgentView = true;
+        attribution = {
+          commit = "";
+          pr = "";
+        };
         statusLine = {
           type = "command";
           command = "${python} ${./statusline.py} ${pkgs.git}/bin/git";
