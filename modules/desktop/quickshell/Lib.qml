@@ -80,7 +80,7 @@ Scope {
 
   component IconButton: MenuButton {
     required property string description
-    symbolSize: theme.fontSizeL
+    symbolSize: theme.fontSizeX
     implicitWidth: theme.dimM + theme.dimS
     implicitHeight: theme.dimM + theme.dimS
     padding: 0
@@ -160,7 +160,7 @@ Scope {
           Layout.fillWidth: false
           text: playbackView.playback.timing || "Timing unavailable"
           font.family: "monospace"
-          font.pointSize: theme.fontSizeS
+          font.pointSize: theme.fontSizeM
           color: playbackView.playback.playing ? theme.colF : theme.colM
         }
         ThemedSlider {
