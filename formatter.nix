@@ -2,6 +2,26 @@
 
 let
   lineWidth = 96;
+
+  ruffConfig = (pkgs.formats.toml { }).generate "ruff.toml" {
+    line-length = lineWidth;
+    target-version = "py${
+      lib.replaceStrings [ "." ] [ "" ] (lib.versions.majorMinor pkgs.python3.version)
+    }";
+    lint.extend-select = [
+      "I"
+      "UP"
+      "B"
+      "SIM"
+      "C4"
+      "RET"
+      "PIE"
+      "PERF"
+      "FURB"
+      "RUF"
+      "PTH"
+    ];
+  };
 in
 pkgs.treefmt.withConfig {
   settings = {
@@ -93,8 +113,8 @@ pkgs.treefmt.withConfig {
         options = [
           "check"
           "--no-cache"
-          "--line-length"
-          "96"
+          "--config"
+          "${ruffConfig}"
           "--fix"
         ];
         priority = -1;
@@ -106,8 +126,8 @@ pkgs.treefmt.withConfig {
         options = [
           "format"
           "--no-cache"
-          "--line-length"
-          "96"
+          "--config"
+          "${ruffConfig}"
         ];
       };
 
