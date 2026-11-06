@@ -84,7 +84,6 @@ pkgs.treefmt.withConfig {
           exit $status
         '';
         includes = [ "*.lua" ];
-        no-positional-arg-support = true;
         priority = 1;
       };
 
