@@ -221,15 +221,29 @@ def transform(node, language: str):
     return Group(node.opening, [item for item in converted if item is not None])
 
 
-# Keep Nix-specific removals and the extra function-binding query here, alongside
-# builtin-priority handling in convert_query. Required patterns are checked so
-# upstream changes cannot silently alter these configuration-specific choices.
+# Keep Nix-specific adaptations here, alongside builtin-priority handling in
+# convert_query. Required patterns are checked so upstream changes cannot silently
+# alter these configuration-specific choices.
 NIX_REMOVALS = {
     "(select_expression attrpath: (attrpath (identifier)) @property)",
     "(binding attrpath: (attrpath (identifier)) @property)",
     "(identifier) @property",
     "(identifier) @variable",
     "(variable_expression (identifier) @variable)",
+}
+# Emacs's non-overriding fontification lets enclosing string/path captures mask
+# interpolation code. Capture only literal regions; interpolation children then
+# use the ordinary Nix rules, including nested strings and escapes.
+NIX_REPLACEMENTS = {
+    "[(string_expression) (indented_string_expression)] @string": """
+(string_fragment) @string
+(string_expression "\\\"" @string)
+(indented_string_expression "''" @string)
+""",
+    "[(path_expression) (hpath_expression) (spath_expression)] @string.special.path": """
+(path_fragment) @string.special.path
+(spath_expression) @string.special.path
+""",
 }
 NIX_FUNCTION = """(binding
   attrpath: (attrpath attr: (identifier) @font-lock-function-name-face)
@@ -253,11 +267,15 @@ def convert_query(source: str, language: str) -> str:
     output = []
     priority = []
     removed = set()
+    replaced = set()
     for pattern in patterns(parse(source)):
         original = " ".join(map(render, pattern))
         if language == "nix" and original in NIX_REMOVALS:
             removed.add(original)
             continue
+        if language == "nix" and original in NIX_REPLACEMENTS:
+            replaced.add(original)
+            pattern = parse(NIX_REPLACEMENTS[original])
         converted = [transform(node, language) for node in pattern]
         text = " ".join(render(node) for node in converted if node is not None)
         # Only Nix's variable builtins need to override later property captures.
@@ -266,9 +284,9 @@ def convert_query(source: str, language: str) -> str:
         else:
             output.append(text)
     if language == "nix":
-        if removed != NIX_REMOVALS or len(priority) != 1:
+        if removed != NIX_REMOVALS or replaced != NIX_REPLACEMENTS.keys() or len(priority) != 1:
             raise ValueError(
-                "Nix query structure changed; review removals and builtin priority"
+                "Nix query structure changed; review removals, replacements and builtin priority"
             )
         output.extend(priority)
         output.append(NIX_FUNCTION)

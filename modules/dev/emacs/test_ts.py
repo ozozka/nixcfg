@@ -5,6 +5,7 @@ import unittest
 from ts import (
     NIX_FUNCTION,
     NIX_REMOVALS,
+    NIX_REPLACEMENTS,
     capture,
     convert_query,
     decode_string,
@@ -95,9 +96,10 @@ class ConversionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "structure changed"):
             convert_query(source, "nix")
 
-    def test_nix_removals_and_builtin_priority(self):
-        source = (
-            "\n".join(sorted(NIX_REMOVALS))
+    @staticmethod
+    def nix_source():
+        return (
+            "\n".join(sorted(NIX_REMOVALS | NIX_REPLACEMENTS.keys()))
             + """
           ((identifier) @variable.builtin
             (#match? @variable.builtin "^(builtins|true)$")
@@ -105,13 +107,33 @@ class ConversionTests(unittest.TestCase):
           (inherit_from (identifier) @property)
         """
         )
+
+    def test_nix_removals_and_builtin_priority(self):
+        source = self.nix_source()
         result = forms(convert_query(source, "nix"))
-        self.assertEqual(result[0], "(inherit_from (identifier) @property)")
-        self.assertIn("@font-lock-builtin-face", result[1])
-        self.assertNotIn("#is-not?", result[1])
+        self.assertEqual(result[-3], "(inherit_from (identifier) @property)")
+        self.assertIn("@font-lock-builtin-face", result[-2])
+        self.assertNotIn("#is-not?", result[-2])
         self.assertEqual(result[-1], forms(NIX_FUNCTION)[0])
         with self.assertRaisesRegex(ValueError, "structure changed"):
             convert_query(source.replace("(identifier) @property", "(other) @property"), "nix")
+
+    def test_nix_literal_regions_leave_interpolations_uncovered(self):
+        result = forms(convert_query(self.nix_source(), "nix"))
+        for original, replacement in NIX_REPLACEMENTS.items():
+            with self.subTest(original=original):
+                self.assertNotIn(original, result)
+                for pattern in forms(convert_query(replacement, "just")):
+                    self.assertIn(pattern, result)
+                nodes, upstream_capture = original.rsplit(" ", 1)
+                self.assertEqual(
+                    forms(convert_query(original, "just")),
+                    [f"{nodes} {capture(upstream_capture)}"],
+                )
+                with self.assertRaisesRegex(ValueError, "structure changed"):
+                    convert_query(self.nix_source().replace(original, ""), "nix")
+        self.assertIn('(string_expression "\\"" @string)', result)
+        self.assertIn("(indented_string_expression \"''\" @string)", result)
 
 
 if __name__ == "__main__":

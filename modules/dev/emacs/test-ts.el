@@ -49,6 +49,76 @@
     (should-not (eq (get-text-property (match-beginning 0) 'face)
                     'font-lock-builtin-face))))
 
+(ert-deftest emacs-ts-nix-interpolation-fontification ()
+  ;; The same expression must be fontified as code in either string syntax and
+  ;; in paths, without a parent string face covering unstyled identifiers.
+  (dolist (source '("\"before ${if true then 42 else plain} after\""
+                    "''before ${if true then 42 else plain} after''"
+                    "./before/${if true then 42 else plain}/after"
+                    "~/before/${if true then 42 else plain}/after"))
+    (with-temp-buffer
+      (insert source)
+      (emacs-ts-test-nix-mode)
+      (font-lock-ensure)
+      (should-not (treesit-search-subtree
+                   (treesit-buffer-root-node 'nix) "ERROR"))
+      (emacs-ts-test-face "before" 'font-lock-string-face)
+      (emacs-ts-test-face "after" 'font-lock-string-face)
+      (emacs-ts-test-face "${" 'font-lock-misc-punctuation-face)
+      (emacs-ts-test-face "}" 'font-lock-misc-punctuation-face)
+      (emacs-ts-test-face "if" 'font-lock-keyword-face)
+      (emacs-ts-test-face "true" 'font-lock-builtin-face)
+      (emacs-ts-test-face "42" 'font-lock-number-face)
+      (goto-char (point-min))
+      (search-forward "plain")
+      (should-not (get-text-property (match-beginning 0) 'face)))))
+
+(ert-deftest emacs-ts-nix-nested-interpolation-fontification ()
+  (with-temp-buffer
+    (insert "\"outer ${if true then \"inner ${42}\" else \"fallback\"} tail\"")
+    (emacs-ts-test-nix-mode)
+    (font-lock-ensure)
+    (dolist (literal '("\"outer" "\"inner" "\"fallback" "tail\""))
+      (emacs-ts-test-face literal 'font-lock-string-face))
+    (emacs-ts-test-face "if" 'font-lock-keyword-face)
+    (emacs-ts-test-face "42" 'font-lock-number-face)
+    ;; Exercise incremental fontification, not just a fresh buffer.
+    (goto-char (point-min))
+    (search-forward "42")
+    (replace-match "\"changed\"" t t)
+    (font-lock-ensure)
+    (emacs-ts-test-face "changed" 'font-lock-string-face)
+    (goto-char (point-min))
+    (search-forward "\"changed\"")
+    (replace-match "false" t t)
+    (font-lock-ensure)
+    (emacs-ts-test-face "false" 'font-lock-builtin-face)
+    (emacs-ts-test-face "tail\"" 'font-lock-string-face)))
+
+(ert-deftest emacs-ts-nix-string-escapes-and-delimiters ()
+  (dolist (source '("\"literal \\${notCode} end\""
+                    "''literal ''${notCode} end''"))
+    (with-temp-buffer
+      (insert source)
+      (emacs-ts-test-nix-mode)
+      (font-lock-ensure)
+      (emacs-ts-test-face "notCode" 'font-lock-string-face)
+      (emacs-ts-test-face "end" 'font-lock-string-face)
+      (emacs-ts-test-face source 'font-lock-string-face)
+      (should (eq (get-text-property (1- (point-max)) 'face)
+                  'font-lock-string-face))
+      (goto-char (point-min))
+      ;; dollar_escape covers the escape prefix, not the literal dollar.
+      (search-forward (if (string-prefix-p "\"" source) "\\$" "''$"))
+      (should (eq (get-text-property (match-beginning 0) 'face)
+                  'font-lock-escape-face))))
+  (with-temp-buffer
+    (insert "[ \"\" '''' <nixpkgs/lib> https://example.org ]")
+    (emacs-ts-test-nix-mode)
+    (font-lock-ensure)
+    (dolist (literal '("\"\"" "''''" "<nixpkgs/lib>" "https://example.org"))
+      (emacs-ts-test-face literal 'font-lock-string-face))))
+
 (ert-deftest emacs-ts-just-fontification ()
   (with-temp-buffer
     (insert "set dotenv-load\n\nhello name:\n    echo {{name}}\n")
