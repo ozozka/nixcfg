@@ -79,7 +79,7 @@ function formatWindow(window: UsageWindow, now: number): string {
   const label =
     window.windowMinutes === 300
       ? "5h"
-      : window.windowMinutes === 10080
+      : window.windowMinutes === 10_080
         ? "w"
         : formatDuration(window.windowMinutes * 60 * 1000);
   const resetIn = window.resetAt * 1000 - now;
@@ -89,13 +89,13 @@ function formatWindow(window: UsageWindow, now: number): string {
   const reset =
     resetIn <= 0
       ? "due"
-      : resetIn < 60000
+      : resetIn < 60_000
         ? "<1m"
-        : resetIn >= 86400000
-          ? `${Math.floor(resetIn / 86400000)}d${Math.floor(resetIn / 3600000) % 24}h`
-          : resetIn >= 3600000
-            ? `${Math.floor(resetIn / 3600000)}h${Math.floor(resetIn / 60000) % 60}m`
-            : `${Math.floor(resetIn / 60000)}m`;
+        : resetIn >= 86_400_000
+          ? `${Math.floor(resetIn / 86_400_000)}d${Math.floor(resetIn / 3_600_000) % 24}h`
+          : resetIn >= 3_600_000
+            ? `${Math.floor(resetIn / 3_600_000)}h${Math.floor(resetIn / 60_000) % 60}m`
+            : `${Math.floor(resetIn / 60_000)}m`;
   return `${stale ? "~" : ""}${label} ${remaining} ${reset}`;
 }
 
