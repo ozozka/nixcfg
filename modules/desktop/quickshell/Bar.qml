@@ -261,8 +261,6 @@ Scope {
           id: batteryButton
           theme: barModule.theme
           selected: barModule.controls.expanded === "profiles" && barModule.detailBar === bar
-          textColor: battery.status === "Charging" || battery.status === "Discharging"
-                     ? theme.colF : theme.colM
           focusPolicy: Qt.StrongFocus
           Accessible.name: "Battery"
           Accessible.description: `%${Math.round(battery.percentage)} · ${battery.status}`
