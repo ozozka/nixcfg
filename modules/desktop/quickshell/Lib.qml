@@ -824,10 +824,12 @@ Scope {
     RowLayout {
       Layout.fillWidth: true
       spacing: audioControl.theme.dimS
-      MenuButton {
+      IconButton {
         theme: audioControl.theme
         Layout.alignment: Qt.AlignVCenter
-        text: audioControl.muted ? "Unmute" : "Mute"
+        symbol: audioControl.muted ? "○" : "●"
+        description: (audioControl.muted ? "Unmute " : "Mute ") + (audioControl.input
+                                                                   ? "microphone" : "speaker")
         selected: audioControl.muted
         enabled: audioControl.available
         onClicked: audioControl.node.audio.muted = !audioControl.node.audio.muted
