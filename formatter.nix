@@ -1,6 +1,7 @@
-{ pkgs, lib, ... }:
+_: pkgs:
 
 let
+  inherit (pkgs) lib;
   lineWidth = 96;
 
   ruffConfig = (pkgs.formats.toml { }).generate "ruff.toml" {

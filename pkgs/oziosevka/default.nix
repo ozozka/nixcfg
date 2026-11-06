@@ -1,3 +1,5 @@
+_:
+
 { pkgs, ... }:
 
 pkgs.iosevka.override {

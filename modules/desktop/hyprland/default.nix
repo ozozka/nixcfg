@@ -1,3 +1,5 @@
+self:
+
 {
   config,
   lib,
@@ -9,7 +11,7 @@ let
   cfg = config.ozozka;
 in
 {
-  imports = [ ../../options.nix ];
+  imports = [ self.nixosModules.options ];
 
   options.ozozka.mod.desktop.hypr = {
     mirrorIntegratedMonitor = lib.mkEnableOption "mirrorIntegrated";

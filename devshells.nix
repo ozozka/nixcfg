@@ -1,4 +1,4 @@
-{ pkgs }:
+_: pkgs:
 
 {
   default = pkgs.mkShell {

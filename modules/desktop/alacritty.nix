@@ -1,3 +1,5 @@
+self:
+
 { pkgs, config, ... }:
 
 let
@@ -6,7 +8,7 @@ let
   hex = v: "#" + v;
 in
 {
-  imports = [ ../options.nix ];
+  imports = [ self.nixosModules.options ];
 
   environment = {
     systemPackages = with pkgs; [ alacritty ];

@@ -1,4 +1,4 @@
-{ inputs, pkgs, ... }:
+self: pkgs:
 
 let
   inherit (pkgs) lib;
@@ -9,17 +9,16 @@ let
     root = ./.;
     fileset = fs.difference ./. (fs.maybeMissing ./.git);
   };
-
-  formatter = pkgs.callPackage ./formatter.nix { };
 in
 {
-  format = formatter.check src;
+  format = self.formatter.${system}.check src;
 }
+// self.packages.${system}
 // lib.mapAttrs' (
   name: module:
   lib.nameValuePair "nixos-module-${system}-${name}" (
     let
-      evaluated = inputs.nixpkgs.lib.nixosSystem {
+      evaluated = self.inputs.nixpkgs.lib.nixosSystem {
         modules = [
           module
           {
@@ -44,4 +43,4 @@ in
       ''
     )
   )
-) inputs.self.nixosModules
+) self.nixosModules

@@ -1,10 +1,12 @@
+self:
+
 { config, pkgs, ... }:
 
 let
   cfg = config.ozozka;
 in
 {
-  imports = [ ../options.nix ];
+  imports = [ self.nixosModules.options ];
 
   environment = {
     systemPackages = with pkgs; [ gh ];

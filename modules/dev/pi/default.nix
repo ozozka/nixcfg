@@ -1,3 +1,5 @@
+self:
+
 { config, pkgs, ... }:
 
 let
@@ -5,9 +7,9 @@ let
   settingsFormat = pkgs.formats.json { };
 in
 {
-  imports = [
-    ../../home.nix
-    ../../options.nix
+  imports = with self.nixosModules; [
+    home
+    options
   ];
 
   environment.systemPackages = with pkgs; [ pi-coding-agent ];

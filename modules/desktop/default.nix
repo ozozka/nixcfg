@@ -1,3 +1,5 @@
+self:
+
 {
   pkgs,
   lib,
@@ -9,16 +11,7 @@ let
   cfg = config.ozozka;
 in
 {
-  imports = [
-    ../options.nix
-
-    ./music.nix
-    ./hyprland
-    ./quickshell
-    ./nyxt
-    ./zen
-    ./alacritty.nix
-  ];
+  imports = [ self.nixosModules.options ];
 
   security = {
     pam.services.login.enableGnomeKeyring = true;

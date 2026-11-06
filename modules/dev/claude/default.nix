@@ -1,3 +1,5 @@
+self:
+
 { config, pkgs, ... }:
 
 let
@@ -10,7 +12,7 @@ let
   };
 in
 {
-  imports = [ ../../options.nix ];
+  imports = [ self.nixosModules.options ];
 
   nixpkgs.config.allowUnfreePackages = [ "claude-code" ];
 

@@ -1,10 +1,12 @@
+self:
+
 { pkgs, config, ... }:
 
 let
   cfg = config.ozozka;
 in
 {
-  imports = [ ../options.nix ];
+  imports = [ self.nixosModules.options ];
 
   console = {
     enable = true;

@@ -1,8 +1,11 @@
+self:
+
 { pkgs, ... }:
 
+let
+  inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) treesitter-runtime;
+in
 {
-  imports = [ ../../overlays.nix ];
-
   # environment.sessionVariables = {
   #   EDITOR = "nvim";
   #   VISUAL = "nvim";
@@ -22,8 +25,8 @@
       "lsp".source = ./lsp;
       "colors".source = ./colors;
       "spell".source = ./spell;
-      "parser".source = "${pkgs.ozozka.treesitter-runtime}/parser";
-      "queries".source = "${pkgs.ozozka.treesitter-runtime}/queries";
+      "parser".source = "${treesitter-runtime}/parser";
+      "queries".source = "${treesitter-runtime}/queries";
     };
   };
 }

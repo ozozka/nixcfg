@@ -46,8 +46,6 @@ nix flake new -t .#<template> ./new-project
   - [misc/](modules/misc/): Miscellaneous modules.
   - [options.nix](modules/options.nix): Options shared by multiple modules.
   - [home.nix](modules/home.nix): Custom home module for dot file links.
-  - [overlays.nix](modules/overlays.nix): Applies the overlays to modules.
-- [overlays/](overlays/): Overlays.
 - [pkgs/](pkgs/): Custom packages exported by flake.
 - [templates/](templates/): Templates for projects and tools.
 - [README.md](README.md): Documentation.
@@ -71,12 +69,12 @@ nix flake new -t .#<template> ./new-project
 
 ### Imports
 
-`flake.nix` discovers hosts and modules through `lib.paths`. A directory with `default.nix` is a
-single entry; otherwise, discovery recurses and joins names with hyphens. Entries starting with
-`_` are ignored.
-
-Hosts select exported modules. Modules explicitly import their dependencies and related
-submodules.
+- `flake.nix` discovers hosts, modules, and packages through `lib.paths`.
+- A `.nix` file or a directory with `default.nix` is one entry; `_` prefixed names are ignored.
+- Other directories are searched recursively, joining names with hyphens (`gui-steam`).
+- Files start with `self:` (`_:` if unused) and reach other flake parts only through `self`.
+- Modules: `self: { config, pkgs, ... }: { }`, importing shared ones from `self.nixosModules`.
+- A `default.nix` module also imports the other modules in its directory.
 
 ### Options
 
@@ -114,8 +112,9 @@ public and store-backed; profiles must not contain secrets.
 
 ### Checks
 
-[checks.nix](checks.nix) checks formatting and evaluates each exported NixOS module independently.
-`nix flake check` runs these checks alongside the standard flake validation.
+[checks.nix](checks.nix) checks formatting, builds the custom packages, and evaluates each
+exported NixOS module independently. `nix flake check` runs these checks alongside the standard
+flake validation.
 
 ### Package Maintenance
 

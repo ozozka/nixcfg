@@ -1,7 +1,7 @@
-{ inputs }:
+self:
 
-inputs.nixpkgs.lib.nixosSystem {
-  modules = with inputs.self.nixosModules; [
+self.inputs.nixpkgs.lib.nixosSystem {
+  modules = with self.nixosModules; [
     ./hardware-configuration.nix
 
     base

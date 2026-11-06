@@ -1,13 +1,8 @@
+_:
+
 { pkgs, ... }:
 
 {
-  imports = [
-    ./emacs
-    ./pi
-    ./claude
-    ./codex
-  ];
-
   environment = {
     shellAliases = {
       loc = "scc -s lines --no-size --no-cocomo && github-linguist";

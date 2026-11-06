@@ -1,3 +1,5 @@
+self:
+
 {
   config,
   lib,
@@ -131,7 +133,7 @@ let
   ]);
 in
 {
-  imports = [ ../../options.nix ];
+  imports = [ self.nixosModules.options ];
 
   environment = {
     sessionVariables = {

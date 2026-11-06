@@ -1,3 +1,5 @@
+self:
+
 {
   pkgs,
   lib,
@@ -7,6 +9,7 @@
 
 let
   cfg = config.ozozka;
+  ozpkgs = self.packages.${pkgs.stdenv.hostPlatform.system};
 
   mkOpt =
     type: default: description:
@@ -46,8 +49,6 @@ let
   };
 in
 {
-  imports = [ ./overlays.nix ];
-
   options.ozozka = {
     user = {
       name = mkOpt lib.types.str "Oğuzhan" "First name";
@@ -63,13 +64,13 @@ in
     };
 
     wallpaper =
-      mkOpt lib.types.path "${pkgs.ozozka.ozozka-assets}/share/wallpapers/ebru.jpg"
+      mkOpt lib.types.path "${ozpkgs.ozozka-assets}/share/wallpapers/ebru.jpg"
         "Wallpaper image.";
 
     cursor = {
       size = mkOpt lib.types.int 24 "Cursor size";
       name = mkOpt lib.types.str (if cfg.col.isDark then "DMZ-White" else "DMZ-Black") "Cursor name";
-      pkg = lib.mkPackageOption pkgs "vanilla-dmz" { };
+      pkg = mkOpt lib.types.package pkgs.vanilla-dmz "Cursor package";
     };
 
     dim = {
@@ -94,16 +95,16 @@ in
       let
         mkFont = name: pkg: desc: {
           name = mkOpt lib.types.str name desc;
-          pkg = lib.mkPackageOption pkgs pkg { };
+          pkg = mkOpt lib.types.package pkg "${desc} package";
         };
       in
       {
-        emoji = mkFont "Noto Color Emoji" "noto-fonts-color-emoji" "Emoji font";
-        serifa = mkFont "Spectral" "spectral" "Alternative serif font";
-        serif = mkFont "Manuale" [ "ozozka" "manuale" ] "Serif font";
-        sansa = mkFont "Source Sans 3" "source-sans" "Alternative sans font";
-        sans = mkFont "Inter" "inter" "Sans font";
-        mono = mkFont "Oziosevka" [ "ozozka" "oziosevka" ] "Monospace font";
+        emoji = mkFont "Noto Color Emoji" pkgs.noto-fonts-color-emoji "Emoji font";
+        serifa = mkFont "Spectral" pkgs.spectral "Alternative serif font";
+        serif = mkFont "Manuale" ozpkgs.manuale "Serif font";
+        sansa = mkFont "Source Sans 3" pkgs.source-sans "Alternative sans font";
+        sans = mkFont "Inter" pkgs.inter "Sans font";
+        mono = mkFont "Oziosevka" ozpkgs.oziosevka "Monospace font";
       };
 
     theme = mkOpt (lib.types.enum (lib.attrNames themes)) "dark" "Color theme.";

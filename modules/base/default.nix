@@ -1,18 +1,12 @@
+self:
+
 { config, pkgs, ... }:
 
 let
   cfg = config.ozozka;
 in
 {
-  imports = [
-    ../options.nix
-
-    ./nvim
-    ./console.nix
-    ./git.nix
-    ./network.nix
-    ./tmux.nix
-  ];
+  imports = [ self.nixosModules.options ];
 
   boot = {
     kernelPackages = pkgs.linuxPackages_latest;

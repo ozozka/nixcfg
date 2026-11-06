@@ -1,7 +1,8 @@
-{ lib }:
+self:
 
 let
   inherit (builtins) attrNames pathExists readDir;
+  inherit (self.inputs.nixpkgs) lib;
 
   joinName = prefix: name: if prefix == "" then name else "${prefix}-${name}";
 
@@ -60,11 +61,11 @@ let
       entries
     else
       throw ''
-        Duplicate generated module names:
+        Duplicate discovered names:
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList formatDuplicate duplicates)}
       '';
 in
-{
+rec {
   paths =
     dir: act:
     lib.listToAttrs (
@@ -74,7 +75,30 @@ in
       }) (checkedEntries dir)
     );
 
+  # Every file in this flake is a function of `self`.
+  load = path: import path self;
+
+  # Keyed by path so repeated imports dedup, which is safe because every file gets the same
+  # `self`. A default.nix module also imports its siblings.
+  module = path: {
+    key = toString path;
+    _file = path;
+    imports = [
+      (load path)
+    ]
+    ++ lib.optionals (baseNameOf path == "default.nix") (lib.attrValues (paths (dirOf path) module));
+  };
+
   perSystem =
-    nixpkgs: systems: f:
-    nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
+    systems: f: lib.genAttrs systems (system: f self.inputs.nixpkgs.legacyPackages.${system});
+
+  # Builds every package in `dir` with the given pkgs.
+  packages = dir: pkgs: paths dir (path: pkgs.callPackage (load path) { });
+
+  templates =
+    dir:
+    lib.mapAttrs (name: _: {
+      path = dir + "/${name}";
+      inherit (import (dir + "/${name}/flake.nix")) description;
+    }) (readDir dir);
 }
