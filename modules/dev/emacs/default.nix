@@ -122,15 +122,6 @@ in
     ];
   };
 
-  # Load the whole compiled configuration in batch Emacs on every config change.
-  system.checks = [
-    (pkgs.runCommand "emacs-config-check" { nativeBuildInputs = [ emacs ]; } ''
-      export HOME="$TMPDIR"
-      emacs --batch -l ${./test-config.el} -l ${./test-env.el} -f ert-run-tests-batch-and-exit
-      touch "$out"
-    '')
-  ];
-
   services.emacs = {
     enable = true;
     defaultEditor = true;

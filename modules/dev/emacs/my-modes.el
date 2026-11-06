@@ -158,7 +158,7 @@
   :functions treesit-major-mode-setup
   :preface
   ;; treesit-x always reads queries below `user-emacs-directory'; read the
-  ;; Nix-built queries instead. Covered by the emacs-config check.
+  ;; Nix-built queries instead.
   (define-advice treesit-generic-mode-font-lock-query (:around (query lang) my-nix-queries)
     "Read LANG highlighting queries from `my-treesit-query-root'."
     (let ((user-emacs-directory my-treesit-query-root))
