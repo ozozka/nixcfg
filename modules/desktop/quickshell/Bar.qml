@@ -9,18 +9,6 @@ import Quickshell.Services.Mpris
 
 Scope {
   id: barModule
-  required property T theme
-  readonly property alias controls: systemControls
-
-  Lib.SystemControls {
-    id: systemControls
-    theme: barModule.theme
-    profiles: powerProfiles
-  }
-
-  Lib.PowerProfiles {
-    id: powerProfiles
-  }
   property var detailBar: null
   signal controlsOpened
 
@@ -33,27 +21,35 @@ Scope {
     detailBar = window;
     details.screen = window.screen;
     controls.toggleDetails(section, item);
+    if (controls.expanded === "profiles")
+      powerProfiles.refresh();
     if (controls.expanded !== "") {
       controlsOpened();
       Qt.callLater(() => detailBody.forceActiveFocus());
     }
   }
 
+  Lib.SystemControls {
+    id: controls
+  }
+
+  Lib.PowerProfiles {
+    id: powerProfiles
+  }
+
   Lib.MenuWindow {
     id: details
-    theme: barModule.theme
-    visible: barModule.controls.expanded !== ""
+    visible: controls.expanded !== ""
     barInteractive: true
     WlrLayershell.namespace: "quickshell-controls"
     anchorCenter: {
-      const item = barModule.controls.selectionAnchor;
-      const window = barModule.detailBar;
-      return item && window ? item.parent.mapToItem(window.contentItem, item.x + item.width / 2,
-                                                    0).x : -1;
+      const item = controls.selectionAnchor;
+      const bar = barModule.detailBar;
+      return item && bar ? item.parent.mapToItem(bar.contentItem, item.x + item.width / 2, 0).x :
+                           -1;
     }
-    menuWidth: Math.min(380, Math.max(0, width - theme.dimS * 2))
-    menuHeight: Math.min(detailBody.implicitHeight, Math.max(0, height - theme.dimM - theme.dimS
-                                                             * 2))
+    menuWidth: Math.min(380, Math.max(0, width - T.dimS * 2))
+    menuHeight: Math.min(detailBody.implicitHeight, Math.max(0, height - T.dimM - T.dimS * 2))
     onDismissRequested: barModule.closeDetails()
     onKeyPressed: event => {
       if (event.key === Qt.Key_Escape) {
@@ -64,66 +60,86 @@ Scope {
 
     Lib.ScrollColumn {
       id: detailBody
-      theme: barModule.theme
       anchors.fill: parent
 
-      Lib.Heading {
-        theme: barModule.theme
-        visible: barModule.controls.expanded === "profiles"
-        text: "Battery"
-      }
-      ColumnLayout {
-        Layout.fillWidth: true
-        visible: barModule.controls.expanded === "profiles"
-        spacing: barModule.theme.dimS
-
-        Lib.SectionText {
-          theme: barModule.theme
-          text: `Charge: %${Math.round(battery.percentage)}`
-        }
-        Lib.SectionText {
-          theme: barModule.theme
-          text: `Status: ${battery.status}`
-        }
-        Lib.SectionText {
-          theme: barModule.theme
-          visible: battery.status === "Charging" || battery.status === "Discharging"
-          text: battery.remainingSeconds > 0 ? (battery.status === "Charging"
-                                                ? "Time until full: " : "Time remaining: ")
-                                               + Math.floor(battery.remainingSeconds / 60)
-                                               + "m" : "Estimate unavailable"
-          color: theme.colM
-        }
-        Lib.SectionText {
-          theme: barModule.theme
-          text: "Power profiles"
-          font.bold: true
-        }
-        Lib.SectionText {
-          theme: barModule.theme
-          visible: !barModule.controls.profiles.available
-          text: "Power profiles unavailable"
-          color: theme.colM
-        }
-      }
       Loader {
         Layout.fillWidth: true
-        Layout.bottomMargin: visible ? barModule.theme.dimS : 0
-        visible: barModule.controls.expanded === "output"
-        sourceComponent: visible ? playbackDetails : null
-      }
-      Loader {
-        Layout.fillWidth: true
-        sourceComponent: details.visible ? barModule.controls.details : null
+        sourceComponent: ({
+                            profiles: batteryDetails,
+                            output: outputDetails,
+                            wifi: controls.wifiDetails
+                          })[controls.expanded] ?? null
       }
     }
   }
 
   Component {
-    id: playbackDetails
-    Lib.PlaybackDetails {
-      theme: barModule.theme
-      playback: media
+    id: batteryDetails
+    ColumnLayout {
+      spacing: T.dimS
+      Lib.Heading {
+        text: "Battery"
+      }
+      Lib.SectionText {
+        text: `Charge: %${Math.round(battery.percentage)}`
+      }
+      Lib.SectionText {
+        text: `Status: ${battery.status}`
+      }
+      Lib.SectionText {
+        readonly property bool charging: battery.status === "Charging"
+        visible: charging || battery.status === "Discharging"
+        readonly property string prefix: charging ? "Time until full" : "Time remaining"
+        readonly property int minutes: Math.floor(battery.remainingSeconds / 60)
+        text: battery.remainingSeconds > 0 ? `${prefix}: ${minutes}m` : "Estimate unavailable"
+        color: T.colM
+      }
+      Lib.Heading {
+        text: "Power profiles"
+      }
+      Lib.SectionText {
+        visible: !powerProfiles.available
+        text: "Power profiles unavailable"
+        color: T.colM
+      }
+      Repeater {
+        model: powerProfiles.availableProfiles
+        Lib.MenuButton {
+          required property string modelData
+          Layout.fillWidth: true
+          text: modelData
+          selected: powerProfiles.activeProfile === modelData
+          enabled: powerProfiles.available && !powerProfiles.busy
+          onClicked: powerProfiles.setProfile(modelData)
+        }
+      }
+      Lib.Message {
+        color: T.colS
+        text: powerProfiles.error
+      }
+    }
+  }
+
+  Component {
+    id: outputDetails
+    ColumnLayout {
+      spacing: T.dimS
+      Lib.PlaybackDetails {
+        Layout.fillWidth: true
+        Layout.bottomMargin: T.dimS
+        playback: media
+      }
+      Lib.AudioOptions {
+        Layout.fillWidth: true
+        controlOwner: controls
+        input: true
+      }
+      Lib.AudioOptions {
+        Layout.fillWidth: true
+        Layout.topMargin: T.dimS
+        controlOwner: controls
+        input: false
+      }
     }
   }
 
@@ -206,9 +222,9 @@ Scope {
 
       WlrLayershell.namespace: "quickshell-bar"
 
-      color: barModule.theme.colB
+      color: T.colB
 
-      implicitHeight: barModule.theme.dimM
+      implicitHeight: T.dimM
       anchors {
         bottom: true
         left: true
@@ -228,16 +244,14 @@ Scope {
               required property int index
               readonly property var ws: Hyprland.workspaces.values.find(w => w.id === index + 1)
               readonly property bool occupied: (ws?.toplevels.values.length ?? 0) > 0
-              theme: barModule.theme
               selected: Hyprland.focusedWorkspace?.id === (index + 1)
               text: "🞄"
-              textColor: occupied ? theme.colF : theme.colM
+              textColor: occupied ? T.colF : T.colM
               font.bold: true
             }
           }
         }
         BarItem {
-          theme: barModule.theme
           text: bar.showingDate ? Qt.formatDate(clock.date, "yyyy-MM-dd") : Qt.formatTime(
                                     clock.date, "hh:mm:ss")
           focusPolicy: Qt.StrongFocus
@@ -248,32 +262,45 @@ Scope {
             onTapped: bar.showingDate = !bar.showingDate
           }
         }
-        Repeater {
-          model: ["wifi", "output"]
-
-          ControlSummary {
-            required property string modelData
-            section: modelData
-            barWindow: bar
-          }
+        DetailItem {
+          readonly property bool off: !Networking.wifiEnabled || !Networking.wifiHardwareEnabled
+          readonly property bool disconnected: !off && !!controls.wifiDevice &&
+                                               !controls.connectedNetwork
+          section: "wifi"
+          barWindow: bar
+          enabled: !!controls.wifiDevice || !!controls.adapter
+          muted: off
+          textColor: !enabled || off || disconnected ? T.colM : T.colF
+          font.bold: disconnected
+          text: off ? "-" : disconnected ? "~" : controls.wifiStatus
+          Accessible.name: "Wi-Fi · " + controls.wifiStatus
+          Accessible.description: off ? "Muted · " : ""
         }
-        BarItem {
-          id: batteryButton
-          theme: barModule.theme
-          selected: barModule.controls.expanded === "profiles" && barModule.detailBar === bar
-          focusPolicy: Qt.StrongFocus
+        DetailItem {
+          section: "output"
+          barWindow: bar
+          enabled: controls.audioDevices.length > 0 || media.player !== null
+          muted: controls.outputAvailable && controls.output.audio.muted
+          text: controls.outputAvailable ? `%${Math.round(controls.output.audio.volume * 100)}` :
+                                           "—"
+          suffixText: media.timing
+          suffixColor: media.playing ? T.colF : T.colM
+          Accessible.name: "Speaker · " + controls.audioMetadata.label(controls.output)
+          Accessible.description: (muted ? "Muted · " : "") + text + (suffixText ? " · " + suffixText :
+                                                                                   "")
+        }
+        DetailItem {
+          section: "profiles"
+          barWindow: bar
           Accessible.name: "Battery"
           Accessible.description: `%${Math.round(battery.percentage)} · ${battery.status}`
-          onClicked: barModule.toggleDetails("profiles", batteryButton, bar)
           text: battery.status === "Full" ? "🞄" : (battery.status === "Discharging" ? "-%" : "%")
                                             + Math.round(battery.percentage)
         }
         BarItem {
-          theme: barModule.theme
           text: keyboard.layout
         }
         BarItem {
-          theme: barModule.theme
           text: submap.name
           visible: text !== "default" && text !== ""
         }
@@ -285,24 +312,19 @@ Scope {
         spacing: 0
 
         BarItem {
-          theme: barModule.theme
           text: network.connected ? barModule.formatRate(network.totalBytesPerSecond) : ""
         }
         BarItem {
-          theme: barModule.theme
           text: Math.round(temperatureFile.value / 1000) + "°C"
         }
         BarItem {
-          theme: barModule.theme
           text: processes.count
           Accessible.name: processes.count + " processes"
         }
         BarItem {
-          theme: barModule.theme
           text: "%" + cpu.usage.toFixed(2)
         }
         BarItem {
-          theme: barModule.theme
           text: (memory.usedBytes / (1024 * 1024 * 1024)).toFixed(2)
         }
       }
@@ -551,16 +573,16 @@ Scope {
 
   component BarItem: Lib.MenuButton {
     id: item
-    property color textColor: !enabled || muted ? theme.colM : theme.colF
+    property color textColor: !enabled || muted ? T.colM : T.colF
     property string suffixText: ""
     property color suffixColor: textColor
-    implicitHeight: theme.dimM
+    implicitHeight: T.dimM
     implicitWidth: text.length > 0 ? label.implicitWidth + suffix.implicitWidth : 0
     visible: text.length > 0
     padding: 0
     focusPolicy: Qt.NoFocus
     font.family: "monospace"
-    font.pointSize: theme.fontSizeM
+    font.pointSize: T.fontSizeM
 
     contentItem: Row {
       Text {
@@ -584,32 +606,14 @@ Scope {
     }
   }
 
-  component ControlSummary: BarItem {
-    id: summary
+  // Bar item that toggles its section in the details popup.
+  component DetailItem: BarItem {
+    id: detailItem
     required property string section
     required property var barWindow
-    readonly property var owner: barModule.controls
-    theme: barModule.theme
-    enabled: owner.available(section) || (section === "output" && media.player !== null)
-    selected: owner.expanded === section && barModule.detailBar === barWindow
-    muted: owner.muted(section)
-    readonly property bool disconnected: section === "wifi" && !muted && owner.wifiDevice
-                                         !== null && !owner.connectedNetwork
-
-    font.bold: disconnected
-    textColor: !enabled || muted || disconnected ? theme.colM : theme.colF
+    selected: controls.expanded === section && barModule.detailBar === barWindow
     focusPolicy: Qt.StrongFocus
-    Accessible.name: owner.summary(section)
-    suffixText: section === "output" ? media.timing : ""
-    suffixColor: media.playing ? theme.colF : theme.colM
-    Accessible.description: (muted ? "Muted · " : "") + owner.value(section) + (suffixText
-                                                                                ? " · " + suffixText :
-                                                                                  "")
-    onClicked: barModule.toggleDetails(section, summary, barWindow)
-
-    text: section !== "wifi" ? owner.value(section) : muted ? "-" : disconnected ? "~" :
-                                                                                   owner.wifiStatus
-
+    onClicked: barModule.toggleDetails(section, detailItem, barWindow)
   }
 
   Scope {

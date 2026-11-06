@@ -24,9 +24,11 @@ in
       "xdg/quickshell/Wallpaper.qml".source = ./Wallpaper.qml;
       "xdg/quickshell/Lib.qml".source = ./Lib.qml;
       "xdg/quickshell/T.qml".text = ''
+        pragma Singleton
         import QtQuick
+        import Quickshell
 
-        QtObject {
+        Singleton {
           readonly property color colP: ${builtins.toJSON "#${cfg.col.p.hex}"}
           readonly property color colS: ${builtins.toJSON "#${cfg.col.s.hex}"}
           readonly property color colF: ${builtins.toJSON "#${cfg.col.f.hex}"}

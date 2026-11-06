@@ -6,7 +6,6 @@ import Quickshell.Widgets
 
 Scope {
   id: menuModule
-  required property T theme
   required property var focusedScreen
   property string pendingAction: ""
   property bool powerExpanded: false
@@ -119,27 +118,24 @@ Scope {
   Lib.MenuWindow {
     id: panel
 
-    theme: menuModule.theme
-    menuWidth: Math.min(480, width - menuModule.theme.dimS * 2)
-    menuHeight: Math.min(applications.height + menuModule.theme.dimS * 2, Math.max(0, height
-                                                                                   - menuModule.theme.dimM
-                                                                                   - menuModule.theme.dimS
-                                                                                   * 2))
+    menuWidth: Math.min(480, width - T.dimS * 2)
+    menuHeight: Math.min(applications.height + T.dimS * 2, Math.max(0, height - T.dimM - T.dimS
+                                                                    * 2))
     onDismissRequested: menuModule.close()
     widgetContent: Rectangle {
       id: selection
-      readonly property real inset: menuModule.theme.dimS
+      readonly property real inset: T.dimS
       visible: panel.visible && menuModule.powerExpanded
-      color: menuModule.theme.colB
+      color: T.colB
       width: Math.min(380, panel.width - inset * 2)
-      height: Math.min(body.implicitHeight, panel.height - menuModule.theme.dimM - inset * 2)
+      height: Math.min(body.implicitHeight, panel.height - T.dimM - inset * 2)
       x: {
-        const beside = panel.menuX + panel.menuWidth + menuModule.theme.dimS;
+        const beside = panel.menuX + panel.menuWidth + T.dimS;
         return beside + width + inset <= panel.width ? beside : Math.max(inset, panel.width
                                                                          - width - inset);
       }
       y: Math.max(inset, Math.min(panel.menuY + panel.menuHeight - height, panel.height
-                                  - menuModule.theme.dimM - inset - height))
+                                  - T.dimM - inset - height))
 
       // Consume blank-area clicks, but leave child controls interactive.
       MouseArea {
@@ -149,21 +145,18 @@ Scope {
 
       Lib.ScrollColumn {
         id: body
-        theme: menuModule.theme
         anchors.fill: parent
         Lib.Heading {
-          theme: menuModule.theme
           text: "Power actions"
         }
         Loader {
           Layout.fillWidth: true
           active: selection.visible
           sourceComponent: ColumnLayout {
-            spacing: menuModule.theme.dimS
+            spacing: T.dimS
             Repeater {
               model: menuModule.powerEntries
               Lib.MenuButton {
-                theme: menuModule.theme
                 required property var modelData
                 Layout.fillWidth: true
                 symbol: modelData.symbol
@@ -192,7 +185,7 @@ Scope {
       id: scroll
       anchors {
         fill: parent
-        margins: menuModule.theme.dimS
+        margins: T.dimS
       }
       contentHeight: applications.height
       clip: true
@@ -200,7 +193,6 @@ Scope {
 
       ApplicationSearch {
         id: applications
-        theme: menuModule.theme
         width: scroll.width
         height: implicitHeight
         powerSelected: menuModule.powerExpanded
@@ -213,15 +205,14 @@ Scope {
 
   component ApplicationSearch: FocusScope {
     id: applications
-    required property T theme
     signal launched
     property alias query: search.text
     property bool powerSelected: false
     signal powerClicked
     property int visibleResultLimit: 6
-    readonly property real resultHeight: applications.theme.dimM + applications.theme.dimS
+    readonly property real resultHeight: T.dimM + T.dimS
     implicitHeight: Math.max(1, Math.min(results.count, visibleResultLimit)) * resultHeight
-                    + applications.theme.dimS + searchRow.height
+                    + T.dimS + searchRow.height
 
     function focusSearch() {
       search.forceActiveFocus();
@@ -274,7 +265,7 @@ Scope {
         bottom: searchRow.top
         left: parent.left
         right: parent.right
-        bottomMargin: applications.theme.dimS
+        bottomMargin: T.dimS
       }
       clip: true
       model: resultModel
@@ -291,8 +282,7 @@ Scope {
         readonly property bool current: ListView.isCurrentItem
         width: results.width
         height: applications.resultHeight
-        color: resultHover.hovered || resultItem.current ? applications.theme.colO :
-                                                           applications.theme.colB
+        color: resultHover.hovered || resultItem.current ? T.colO : T.colB
         HoverHandler {
           id: resultHover
         }
@@ -300,24 +290,23 @@ Scope {
           id: applicationIcon
           anchors {
             left: parent.left
-            leftMargin: applications.theme.dimS
+            leftMargin: T.dimS
             verticalCenter: parent.verticalCenter
           }
-          width: applications.theme.dimM
-          height: applications.theme.dimM
+          width: T.dimM
+          height: T.dimM
           source: Quickshell.iconPath(modelData.icon || "application-x-executable", "")
         }
         Lib.Label {
-          theme: applications.theme
           anchors {
             left: applicationIcon.right
             right: parent.right
             verticalCenter: parent.verticalCenter
-            leftMargin: applications.theme.dimS
-            rightMargin: applications.theme.dimS
+            leftMargin: T.dimS
+            rightMargin: T.dimS
           }
           text: modelData.name
-          color: resultItem.current ? applications.theme.colF : applications.theme.colM
+          color: resultItem.current ? T.colF : T.colM
           elide: Text.ElideRight
         }
         TapHandler {
@@ -327,11 +316,10 @@ Scope {
     }
 
     Lib.Label {
-      theme: applications.theme
       anchors.centerIn: results
       visible: results.count === 0
       text: "No matching applications"
-      color: applications.theme.colM
+      color: T.colM
     }
 
     RowLayout {
@@ -341,12 +329,11 @@ Scope {
         left: parent.left
         right: parent.right
       }
-      height: applications.theme.dimM + applications.theme.dimS
-      spacing: applications.theme.dimS
+      height: T.dimM + T.dimS
+      spacing: T.dimS
       Lib.MenuButton {
-        theme: applications.theme
         symbol: "⏻"
-        implicitHeight: theme.dimM + theme.dimS
+        implicitHeight: T.dimM + T.dimS
         implicitWidth: implicitHeight
         Layout.alignment: Qt.AlignVCenter
         Accessible.name: "Power actions"
@@ -357,17 +344,16 @@ Scope {
         id: searchBox
         Layout.fillWidth: true
         Layout.fillHeight: true
-        color: applications.theme.colB
+        color: T.colB
         Lib.Input {
           id: search
-          theme: applications.theme
           activeFocusOnTab: true
           anchors {
             fill: parent
-            leftMargin: applications.theme.dimS
-            rightMargin: applications.theme.dimS
-            topMargin: applications.theme.dimS / 2
-            bottomMargin: applications.theme.dimS / 2
+            leftMargin: T.dimS
+            rightMargin: T.dimS
+            topMargin: T.dimS / 2
+            bottomMargin: T.dimS / 2
           }
           clip: true
           onTextChanged: results.currentIndex = resultModel.values.length ? 0 : -1
@@ -382,7 +368,7 @@ Scope {
             anchors.fill: parent
             visible: !search.text.length
             text: "Search applications…"
-            color: applications.theme.colM
+            color: T.colM
             font: search.font
             verticalAlignment: Text.AlignVCenter
           }

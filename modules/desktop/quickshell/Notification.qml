@@ -7,32 +7,33 @@ import Quickshell.Services.Notifications
 
 Scope {
   id: notificationModule
-  required property T theme
   required property var focusedScreen
+  property var states: []
 
-  Connections {
-    target: store
-    function onPromoted() {
-      if (focusedScreen)
-        popupWindow.screen = focusedScreen;
-      Qt.callLater(() => stack.contentY = 0);
-    }
+  function promote(state) {
+    states = [state, ...states.filter(candidate => candidate !== state)];
+    if (focusedScreen)
+      popupWindow.screen = focusedScreen;
+    Qt.callLater(() => stack.contentY = 0);
+  }
+
+  function remove(state) {
+    states = states.filter(candidate => candidate !== state);
+    Qt.callLater(() => state.destroy());
   }
 
   ScriptModel {
     id: popupModel
-    values: store.states
+    values: notificationModule.states
   }
 
   PanelWindow {
     id: popupWindow
     visible: popupModel.values.length > 0
     color: "transparent"
-    implicitWidth: Math.min(notificationModule.theme.dimH, (screen?.width ?? 1920)
-                            - notificationModule.theme.dimS * 2)
-    implicitHeight: Math.min(popupColumn.implicitHeight, (screen?.height ?? 1080)
-                             - notificationModule.theme.dimM - notificationModule.theme.dimS
-                             * 2)
+    implicitWidth: Math.min(T.dimH, (screen?.width ?? 1920) - T.dimS * 2)
+    implicitHeight: Math.min(popupColumn.implicitHeight, (screen?.height ?? 1080) - T.dimM
+                             - T.dimS * 2)
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.namespace: "quickshell-notifications"
     WlrLayershell.layer: WlrLayer.Overlay
@@ -42,8 +43,8 @@ Scope {
       left: true
     }
     margins {
-      top: notificationModule.theme.dimS
-      left: notificationModule.theme.dimS
+      top: T.dimS
+      left: T.dimS
     }
 
     Flickable {
@@ -55,11 +56,10 @@ Scope {
       Column {
         id: popupColumn
         width: stack.width
-        spacing: notificationModule.theme.dimS
+        spacing: T.dimS
         Repeater {
           model: popupModel
           NotificationCard {
-            theme: notificationModule.theme
             required property var modelData
             width: popupColumn.width
             notificationState: modelData
@@ -72,17 +72,59 @@ Scope {
   IpcHandler {
     target: "notifications"
     function dismissAll(): void {
-      const states = store.states.slice();
-      for (const state of states) {
-        if (state.notification)
-          state.notification.dismiss();
+      for (const state of notificationModule.states.slice())
+        state.notification?.dismiss();
+    }
+  }
+
+  NotificationServer {
+    keepOnReload: true
+    persistenceSupported: true
+    actionsSupported: true
+    imageSupported: true
+    onNotification: notification => {
+      notification.tracked = true;
+      notificationModule.promote(stateComponent.createObject(notificationModule, {
+                                                               notification: notification,
+                                                               receivedAt: new Date()
+                                                             }));
+    }
+  }
+
+  Component {
+    id: stateComponent
+    QtObject {
+      id: state
+      required property var notification
+      required property date receivedAt
+      property bool refreshPending: false
+      // Any content change moves the notification back to the top.
+      readonly property var content: [notification?.summary, notification?.body, notification
+        ?.appName, notification?.image, notification?.appIcon, notification?.actions,
+        notification?.urgency, notification?.desktopEntry, notification?.hints]
+
+      onContentChanged: {
+        if (refreshPending)
+          return;
+        refreshPending = true;
+        Qt.callLater(() => {
+          state.refreshPending = false;
+          if (state.notification && notificationModule.states.includes(state))
+            notificationModule.promote(state);
+        });
+      }
+
+      property Connections closed: Connections {
+        target: state.notification
+        function onClosed() {
+          notificationModule.remove(state);
+        }
       }
     }
   }
 
   component NotificationCard: Rectangle {
     id: card
-    required property T theme
 
     required property var notificationState
     readonly property var notification: notificationState?.notification ?? null
@@ -97,8 +139,8 @@ Scope {
       return "";
     }
 
-    implicitHeight: content.implicitHeight + card.theme.dimS * 2
-    color: cardHover.hovered ? card.theme.colO : card.theme.colB
+    implicitHeight: content.implicitHeight + T.dimS * 2
+    color: cardHover.hovered ? T.colO : T.colB
     HoverHandler {
       id: cardHover
     }
@@ -131,18 +173,17 @@ Scope {
         left: parent.left
         right: parent.right
         top: parent.top
-        margins: card.theme.dimS
+        margins: T.dimS
       }
-      spacing: card.theme.dimS
+      spacing: T.dimS
 
       RowLayout {
         width: parent.width
-        spacing: card.theme.dimS
+        spacing: T.dimS
 
         Image {
-          id: notificationImage
-          Layout.preferredWidth: card.theme.dimM
-          Layout.preferredHeight: card.theme.dimM
+          Layout.preferredWidth: T.dimM
+          Layout.preferredHeight: T.dimM
           Layout.alignment: Qt.AlignTop
           visible: source.toString().length > 0
           source: card.imageSource()
@@ -151,124 +192,35 @@ Scope {
         }
 
         Lib.SectionText {
-          theme: card.theme
           Layout.minimumWidth: 0
           Layout.alignment: Qt.AlignTop
           textFormat: Text.RichText
 
-          function escapeHeading(value) {
+          function html(value) {
             return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g,
                                                                                       "&gt;").replace(
                   /\n/g, "<br>");
           }
 
-          text: "<b>" + escapeHeading(card.notification?.appName ?? "") + "</b>: "
-                + escapeHeading(card.notification?.summary ?? "")
+          text: "<b>" + html(card.notification?.appName ?? "") + "</b>: " + html(
+                  card.notification?.summary ?? "")
         }
 
         Lib.Label {
-          theme: card.theme
           Layout.alignment: Qt.AlignTop
           Layout.minimumWidth: implicitWidth
           text: Qt.formatDateTime(card.notificationState.receivedAt, "HH:mm")
-          color: card.theme.colM
+          color: T.colM
           font.family: "monospace"
           horizontalAlignment: Text.AlignRight
         }
       }
 
       Lib.Message {
-        theme: card.theme
         width: parent.width
         font.family: "serif"
         textFormat: Text.PlainText
         text: card.notification?.body ?? ""
-      }
-    }
-  }
-
-  Scope {
-    id: store
-    property var states: []
-    signal promoted
-
-    function promote(state) {
-      states = [state, ...states.filter(candidate => candidate !== state)];
-      promoted();
-    }
-
-    function remove(state) {
-      states = states.filter(candidate => candidate !== state);
-      Qt.callLater(() => state.destroy());
-    }
-
-    NotificationServer {
-      keepOnReload: true
-      persistenceSupported: true
-      actionsSupported: true
-      imageSupported: true
-      onNotification: notification => {
-        notification.tracked = true;
-        const state = stateComponent.createObject(store, {
-                                                    notification: notification,
-                                                    receivedAt: new Date()
-                                                  });
-        store.promote(state);
-      }
-    }
-
-    Component {
-      id: stateComponent
-      QtObject {
-        id: state
-        required property var notification
-        required property date receivedAt
-        property bool refreshPending: false
-
-        function refresh() {
-          if (refreshPending)
-            return;
-          refreshPending = true;
-          Qt.callLater(() => {
-            state.refreshPending = false;
-            if (state.notification && store.states.includes(state))
-              store.promote(state);
-          });
-        }
-
-        property Connections notificationConnections: Connections {
-          target: state.notification
-          function onSummaryChanged() {
-            state.refresh();
-          }
-          function onBodyChanged() {
-            state.refresh();
-          }
-          function onAppNameChanged() {
-            state.refresh();
-          }
-          function onImageChanged() {
-            state.refresh();
-          }
-          function onAppIconChanged() {
-            state.refresh();
-          }
-          function onActionsChanged() {
-            state.refresh();
-          }
-          function onUrgencyChanged() {
-            state.refresh();
-          }
-          function onDesktopEntryChanged() {
-            state.refresh();
-          }
-          function onHintsChanged() {
-            state.refresh();
-          }
-          function onClosed() {
-            store.remove(state);
-          }
-        }
       }
     }
   }

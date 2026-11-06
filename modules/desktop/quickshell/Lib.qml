@@ -12,23 +12,22 @@ import Quickshell.Services.Mpris
 Scope {
   component MenuButton: Button {
     id: button
-    required property T theme
     property bool selected: false
     property string symbol: ""
     property string symbolFamily: "monospace"
-    property real symbolSize: theme.fontSizeM
+    property real symbolSize: T.fontSizeM
     property string valueText: ""
     property bool muted: false
-    implicitHeight: button.theme.dimM + button.theme.dimS
-    implicitWidth: contentItem.implicitWidth + button.theme.dimS * 2
-    padding: button.theme.dimS
+    implicitHeight: T.dimM + T.dimS
+    implicitWidth: contentItem.implicitWidth + T.dimS * 2
+    padding: T.dimS
     hoverEnabled: true
     contentItem: Item {
       id: content
-      readonly property real sideWidth: Math.max(symbolText.visible ? symbolText.implicitWidth :
-                                                                      0, valueLabel.visible
-                                                 ? valueLabel.implicitWidth : 0)
-      readonly property real labelInset: sideWidth > 0 ? sideWidth + button.theme.dimS : 0
+      // Empty texts have no width, so hidden side texts do not need a visibility check.
+      readonly property real sideWidth: Math.max(symbolText.implicitWidth,
+                                                 valueLabel.implicitWidth)
+      readonly property real labelInset: sideWidth > 0 ? sideWidth + T.dimS : 0
       implicitWidth: label.visible ? label.implicitWidth + labelInset * 2 : sideWidth
       implicitHeight: Math.max(label.implicitHeight, symbolText.implicitHeight,
                                valueLabel.implicitHeight)
@@ -52,9 +51,9 @@ Scope {
           rightMargin: content.labelInset
         }
         text: button.text
-        color: !button.enabled || button.muted ? button.theme.colM : button.theme.colF
+        color: !button.enabled || button.muted ? T.colM : T.colF
         font.family: "sans-serif"
-        font.pointSize: button.theme.fontSizeM
+        font.pointSize: T.fontSizeM
         elide: Text.ElideRight
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
@@ -69,20 +68,21 @@ Scope {
         text: button.valueText
         color: label.color
         font.family: "monospace"
-        font.pointSize: button.theme.fontSizeM
+        font.pointSize: T.fontSizeM
       }
     }
     background: Rectangle {
-      color: button.selected || (button.enabled && (button.down || button.hovered))
-             ? button.theme.colO : button.theme.colB
+      color: button.selected || (button.enabled && (button.down || button.hovered)) ? T.colO :
+                                                                                      T.colB
+
     }
   }
 
   component IconButton: MenuButton {
     required property string description
-    symbolSize: theme.fontSizeX
-    implicitWidth: theme.dimM + theme.dimS
-    implicitHeight: theme.dimM + theme.dimS
+    symbolSize: T.fontSizeX
+    implicitWidth: T.dimM + T.dimS
+    implicitHeight: T.dimM + T.dimS
     padding: 0
     Accessible.name: description
     ToolTip.visible: hovered
@@ -90,138 +90,118 @@ Scope {
   }
 
   component PlaybackDetails: ColumnLayout {
-    id: playbackView
-    required property T theme
+    id: view
     required property var playback
     readonly property var player: playback.player
-    spacing: theme.dimS
+    spacing: T.dimS
 
     Heading {
-      theme: playbackView.theme
       text: "Playback"
     }
     SectionText {
-      theme: playbackView.theme
-      visible: !playbackView.player
+      visible: !view.player
       text: "No media player available"
-      color: theme.colM
+      color: T.colM
     }
     ColumnLayout {
       Layout.fillWidth: true
-      visible: playbackView.playback.players.length > 1
-      spacing: playbackView.theme.dimS
+      visible: view.playback.players.length > 1
+      spacing: T.dimS
       Repeater {
-        model: playbackView.playback.players
+        model: view.playback.players
         MenuButton {
           required property var modelData
-          theme: playbackView.theme
           Layout.fillWidth: true
           text: modelData.identity || modelData.dbusName
-          selected: playbackView.player === modelData
-          onClicked: playbackView.playback.select(modelData)
+          selected: view.player === modelData
+          onClicked: view.playback.select(modelData)
         }
       }
     }
     ColumnLayout {
       Layout.fillWidth: true
-      visible: !!playbackView.player
-      spacing: playbackView.theme.dimS
+      visible: !!view.player
+      spacing: T.dimS
 
       ColumnLayout {
         Layout.fillWidth: true
         Layout.minimumWidth: 0
-        spacing: playbackView.theme.dimS / 2
+        spacing: T.dimS / 2
 
         SectionText {
-          theme: playbackView.theme
           Layout.minimumWidth: 0
-          text: playbackView.player?.identity || playbackView.player?.dbusName || ""
-          visible: playbackView.playback.players.length === 1
+          text: view.player?.identity || view.player?.dbusName || ""
+          visible: view.playback.players.length === 1
           textFormat: Text.PlainText
-          font.pointSize: theme.fontSizeS
-          color: theme.colM
+          font.pointSize: T.fontSizeS
+          color: T.colM
         }
         SectionText {
-          theme: playbackView.theme
           Layout.minimumWidth: 0
-          text: playbackView.player?.trackTitle || "No track information"
+          text: view.player?.trackTitle || "No track information"
           horizontalAlignment: Text.AlignHCenter
           textFormat: Text.PlainText
-          font.pointSize: theme.fontSizeS
+          font.pointSize: T.fontSizeS
           font.bold: true
-          color: theme.colM
+          color: T.colM
         }
       }
       RowLayout {
         Layout.fillWidth: true
-        spacing: playbackView.theme.dimS
+        spacing: T.dimS
         SectionText {
-          theme: playbackView.theme
           Layout.fillWidth: false
-          text: playbackView.playback.timing || "Timing unavailable"
+          text: view.playback.timing || "Timing unavailable"
           font.family: "monospace"
-          font.pointSize: theme.fontSizeM
-          color: playbackView.playback.playing ? theme.colF : theme.colM
+          font.pointSize: T.fontSizeM
+          color: view.playback.playing ? T.colF : T.colM
         }
         ThemedSlider {
-          theme: playbackView.theme
           Layout.fillWidth: true
           from: 0
-          to: playbackView.player?.lengthSupported && playbackView.player.length > 0
-              ? playbackView.player.length : 1
-          value: playbackView.playback.position
-          enabled: !!playbackView.player?.canControl && !!playbackView.player?.canSeek
-                   && playbackView.playback.timing.length > 0
-          onMoved: playbackView.player.position = value
+          to: view.player?.lengthSupported && view.player.length > 0 ? view.player.length : 1
+          value: view.playback.position
+          enabled: !!view.player?.canControl && !!view.player?.canSeek
+                   && view.playback.timing.length > 0
+          onMoved: view.player.position = value
           Accessible.name: "Playback position"
         }
         IconButton {
-          theme: playbackView.theme
-          readonly property var player: playbackView.player
-          readonly property int loopMode: player?.loopState ?? MprisLoopState.None
-          symbol: loopMode === MprisLoopState.Track ? "↻¹" : "↻"
-          description: "Repeat: " + (loopMode === MprisLoopState.Track ? "track" : loopMode
-                                                                         === MprisLoopState.Playlist
-                                                                         ? "playlist" : "off")
-                       + " (click to cycle)"
-          muted: loopMode === MprisLoopState.None
-          selected: loopMode !== MprisLoopState.None
-          enabled: !!player?.canControl && !!player?.loopSupported
-          onClicked: {
-            player.loopState = loopMode === MprisLoopState.None ? MprisLoopState.Track :
-                                                                  loopMode
-                                                                  === MprisLoopState.Track
-                                                                  ? MprisLoopState.Playlist :
-                                                                    MprisLoopState.None;
-          }
+          readonly property var modes: [MprisLoopState.None, MprisLoopState.Track,
+            MprisLoopState.Playlist]
+          readonly property int mode: modes.indexOf(view.player?.loopState
+                                                    ?? MprisLoopState.None)
+          symbol: mode === 1 ? "↻¹" : "↻"
+          description: `Repeat: ${["off", "track", "playlist"][mode]} (click to cycle)`
+          muted: mode === 0
+          selected: mode !== 0
+          enabled: !!view.player?.canControl && !!view.player?.loopSupported
+          onClicked: view.player.loopState = modes[(mode + 1) % modes.length]
         }
       }
       RowLayout {
         Layout.fillWidth: true
-        spacing: playbackView.theme.dimS
+        spacing: T.dimS
         Item {
           Layout.fillWidth: true
         }
         IconButton {
-          theme: playbackView.theme
           symbol: "⏮"
           description: "Previous track"
-          enabled: !!playbackView.player?.canGoPrevious && !!playbackView.player?.canControl
-          onClicked: playbackView.player.previous()
+          enabled: !!view.player?.canGoPrevious && !!view.player?.canControl
+          onClicked: view.player.previous()
         }
         IconButton {
-          theme: playbackView.theme
-          symbol: playbackView.playback.playing ? "⏸" : "▶"
-          description: playbackView.playback.playing ? "Pause" : "Play"
-          enabled: !!playbackView.player?.canControl && !!playbackView.player?.canTogglePlaying
-          onClicked: playbackView.player.togglePlaying()
+          symbol: view.playback.playing ? "⏸" : "▶"
+          description: view.playback.playing ? "Pause" : "Play"
+          enabled: !!view.player?.canControl && !!view.player?.canTogglePlaying
+          onClicked: view.player.togglePlaying()
         }
         IconButton {
-          theme: playbackView.theme
           symbol: "⏭"
           description: "Next track"
-          enabled: !!playbackView.player?.canGoNext && !!playbackView.player?.canControl
-          onClicked: playbackView.player.next()
+          enabled: !!view.player?.canGoNext && !!view.player?.canControl
+          onClicked: view.player.next()
         }
         Item {
           Layout.fillWidth: true
@@ -232,7 +212,6 @@ Scope {
 
   component MenuWindow: PanelWindow {
     id: menu
-    required property T theme
 
     default property alias menuContent: surface.data
     property alias menuHeight: surface.height
@@ -272,7 +251,7 @@ Scope {
       Item {
         id: inputRegion
         anchors.fill: parent
-        anchors.bottomMargin: menu.barInteractive ? menu.theme.dimM : 0
+        anchors.bottomMargin: menu.barInteractive ? T.dimM : 0
       }
 
       MouseArea {
@@ -283,17 +262,16 @@ Scope {
 
       Rectangle {
         id: surface
-        color: menu.theme.colB
+        color: T.colB
         MouseArea {
           anchors.fill: parent
           acceptedButtons: Qt.AllButtons
         }
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: menu.theme.dimM + menu.theme.dimS
-        x: menu.anchorCenter < 0 ? menu.theme.dimS : Math.max(menu.theme.dimS, Math.min(
-                                                                menu.anchorCenter - width / 2,
-                                                                menu.width - width
-                                                                - menu.theme.dimS))
+        anchors.bottomMargin: T.dimM + T.dimS
+        x: menu.anchorCenter < 0 ? T.dimS : Math.max(T.dimS, Math.min(menu.anchorCenter - width
+                                                                      / 2, menu.width - width
+                                                                      - T.dimS))
         width: 480
       }
 
@@ -306,8 +284,6 @@ Scope {
 
   component SystemControls: Scope {
     id: controls
-    required property T theme
-    required property var profiles
     readonly property alias audioMetadata: audioMetadata
     readonly property var output: Pipewire.defaultAudioSink
     readonly property bool outputAvailable: !!output?.ready && !!output?.audio
@@ -319,20 +295,30 @@ Scope {
     property string pairingText: ""
     property string networkError: ""
     readonly property bool scanning: scan.running || scanSettling.running
-    readonly property var wifiDevices: Networking.devices.values.filter(device => device.type
-                                                                                  === DeviceType.Wifi)
-    readonly property var wifiDevice: wifiDevices.find(device => device.connected)
-                                      ?? wifiDevices[0] ?? null
-    readonly property var connectedNetwork: wifiDevice?.networks.values.find(network
-                                                                             => network.connected)
+    readonly property var wifiDevices: Networking.devices.values.filter(d => d.type
+                                                                             === DeviceType.Wifi)
+    readonly property var wifiDevice: wifiDevices.find(d => d.connected) ?? wifiDevices[0]
+                                      ?? null
+
+    readonly property var connectedNetwork: wifiDevice?.networks.values.find(n => n.connected)
                                             ?? null
     readonly property var adapter: Bluetooth.defaultAdapter
-    readonly property var audioCandidates: Pipewire.nodes.values.filter(node => !node.isStream
-                                                                                && node.audio)
-    readonly property var audioDevices: audioCandidates.filter(node
-                                                               => audioMetadata.availability(
-                                                                    node) !== "no")
+    readonly property var audioCandidates: Pipewire.nodes.values.filter(n => !n.isStream
+                                                                             && n.audio)
+
+    readonly property var audioDevices: audioCandidates.filter(n => audioMetadata.availability(
+                                                                      n) !== "no")
+    // Why Wi-Fi is unusable, or "" when it is ready.
+    readonly property string wifiState: {
+      if (!wifiDevice)
+        return "unavailable";
+      if (!Networking.wifiHardwareEnabled)
+        return "blocked";
+      return Networking.wifiEnabled ? "" : "off";
+    }
+    readonly property string wifiStatus: wifiState || connectedNetwork?.name || "Not connected"
     signal passwordRequested
+
     function reset() {
       expanded = "";
       selectionAnchor = null;
@@ -352,42 +338,10 @@ Scope {
       reset();
       selectionAnchor = anchor;
       expanded = next;
-      if (next === "profiles")
-        profiles.refresh();
-    }
-
-    readonly property string wifiStatus: {
-      if (!wifiDevice)
-        return "unavailable";
-      if (!Networking.wifiHardwareEnabled)
-        return "blocked";
-      if (!Networking.wifiEnabled)
-        return "off";
-      return connectedNetwork?.name || "Not connected";
-    }
-
-    function summary(section) {
-      return section === "wifi" ? "Wi-Fi · " + wifiStatus : "Speaker · " + audioMetadata.label(
-                                    output);
-    }
-
-    function value(section) {
-      return section !== "output" ? "" : outputAvailable ? "%" + Math.round(output.audio.volume
-                                                                            * 100) : "—";
-    }
-
-    function muted(section) {
-      return section === "wifi" ? !Networking.wifiEnabled || !Networking.wifiHardwareEnabled :
-                                  outputAvailable && output.audio.muted;
-    }
-
-    function available(section) {
-      return section === "wifi" ? wifiDevice !== null || adapter !== null : audioDevices.length
-                                  > 0;
     }
 
     function refreshWifi() {
-      if (!wifiDevice || !Networking.wifiEnabled || !Networking.wifiHardwareEnabled || scanning)
+      if (wifiState || scanning)
         return;
       networkError = "";
       scan.command = ["nmcli", "--wait", "15", "device", "wifi", "rescan", "ifname",
@@ -444,7 +398,6 @@ Scope {
       value: true
       when: controls.expanded === "wifi" && controls.wifiDevice !== null
             && Networking.wifiEnabled
-
       restoreMode: Binding.RestoreBindingOrValue
     }
     Binding {
@@ -457,15 +410,15 @@ Scope {
     Connections {
       target: controls.pendingNetwork
       function onConnectionFailed(reason) {
-        if (reason === ConnectionFailReason.NoSecrets && [WifiSecurityType.WpaPsk,
-                                                          WifiSecurityType.Wpa2Psk,
-                                                          WifiSecurityType.Sae].includes(
-              controls.pendingNetwork.security)) {
+        const noSecrets = reason === ConnectionFailReason.NoSecrets;
+        const psk = [WifiSecurityType.WpaPsk, WifiSecurityType.Wpa2Psk,
+                     WifiSecurityType.Sae].includes(controls.pendingNetwork.security);
+        if (noSecrets && psk) {
           controls.passwordNetwork = controls.pendingNetwork;
           controls.networkError = "Enter the Wi-Fi password.";
           controls.passwordRequested();
         } else {
-          controls.networkError = reason === ConnectionFailReason.NoSecrets
+          controls.networkError = noSecrets
               ? "This network requires credentials in a NetworkManager connection profile." :
                 ConnectionFailReason.toString(reason);
         }
@@ -483,240 +436,166 @@ Scope {
       nodes: controls.audioCandidates
     }
 
-    // Only the selected view is instantiated; backend state remains shared.
-    readonly property Component details: expanded === "wifi" ? connectionDetails : expanded
-                                                               === "output" ? audioDetails :
-                                                                              profileDetails
-
-    Component {
-      id: profileDetails
+    readonly property Component wifiDetails: Component {
       ColumnLayout {
-        spacing: controls.theme.dimS
+        spacing: T.dimS
+        Heading {
+          text: "Bluetooth"
+        }
+        MenuButton {
+          Layout.fillWidth: true
+          text: controls.adapter?.enabled ? "Turn Bluetooth off" : "Turn Bluetooth on"
+          enabled: controls.adapter !== null && !pairing.busy
+          onClicked: controls.adapter.enabled = !controls.adapter.enabled
+        }
         Repeater {
-          model: controls.profiles.availableProfiles
+          model: controls.adapter?.devices.values ?? []
           MenuButton {
-            theme: controls.theme
-            required property string modelData
+            required property var modelData
+            readonly property string verb: modelData.pairing ? "Pairing…" : modelData.connected
+                                                               ? "Disconnect" :
+                                                                 modelData.paired ? "Connect" :
+                                                                                    "Pair"
             Layout.fillWidth: true
-            text: modelData
-            selected: controls.profiles.activeProfile === modelData
-            enabled: controls.profiles.available && !controls.profiles.busy
-            onClicked: controls.profiles.setProfile(modelData)
+            text: `${modelData.name || modelData.address} · ${verb}`
+            selected: modelData.connected
+            enabled: !!controls.adapter?.enabled && !pairing.busy && !modelData.pairing &&
+                     ![BluetoothDeviceState.Connecting,
+              BluetoothDeviceState.Disconnecting].includes(modelData.state)
+            onClicked: {
+              if (modelData.paired)
+                modelData.connected = !modelData.connected;
+              else
+                pairing.pair(modelData);
+            }
           }
         }
         Message {
-          theme: controls.theme
-          color: controls.theme.colS
-          text: controls.profiles.error
+          text: pairing.status
+          color: T.colM
         }
-      }
-    }
-
-    Component {
-      id: connectionDetails
-      ColumnLayout {
-        spacing: controls.theme.dimS
-        ColumnLayout {
+        Message {
+          text: pairing.prompt
+          font.bold: true
+        }
+        Field {
           Layout.fillWidth: true
-          spacing: controls.theme.dimS
-          Heading {
-            theme: controls.theme
-            text: "Bluetooth"
+          visible: pairing.busy && pairing.prompt.length > 0 && !pairing.confirmation
+          text: controls.pairingText
+          onTextEdited: controls.pairingText = text
+          placeholderText: "PIN / passkey"
+          font.family: "monospace"
+          onAccepted: {
+            pairing.respond(text);
+            controls.pairingText = "";
           }
+        }
+        RowLayout {
+          visible: pairing.busy && pairing.prompt.length > 0
           MenuButton {
-            theme: controls.theme
-            Layout.fillWidth: true
-            text: controls.adapter?.enabled ? "Turn Bluetooth off" : "Turn Bluetooth on"
-            enabled: controls.adapter !== null && !pairing.busy
-            onClicked: controls.adapter.enabled = !controls.adapter.enabled
-          }
-          Repeater {
-            model: controls.adapter?.devices.values ?? []
-            MenuButton {
-              theme: controls.theme
-              required property var modelData
-              Layout.fillWidth: true
-              text: (modelData.name || modelData.address) + " · " + (modelData.pairing
-                                                                     ? "Pairing…" :
-                                                                       modelData.connected
-                                                                       ? "Disconnect" :
-                                                                         modelData.paired
-                                                                         ? "Connect" : "Pair")
-              selected: modelData.connected
-              enabled: !!controls.adapter?.enabled && !pairing.busy && !modelData.pairing &&
-                       ![BluetoothDeviceState.Connecting,
-                BluetoothDeviceState.Disconnecting].includes(modelData.state)
-              onClicked: {
-                if (modelData.paired)
-                  modelData.connected = !modelData.connected;
-                else
-                  pairing.pair(modelData);
-              }
-            }
-          }
-          Message {
-            theme: controls.theme
-            text: pairing.status
-            color: controls.theme.colM
-          }
-          Message {
-            theme: controls.theme
-            text: pairing.prompt
-            font.bold: true
-          }
-          Field {
-            theme: controls.theme
-            Layout.fillWidth: true
-            visible: pairing.busy && pairing.prompt.length > 0 && !pairing.confirmation
-            text: controls.pairingText
-            onTextEdited: controls.pairingText = text
-            placeholderText: "PIN / passkey"
-            font.family: "monospace"
-            onAccepted: {
-              pairing.respond(text);
+            text: pairing.confirmation ? "Confirm" : "Send"
+            onClicked: {
+              pairing.respond(pairing.confirmation ? "yes" : controls.pairingText);
               controls.pairingText = "";
             }
           }
-          RowLayout {
-            visible: pairing.busy && pairing.prompt.length > 0
-            MenuButton {
-              theme: controls.theme
-              text: pairing.confirmation ? "Confirm" : "Send"
-              onClicked: {
-                pairing.respond(pairing.confirmation ? "yes" : controls.pairingText);
-                controls.pairingText = "";
-              }
-            }
-            MenuButton {
-              theme: controls.theme
-              text: "Cancel"
-              onClicked: pairing.cancel()
-            }
-          }
           MenuButton {
-            theme: controls.theme
-            visible: pairing.busy && !pairing.prompt
-            text: "Cancel pairing"
+            text: "Cancel"
             onClicked: pairing.cancel()
           }
         }
-        ColumnLayout {
+        MenuButton {
+          visible: pairing.busy && !pairing.prompt
+          text: "Cancel pairing"
+          onClicked: pairing.cancel()
+        }
+        Heading {
+          text: "Wi-Fi"
+        }
+        RowLayout {
           Layout.fillWidth: true
-          spacing: controls.theme.dimS
-          Heading {
-            theme: controls.theme
-            text: "Wi-Fi"
+          MenuButton {
+            symbol: "⏻"
+            Accessible.name: Networking.wifiEnabled ? "Turn Wi-Fi off" : "Turn Wi-Fi on"
+            muted: !Networking.wifiEnabled
+            enabled: !!controls.wifiDevice && Networking.wifiHardwareEnabled
+            onClicked: Networking.wifiEnabled = !Networking.wifiEnabled
           }
-          RowLayout {
+          Item {
             Layout.fillWidth: true
-            MenuButton {
-              theme: controls.theme
-              symbol: "⏻"
-              Accessible.name: Networking.wifiEnabled ? "Turn Wi-Fi off" : "Turn Wi-Fi on"
-              muted: !Networking.wifiEnabled
-              enabled: !!controls.wifiDevice && Networking.wifiHardwareEnabled
-              onClicked: Networking.wifiEnabled = !Networking.wifiEnabled
-            }
-            Item {
-              Layout.fillWidth: true
-            }
-            MenuButton {
-              theme: controls.theme
-              symbol: "↻"
-              Accessible.name: controls.scanning ? "Refreshing Wi-Fi" : "Scan / Refresh Wi-Fi"
-              selected: controls.scanning
-              enabled: !!controls.wifiDevice && Networking.wifiEnabled
-                       && Networking.wifiHardwareEnabled && !controls.scanning
-
-              onClicked: controls.refreshWifi()
-            }
-          }
-          SectionText {
-            theme: controls.theme
-            visible: !controls.wifiDevice || !Networking.wifiHardwareEnabled ||
-                     !Networking.wifiEnabled || !(controls.wifiDevice?.networks.values.length
-                                                  ?? 0)
-            text: !controls.wifiDevice ? "Wi-Fi device unavailable." :
-                                         !Networking.wifiHardwareEnabled
-                                         ? "Wi-Fi is blocked by the hardware switch." :
-                                           !Networking.wifiEnabled ? "Wi-Fi is off." :
-                                                                     controls.scanning
-                                                                     ? "Looking for networks…" :
-                                                                       "No networks found."
-            color: controls.theme.colM
-          }
-          Repeater {
-            model: controls.wifiDevice?.networks.values ?? []
-            MenuButton {
-              theme: controls.theme
-              required property var modelData
-              Layout.fillWidth: true
-              text: modelData.name + (modelData.connected ? " · Disconnect" :
-                                                            modelData.stateChanging
-                                                            ? " · Working…" : "")
-              valueText: `%${Math.round(modelData.signalStrength * 100)}`
-              selected: modelData.connected
-              enabled: Networking.wifiEnabled && !modelData.stateChanging
-              onClicked: controls.connectNetwork(modelData)
-            }
-          }
-          Message {
-            theme: controls.theme
-            text: controls.networkError
-            color: controls.passwordNetwork ? controls.theme.colM : controls.theme.colS
-          }
-          Field {
-            id: password
-            theme: controls.theme
-            Layout.fillWidth: true
-            visible: controls.passwordNetwork !== null
-            text: controls.passwordText
-            onTextEdited: controls.passwordText = text
-            placeholderText: "Wi-Fi password"
-            font.pointSize: controls.theme.fontSizeM
-            echoMode: TextInput.Password
-            selectionColor: controls.theme.colP
-            selectedTextColor: controls.theme.colB
-            onAccepted: controls.submitPassword()
-            Connections {
-              target: controls
-              function onPasswordRequested() {
-                Qt.callLater(() => password.forceActiveFocus());
-              }
-            }
           }
           MenuButton {
-            theme: controls.theme
-            visible: controls.passwordNetwork !== null
-            text: "Connect"
-            onClicked: controls.submitPassword()
+            symbol: "↻"
+            Accessible.name: controls.scanning ? "Refreshing Wi-Fi" : "Scan / Refresh Wi-Fi"
+            selected: controls.scanning
+            enabled: !controls.wifiState && !controls.scanning
+            onClicked: controls.refreshWifi()
           }
         }
-      }
-    }
-    Component {
-      id: audioDetails
-      ColumnLayout {
-        spacing: controls.theme.dimS
-        Repeater {
-          model: [true, false]
-          AudioOptions {
-            required property bool modelData
-            controlOwner: controls
-            input: modelData
-            Layout.fillWidth: true
-            Layout.topMargin: input ? 0 : theme.dimS
+        Message {
+          readonly property var reasons: ({
+                                            unavailable: "Wi-Fi device unavailable.",
+                                            blocked: "Wi-Fi is blocked by the hardware switch.",
+                                            off: "Wi-Fi is off."
+                                          })
+          text: {
+            const reason = reasons[controls.wifiState];
+            if (reason || controls.wifiDevice.networks.values.length)
+              return reason ?? "";
+            return controls.scanning ? "Looking for networks…" : "No networks found.";
           }
+          color: T.colM
+        }
+        Repeater {
+          model: controls.wifiDevice?.networks.values ?? []
+          MenuButton {
+            required property var modelData
+            Layout.fillWidth: true
+            text: modelData.name + (modelData.connected ? " · Disconnect" :
+                                                          modelData.stateChanging
+                                                          ? " · Working…" : "")
+            valueText: `%${Math.round(modelData.signalStrength * 100)}`
+            selected: modelData.connected
+            enabled: Networking.wifiEnabled && !modelData.stateChanging
+            onClicked: controls.connectNetwork(modelData)
+          }
+        }
+        Message {
+          text: controls.networkError
+          color: controls.passwordNetwork ? T.colM : T.colS
+        }
+        Field {
+          id: password
+          Layout.fillWidth: true
+          visible: controls.passwordNetwork !== null
+          text: controls.passwordText
+          onTextEdited: controls.passwordText = text
+          placeholderText: "Wi-Fi password"
+          font.pointSize: T.fontSizeM
+          echoMode: TextInput.Password
+          selectionColor: T.colP
+          selectedTextColor: T.colB
+          onAccepted: controls.submitPassword()
+          Connections {
+            target: controls
+            function onPasswordRequested() {
+              Qt.callLater(() => password.forceActiveFocus());
+            }
+          }
+        }
+        MenuButton {
+          visible: controls.passwordNetwork !== null
+          text: "Connect"
+          onClicked: controls.submitPassword()
         }
       }
     }
   }
 
   component Label: Text {
-    required property T theme
-    color: theme.colF
+    color: T.colF
     font.family: "sans-serif"
-    font.pointSize: theme.fontSizeM
+    font.pointSize: T.fontSizeM
   }
 
   component SectionText: Label {
@@ -733,22 +612,20 @@ Scope {
   }
 
   component Field: TextField {
-    required property T theme
-    color: theme.colF
-    placeholderTextColor: theme.colM
+    color: T.colF
+    placeholderTextColor: T.colM
     font.family: "sans-serif"
     background: Rectangle {
-      color: theme.colO
+      color: T.colO
     }
   }
 
   component Input: TextInput {
-    required property T theme
-    color: theme.colF
-    selectionColor: theme.colP
-    selectedTextColor: theme.colB
+    color: T.colF
+    selectionColor: T.colP
+    selectedTextColor: T.colB
     font.family: "sans-serif"
-    font.pointSize: theme.fontSizeM
+    font.pointSize: T.fontSizeM
     verticalAlignment: TextInput.AlignVCenter
   }
 
@@ -757,19 +634,35 @@ Scope {
     inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
   }
 
+  // Background box whose children stack in a padded column.
+  component Panel: Rectangle {
+    default property alias content: column.data
+    color: T.colB
+    implicitHeight: column.implicitHeight + T.dimS * 2
+    Column {
+      id: column
+      anchors {
+        top: parent.top
+        left: parent.left
+        right: parent.right
+        margins: T.dimS
+      }
+      spacing: T.dimS
+    }
+  }
+
   component ThemedSlider: Slider {
     id: slider
-    required property T theme
     property bool muted: false
-    readonly property color activeColor: !enabled || muted ? theme.colM : theme.colF
-    implicitHeight: theme.dimM
+    readonly property color activeColor: !enabled || muted ? T.colM : T.colF
+    implicitHeight: T.dimM
     padding: 0
     background: Rectangle {
       x: slider.leftPadding
       y: slider.topPadding + slider.availableHeight / 2 - height / 2
       width: slider.availableWidth
-      height: slider.theme.dimT
-      color: slider.theme.colO
+      height: T.dimT
+      color: T.colO
       Rectangle {
         width: slider.visualPosition * parent.width
         height: parent.height
@@ -779,17 +672,16 @@ Scope {
     handle: Rectangle {
       x: slider.leftPadding + slider.visualPosition * (slider.availableWidth - width)
       y: slider.topPadding + slider.availableHeight / 2 - height / 2
-      implicitWidth: slider.theme.dimT
-      implicitHeight: slider.theme.dimS
+      implicitWidth: T.dimT
+      implicitHeight: T.dimS
       color: slider.activeColor
     }
   }
 
   component ScrollColumn: Item {
     id: scroll
-    required property T theme
     default property alias contents: column.data
-    property real inset: theme.dimS
+    property real inset: T.dimS
     implicitHeight: column.implicitHeight + inset * 2
     Flickable {
       anchors.fill: parent
@@ -800,75 +692,65 @@ Scope {
       ColumnLayout {
         id: column
         width: parent.width
-        spacing: scroll.theme.dimS
+        spacing: T.dimS
       }
     }
   }
 
   component AudioOptions: ColumnLayout {
-    id: audioControl
+    id: options
     required property var controlOwner
-    readonly property T theme: controlOwner.theme
     required property bool input
+    readonly property var metadata: controlOwner.audioMetadata
     readonly property var node: input ? Pipewire.defaultAudioSource : Pipewire.defaultAudioSink
     readonly property bool available: !!node?.ready && !!node?.audio
     readonly property bool muted: available && node.audio.muted
-    readonly property var devices: audioControl.controlOwner.audioDevices.filter(device
-                                                                                 => device.isSink
-                                                                                    !== input)
-    spacing: theme.dimS
+    readonly property string kind: input ? "microphone" : "speaker"
+    spacing: T.dimS
     Heading {
-      theme: audioControl.theme
-      text: audioControl.input ? "Microphone" : "Speaker"
+      text: options.input ? "Microphone" : "Speaker"
     }
     RowLayout {
       Layout.fillWidth: true
-      spacing: audioControl.theme.dimS
+      spacing: T.dimS
       IconButton {
-        theme: audioControl.theme
         Layout.alignment: Qt.AlignVCenter
-        symbol: audioControl.muted ? "○" : "●"
-        description: (audioControl.muted ? "Unmute " : "Mute ") + (audioControl.input
-                                                                   ? "microphone" : "speaker")
-        selected: audioControl.muted
-        enabled: audioControl.available
-        onClicked: audioControl.node.audio.muted = !audioControl.node.audio.muted
+        symbol: options.muted ? "○" : "●"
+        description: (options.muted ? "Unmute " : "Mute ") + options.kind
+        selected: options.muted
+        enabled: options.available
+        onClicked: options.node.audio.muted = !options.node.audio.muted
       }
       ThemedSlider {
-        theme: audioControl.theme
-        muted: audioControl.muted
+        muted: options.muted
         Layout.fillWidth: true
         from: 0
         to: 1.5
-        value: audioControl.available ? audioControl.node.audio.volume : 0
-        enabled: audioControl.available
-        onMoved: audioControl.node.audio.volume = value
-        Accessible.name: audioControl.input ? "Microphone volume" : "Speaker volume"
+        value: options.available ? options.node.audio.volume : 0
+        enabled: options.available
+        onMoved: options.node.audio.volume = value
+        Accessible.name: options.input ? "Microphone volume" : "Speaker volume"
       }
       SectionText {
-        theme: audioControl.theme
         Layout.fillWidth: false
         Layout.preferredWidth: 52
         horizontalAlignment: Text.AlignRight
         font.family: "monospace"
-        text: audioControl.available ? `%${Math.round(audioControl.node.audio.volume * 100)}` :
-                                       "—"
-
-        color: audioControl.muted ? theme.colM : theme.colF
+        text: options.available ? `%${Math.round(options.node.audio.volume * 100)}` : "—"
+        color: options.muted ? T.colM : T.colF
       }
     }
     Repeater {
-      model: audioControl.devices
+      model: options.controlOwner.audioDevices.filter(d => d.isSink !== options.input)
       MenuButton {
-        theme: audioControl.theme
         required property var modelData
         Layout.fillWidth: true
-        text: audioControl.controlOwner.audioMetadata.label(modelData) + (
-                audioControl.controlOwner.audioMetadata.availability(modelData) === "unknown"
-                ? " · Availability unknown" : "")
-        selected: audioControl.node === modelData
+        text: options.metadata.label(modelData) + (options.metadata.availability(modelData)
+                                                   === "unknown" ? " · Availability unknown" :
+                                                                   "")
+        selected: options.node === modelData
         onClicked: {
-          if (audioControl.input)
+          if (options.input)
             Pipewire.preferredDefaultAudioSource = modelData;
           else
             Pipewire.preferredDefaultAudioSink = modelData;
@@ -902,53 +784,36 @@ Scope {
     }
 
     function parse(objects) {
-      const devices = {};
-      for (const object of objects) {
-        if (object.type === "PipeWire:Interface:Device")
-          devices[String(object.id)] = object.info?.params ?? {};
+      const params = {};
+      for (const o of objects) {
+        if (o.type === "PipeWire:Interface:Device")
+          params[o.id] = o.info?.params ?? {};
       }
       const result = {};
-      for (const object of objects) {
-        if (object.type !== "PipeWire:Interface:Node")
-          continue;
-        const props = object.info?.props ?? {};
+      for (const o of objects) {
+        const props = o.info?.props ?? {};
         const mediaClass = props["media.class"];
         // Virtual/other audio classes must not inherit a physical port's disconnected status.
-        if (props["node.virtual"] === true || props["node.virtual"] === "true" || !["Audio/Sink",
-                                                                                    "Audio/Source"].includes(
-              mediaClass))
+        if (o.type !== "PipeWire:Interface:Node" || [true, "true"].includes(
+              props["node.virtual"]) || !["Audio/Sink", "Audio/Source"].includes(mediaClass))
           continue;
-        const params = devices[String(props["device.id"])] ?? {};
-        const profileDevice = props["card.profile.device"];
-        const deviceId = String(profileDevice);
-        const direction = mediaClass === "Audio/Sink" ? "Output" : "Input";
-        const routes = profileDevice === undefined ? [] : (params.EnumRoute ?? []).filter(route
-                                                                                          => {
-                                                                                            return route.direction
-                                                                                                === direction
-                                                                                                && (route.devices
-                                                                                                    ?? []).some(
-                                                                                                  device => String(
-                                                                                                              device)
-                                                                                                            === deviceId);
-                                                                                          });
+        const p = params[props["device.id"]] ?? {};
+        const device = props["card.profile.device"];
+        const id = String(device);
+        const dir = mediaClass === "Audio/Sink" ? "Output" : "Input";
+        const matches = (r, ids) => r.direction === dir && ids.some(d => String(d) === id);
+        const enumRoutes = device === undefined ? [] : p.EnumRoute ?? [];
+        const routes = enumRoutes.filter(r => matches(r, r.devices ?? []));
         if (!routes.length)
           continue;
-        const current = (params.Route ?? []).find(route => route.direction === direction
-                                                           && String(route.device)
-                                                           === deviceId);
-        const route = routes.find(candidate => candidate.index === current?.index
-                                               && candidate.available !== "no") ?? routes.find(
-                candidate => candidate.available === "yes") ?? routes.find(candidate
-                                                                           => candidate.available
-                                                                              !== "no")
+        const current = (p.Route ?? []).find(r => matches(r, [r.device]));
+        const usable = routes.filter(r => r.available !== "no");
+        const yes = routes.find(r => r.available === "yes");
+        const route = usable.find(r => r.index === current?.index) ?? yes ?? usable[0]
               ?? routes[0];
-        const allUnavailable = routes.every(route => route.available === "no");
-        const anyAvailable = routes.some(route => route.available === "yes");
-        const availability = allUnavailable ? "no" : anyAvailable ? "yes" : "unknown";
         const product = routeInfo(route, "device.product.name");
         result[props["node.name"]] = {
-          availability: availability,
+          availability: !usable.length ? "no" : yes ? "yes" : "unknown",
           label: product ? `${product} · ${route.description}` : route.description
                            || props["node.description"]
         };
@@ -1036,21 +901,20 @@ Scope {
     function consume(text) {
       if (!device)
         return;
-      const chunk = text.slice(handledLength).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+      const ansi = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+      const chunk = text.slice(handledLength).replace(ansi, "");
       handledLength = text.length;
       if (!requested && text.includes("Agent registered")) {
         requested = true;
         agent.write(`pair ${device.address}\n`);
       }
-      const clean = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
       if (chunk.includes("Pairing successful")) {
         succeeded = true;
         prompt = "";
         status = "Paired successfully.";
         device.connect();
         agent.write("quit\n");
-      } else if (new RegExp("Failed to pair|AuthenticationFailed|"
-                            + "AuthenticationCanceled|AuthenticationRejected").test(chunk)) {
+      } else if (/Failed to pair|Authentication(Failed|Canceled|Rejected)/.test(chunk)) {
         prompt = "";
         status = chunk.trim();
         agent.write("quit\n");
@@ -1058,9 +922,10 @@ Scope {
         const display = chunk.match(/(?:Passkey|PIN code):\s*(\d+)/i);
         if (display)
           status = `Enter this code on your device: ${display[1]}`;
-        const match = clean.match(new RegExp(
-                                    "(?:Confirm passkey|Authorize service|Accept pairing|"
-                                    + "Enter PIN code|Enter passkey)[^\\r\\n]*[:?]\\s*$", "i"));
+        const asks
+              = "Confirm passkey|Authorize service|Accept pairing|Enter PIN code|Enter passkey";
+        const match = text.replace(ansi, "").match(new RegExp(`(?:${asks})[^\\r\\n]*[:?]\\s*$`,
+                                                              "i"));
         if (match) {
           prompt = match[0].trim();
           confirmation = /Confirm|Authorize|Accept/i.test(prompt);

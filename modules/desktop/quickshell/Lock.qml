@@ -6,7 +6,6 @@ import Quickshell.Wayland
 
 Scope {
   id: lockModule
-  required property T theme
 
   property string pendingResponse: ""
   property bool authenticating: false
@@ -114,86 +113,63 @@ Scope {
     }
 
     WlSessionLockSurface {
-      color: theme.colB
+      color: T.colB
 
       Image {
         anchors.fill: parent
         fillMode: Image.PreserveAspectCrop
-        source: Qt.resolvedUrl(theme.wallpaper)
+        source: Qt.resolvedUrl(T.wallpaper)
       }
 
-      Rectangle {
-        color: theme.colB
+      Lib.Panel {
         anchors.centerIn: parent
         width: 360
-        height: lockContent.implicitHeight + theme.dimS * 2
 
-        Column {
-          id: lockContent
-          anchors {
-            top: parent.top
-            left: parent.left
-            right: parent.right
-            margins: theme.dimS
+        Text {
+          width: parent.width
+          color: T.colF
+          horizontalAlignment: Text.AlignHCenter
+          font {
+            family: "monospace"
+            pointSize: T.fontSizeH
+            bold: true
           }
-          spacing: theme.dimS
+          text: Quickshell.env("USER") || Quickshell.env("LOGNAME") || "User"
+        }
 
-          Text {
-            width: parent.width
-            color: theme.colF
-            horizontalAlignment: Text.AlignHCenter
-            font {
-              family: "monospace"
-              pointSize: theme.fontSizeH
-              bold: true
-            }
-            text: Quickshell.env("USER") || Quickshell.env("LOGNAME") || "User"
+        Lib.AuthInput {
+          id: password
+          width: parent.width
+          height: T.dimM * 2
+          padding: T.dimS
+          focus: true
+          enabled: !pam.active || lockModule.awaitingUserResponse
+          font.pointSize: T.fontSizeL
+          echoMode: pam.responseRequired && pam.responseVisible ? TextInput.Normal :
+                                                                  TextInput.Password
+          horizontalAlignment: TextInput.AlignHCenter
+
+          onTextChanged: lockModule.authenticationFailed = false
+          onAccepted: {
+            lockModule.submit(text);
+            text = "";
           }
+        }
 
-          Rectangle {
-            width: parent.width
-            height: theme.dimM * 2
-            color: theme.colB
+        Lib.Label {
+          width: parent.width
+          visible: lockModule.authenticationFailed
+          color: T.colS
+          horizontalAlignment: Text.AlignHCenter
+          text: "Authentication failed"
+        }
 
-            Lib.AuthInput {
-              id: password
-              theme: lockModule.theme
-              anchors {
-                fill: parent
-                margins: theme.dimS
-              }
-              focus: true
-              enabled: !pam.active || lockModule.awaitingUserResponse
-              font.pointSize: theme.fontSizeL
-              echoMode: pam.responseRequired && pam.responseVisible ? TextInput.Normal :
-                                                                      TextInput.Password
-              horizontalAlignment: TextInput.AlignHCenter
-
-              onTextChanged: lockModule.authenticationFailed = false
-              onAccepted: {
-                lockModule.submit(text);
-                text = "";
-              }
-            }
-          }
-
-          Lib.Label {
-            theme: lockModule.theme
-            width: parent.width
-            visible: lockModule.authenticationFailed
-            color: theme.colS
-            horizontalAlignment: Text.AlignHCenter
-            text: "Authentication failed"
-          }
-
-          Lib.Label {
-            theme: lockModule.theme
-            width: parent.width
-            visible: lockModule.authenticating
-            color: theme.colM
-            horizontalAlignment: Text.AlignHCenter
-            text: lockModule.awaitingUserResponse ? pam.message : "Authenticating"
-          }
+        Lib.Label {
+          width: parent.width
+          visible: lockModule.authenticating
+          color: T.colM
+          horizontalAlignment: Text.AlignHCenter
+          text: lockModule.awaitingUserResponse ? pam.message : "Authenticating"
         }
       }
 

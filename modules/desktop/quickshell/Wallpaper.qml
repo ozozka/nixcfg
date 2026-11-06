@@ -3,7 +3,6 @@ import Quickshell
 import Quickshell.Wayland
 
 Scope {
-  required property T theme
   Variants {
     model: Quickshell.screens
 
@@ -23,12 +22,12 @@ Scope {
         right: true
       }
 
-      color: theme.colB
+      color: T.colB
 
       Image {
         anchors.fill: parent
         fillMode: Image.PreserveAspectFit
-        source: Qt.resolvedUrl(theme.wallpaper)
+        source: Qt.resolvedUrl(T.wallpaper)
       }
     }
   }
