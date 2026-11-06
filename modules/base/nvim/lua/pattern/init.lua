@@ -20,7 +20,8 @@ local function is_in_table (table, val)
 end
 
 local function is_valid (is_table, not_table, val)
-  return (is_table == nil or is_in_table(is_table, val)) and (not_table == nil or not is_in_table(not_table, val))
+  return (is_table == nil or is_in_table(is_table, val))
+    and (not_table == nil or not is_in_table(not_table, val))
 end
 
 local function can_do (conds, ...)
@@ -54,7 +55,10 @@ local Rule = setmetatable({}, {
 })
 
 function Rule:Pat (name, key, conds, callback)
-  self.pats[name] = setmetatable({ key = key, conds = conds, callback = callback }, { __index = self })
+  self.pats[name] = setmetatable(
+    { key = key, conds = conds, callback = callback },
+    { __index = self }
+  )
   return self
 end
 
@@ -76,9 +80,14 @@ local function Pair (...)
     :Pat("move", rule.tailp:match "[%z\1-\127\194-\244][\128-\191]*", {
       function (meta) return meta.key == meta.nextc and meta.key == meta.pat.tailp end,
     }, function (meta) return keys.jr:rep(meta.pat.tailp_len) end)
-    :Pat("del", keys.bs, {
-      function (meta) return meta.pat.headp == meta.prevc and meta.pat.tailp == meta.nextc end,
-    }, function (meta) return keys.bs:rep(meta.pat.headp_len) .. keys.del:rep(meta.pat.tailp_len) end)
+    :Pat(
+      "del",
+      keys.bs,
+      {
+        function (meta) return meta.pat.headp == meta.prevc and meta.pat.tailp == meta.nextc end,
+      },
+      function (meta) return keys.bs:rep(meta.pat.headp_len) .. keys.del:rep(meta.pat.tailp_len) end
+    )
     :Pat(
       "pair",
       rule.headp:match "[^\128-\191][\128-\191]*$",
@@ -112,7 +121,9 @@ local function Bracket (...)
     end)
     :Pat("indent", keys.cr, {
       function (meta)
-        if not (meta.pat.headp == meta.prevc and meta.pat.tailp == meta.nextc) then return false end
+        if not (meta.pat.headp == meta.prevc and meta.pat.tailp == meta.nextc) then
+          return false
+        end
       end,
     }, function (_) return keys.cr .. keys.nest end)
     :add_cond("pair", function (meta)
@@ -143,7 +154,12 @@ local function Endwise (...)
     function (meta)
       local end_text = meta.line:sub(meta.col + 1)
 
-      if not meta.line:match(meta.pat.headp) or (end_text ~= "" and end_text:match "^%s+$" == nil) then return false end
+      if
+        not meta.line:match(meta.pat.headp)
+        or (end_text ~= "" and end_text:match "^%s+$" == nil)
+      then
+        return false
+      end
     end,
   }, function (meta) return keys.cr .. meta.pat.tailp .. keys.nest end)
 end
@@ -187,7 +203,14 @@ function Buf:add_map (pat)
 end
 
 function Buf:map_exec (key)
-  if fn.reg_recording() ~= "" or fn.reg_executing() ~= "" or fn.visualmode() == "^V" or vim.v.count > 0 then return end
+  if
+    fn.reg_recording() ~= ""
+    or fn.reg_executing() ~= ""
+    or fn.visualmode() == "^V"
+    or vim.v.count > 0
+  then
+    return
+  end
 
   local col = api.nvim_win_get_cursor(0)[2]
   local row = api.nvim_win_get_cursor(0)[1] - 1
@@ -235,8 +258,14 @@ end
 table.sort(
   state.pats,
   function (a, b)
-    return (a.headp == b.headp and (((not b.key) and a.key) or ((not a.key) and b.key) or (#a.key < #b.key)))
-      or ((a.headp_len == b.headp_len and a.headp:byte() > b.headp:byte()) or a.headp_len > b.headp_len)
+    return (
+      a.headp == b.headp
+      and (((not b.key) and a.key) or ((not a.key) and b.key) or (#a.key < #b.key))
+    )
+      or (
+        (a.headp_len == b.headp_len and a.headp:byte() > b.headp:byte())
+        or a.headp_len > b.headp_len
+      )
   end
 )
 

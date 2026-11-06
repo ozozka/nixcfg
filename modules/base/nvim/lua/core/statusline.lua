@@ -46,7 +46,9 @@ function OzStatusline ()
 
   local bufnr = api.nvim_get_current_buf()
   local diags = v.diagnostic.status(bufnr)
-  if #v.lsp.get_clients { bufnr = bufnr } > 0 and diags == "" then diags = col "DiagnosticOk" .. "🞄" end
+  if #v.lsp.get_clients { bufnr = bufnr } > 0 and diags == "" then
+    diags = col "DiagnosticOk" .. "🞄"
+  end
 
   return con {
     con(buffers),

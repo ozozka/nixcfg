@@ -20,7 +20,9 @@ local c = {
 local shl = vim.api.nvim_set_hl
 local hl = function (hlg, link) shl(0, hlg, { link = link }) end
 local h = function (hlg, bg, fg) shl(0, hlg, { ctermbg = bg, ctermfg = fg, force = true }) end
-local ht = function (hlg, bg, fg, term) shl(0, hlg, { ctermbg = bg, ctermfg = fg, cterm = term, force = true }) end
+local ht = function (hlg, bg, fg, term)
+  shl(0, hlg, { ctermbg = bg, ctermfg = fg, cterm = term, force = true })
+end
 local italic = { italic = true }
 local bold = { bold = true }
 local underline = { underline = true }
