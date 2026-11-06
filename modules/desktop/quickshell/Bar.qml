@@ -6,10 +6,15 @@ import Quickshell.Io
 import Quickshell.Networking
 import Quickshell.Hyprland
 import Quickshell.Services.Mpris
+import Quickshell.Services.UPower
 
 Scope {
   id: barModule
   property var detailBar: null
+  // Read at startup: Quickshell loads profile state lazily, so the first popup would be stale.
+  readonly property int profileCount: PowerProfiles.hasPerformanceProfile ? 3 : 2
+  readonly property var profiles: ["power-saver", "balanced", "performance"].slice(0,
+                                                                                   profileCount)
   signal controlsOpened
 
   function closeDetails() {
@@ -21,8 +26,6 @@ Scope {
     detailBar = window;
     details.screen = window.screen;
     controls.toggleDetails(section, item);
-    if (controls.expanded === "profiles")
-      powerProfiles.refresh();
     if (controls.expanded !== "") {
       controlsOpened();
       Qt.callLater(() => detailBody.forceActiveFocus());
@@ -31,10 +34,6 @@ Scope {
 
   Lib.SystemControls {
     id: controls
-  }
-
-  Lib.PowerProfiles {
-    id: powerProfiles
   }
 
   Lib.MenuWindow {
@@ -92,25 +91,18 @@ Scope {
       Lib.Heading {
         text: "Power profiles"
       }
-      Lib.SectionText {
-        visible: !powerProfiles.available
-        text: "Power profiles unavailable"
-        color: T.colM
-      }
       Repeater {
-        model: powerProfiles.availableProfiles
+        model: barModule.profiles
         Lib.MenuButton {
           required property string modelData
+          required property int index
+          readonly property int profile: [PowerProfile.PowerSaver, PowerProfile.Balanced,
+            PowerProfile.Performance][index]
           Layout.fillWidth: true
           text: modelData
-          selected: powerProfiles.activeProfile === modelData
-          enabled: powerProfiles.available && !powerProfiles.busy
-          onClicked: powerProfiles.setProfile(modelData)
+          selected: PowerProfiles.profile === profile
+          onClicked: PowerProfiles.profile = profile
         }
-      }
-      Lib.Message {
-        color: T.colS
-        text: powerProfiles.error
       }
     }
   }
@@ -331,48 +323,25 @@ Scope {
     running: true
     repeat: true
     onTriggered: {
-      for (const file of [capacityFile, statusFile, energyFile, fullEnergyFile, powerFile, cpu,
-                          memory, network, temperatureFile])
+      for (const file of [cpu, memory, network, temperatureFile])
         file.reload();
     }
   }
 
   Scope {
     id: battery
-    readonly property string dir: "/sys/class/power_supply/BAT1/"
-    readonly property real percentage: capacityFile.value
-    property string status: "Unknown"
-
-    readonly property real remainingSeconds: {
-      const energy = energyFile.value;
-      const power = powerFile.value;
-      if (power <= 0)
-        return 0;
-      const remainingEnergy = status === "Charging" ? fullEnergyFile.value - energy : energy;
-      return Math.max(0, 3600 * remainingEnergy / power);
-    }
-
-    NumberFile {
-      id: capacityFile
-      path: battery.dir + "capacity"
-    }
-    FileView {
-      id: statusFile
-      path: battery.dir + "status"
-      onLoaded: battery.status = text().trim()
-    }
-    NumberFile {
-      id: energyFile
-      path: battery.dir + "energy_now"
-    }
-    NumberFile {
-      id: fullEnergyFile
-      path: battery.dir + "energy_full"
-    }
-    NumberFile {
-      id: powerFile
-      path: battery.dir + "power_now"
-    }
+    readonly property var device: UPower.displayDevice
+    readonly property real percentage: device.percentage * 100
+    // Keep the sysfs status names the bar and popup use.
+    readonly property string status: ({
+                                        [UPowerDeviceState.Charging]: "Charging",
+                                        [UPowerDeviceState.Discharging]: "Discharging",
+                                        [UPowerDeviceState.FullyCharged]: "Full",
+                                        [UPowerDeviceState.PendingCharge]: "Not charging",
+                                        [UPowerDeviceState.Empty]: "Empty"
+                                      })[device.state] ?? "Unknown"
+    readonly property real remainingSeconds: status === "Charging" ? device.timeToFull :
+                                                                     device.timeToEmpty
   }
 
   Scope {

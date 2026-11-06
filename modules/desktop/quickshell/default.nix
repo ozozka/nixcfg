@@ -76,6 +76,8 @@ in
     };
   };
 
+  services.upower.enable = true;
+
   security = {
     polkit.enable = true;
     pam.services.quickshell = { };
