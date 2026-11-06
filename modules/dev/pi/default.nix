@@ -14,8 +14,11 @@ in
 
   ozozka.home.profiles.pi.files = {
     ".pi/agent" = {
-      "extensions" = ./extensions;
-      # "APPEND_SYSTEM.md"
+      "extensions" = {
+        "docs.ts" = ./docs.ts;
+        "notify.ts" = ./notify.ts;
+        "status.ts" = ./status.ts;
+      };
 
       "mcp.json" = settingsFormat.generate "mcp.json" {
         mcpServers = {

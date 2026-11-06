@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import docsExtension from "./extensions/docs.ts";
+import docsExtension from "./docs.ts";
 
 type ContextFile = { path: string; content: string };
 type Notice = { message: string; level?: "info" | "warning" | "error" };
