@@ -4,7 +4,7 @@
   default = pkgs.mkShell {
     packages = with pkgs; [
       nixd
-      lua-language-server
+      emmylua-ls
       ty
       marksman
       vscode-langservers-extracted
