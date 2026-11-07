@@ -55,7 +55,8 @@ let
       duplicates = lib.filterAttrs (_: matches: builtins.length matches > 1) grouped;
 
       formatDuplicate =
-        name: matches: "${name}: ${lib.concatStringsSep ", " (map (entry: toString entry.path) matches)}";
+        name: matches:
+        "${name}: ${lib.concatStringsSep ", " (map (entry: toString entry.path) matches)}";
     in
     if duplicates == { } then
       entries
@@ -86,7 +87,9 @@ rec {
     imports = [
       (load path)
     ]
-    ++ lib.optionals (baseNameOf path == "default.nix") (lib.attrValues (paths (dirOf path) module));
+    ++ lib.optionals (baseNameOf path == "default.nix") (
+      lib.attrValues (paths (dirOf path) module)
+    );
   };
 
   perSystem =

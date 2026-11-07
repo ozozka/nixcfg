@@ -88,7 +88,8 @@ let
     && isSafeTmpfilesValue target;
 
   duplicateValues =
-    values: unique (filter (value: length (filter (candidate: candidate == value) values) > 1) values);
+    values:
+    unique (filter (value: length (filter (candidate: candidate == value) values) > 1) values);
 
   ancestorConflicts =
     targets:
@@ -251,7 +252,8 @@ let
   makeEtcEntries =
     _: resolved:
     mapAttrs' (
-      target: source: nameValuePair "home-files/${resolved.account.name}/${target}" { inherit source; }
+      target: source:
+      nameValuePair "home-files/${resolved.account.name}/${target}" { inherit source; }
     ) resolved.files;
 
   etcEntries = foldl' (entries: userEntries: entries // userEntries) { } (
