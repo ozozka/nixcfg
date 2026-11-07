@@ -87,6 +87,7 @@
    `(font-lock-property-use-face ((t (:foreground ,my-theme-col-p))))
    `(font-lock-variable-name-face ((t (:foreground ,my-theme-col-f))))
    `(font-lock-type-face ((t (:foreground ,my-theme-col-f))))
+   `(font-lock-misc-punctuation-face ((t (:foreground ,my-theme-col-m))))
 
    `(whitespace-line ((t (:background ,my-theme-col-o))))
    `(whitespace-trailing ((t (:background ,my-theme-col-s))))
