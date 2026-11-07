@@ -6,9 +6,7 @@ let
 
   ruffConfig = (pkgs.formats.toml { }).generate "ruff.toml" {
     line-length = lineWidth;
-    target-version = "py${
-      lib.replaceStrings [ "." ] [ "" ] (lib.versions.majorMinor pkgs.python3.version)
-    }";
+    target-version = "py${pkgs.python3.sourceVersion.major}${pkgs.python3.sourceVersion.minor}";
     lint.extend-select = [
       "I"
       "UP"
@@ -134,44 +132,30 @@ pkgs.treefmt.withConfig {
 
       biome = {
         command = lib.getExe pkgs.biome;
-        includes = [ "*.{json,jsonc,css,html,js,jsx,mjs,cjs,ts,tsx,mts,cts}" ];
+        includes = [ "*.{md,yaml,yml,json,jsonc,html,css,js,jsx,mjs,cjs,ts,tsx,mts,cts}" ];
         options = [
           "check"
           "--write"
+          "--error-on-warnings"
+          # Biome scans the config's directory, so it gets one of its own instead of /nix/store.
           "--config-path=${
-            (pkgs.formats.json { }).generate "biome.json" {
-              formatter = {
-                indentStyle = "space";
-                inherit lineWidth;
-              };
-              html.formatter.enabled = true;
-              linter.rules = {
-                recommended = true;
-                style = {
-                  useConsistentTypeDefinitions = {
-                    level = "error";
-                    options.style = "type";
-                  };
-                  useNumericSeparators = "error";
+            pkgs.writeTextDir "biome.json" (
+              builtins.toJSON {
+                formatter = {
+                  indentStyle = "space";
+                  inherit lineWidth;
                 };
-              };
-            }
+                html.formatter.enabled = true;
+                markdown.formatter.proseWrap = "always";
+                linter.rules = {
+                  a11y = "error";
+                  performance = "error";
+                  security = "error";
+                  suspicious = "error";
+                };
+              }
+            )
           }"
-        ];
-      };
-
-      prettier = {
-        command = lib.getExe pkgs.prettier;
-        includes = [ "*.md" ];
-        options = [
-          "--write"
-          "--ignore-unknown"
-          "--tab-width=2"
-          "--semi=true"
-          "--single-quote=false"
-          "--trailing-comma=all"
-          "--prose-wrap=always"
-          "--print-width=96"
         ];
       };
 
@@ -201,7 +185,10 @@ pkgs.treefmt.withConfig {
       nixfmt = {
         command = lib.getExe pkgs.nixfmt;
         includes = [ "*.nix" ];
-        options = [ "--strict" ];
+        options = [
+          "--strict"
+          "--width=${toString lineWidth}"
+        ];
       };
     };
   };
