@@ -75,28 +75,28 @@ function record(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
+function formatWindowLabel(windowMinutes: number): string {
+  if (windowMinutes === 300) return "5h";
+  if (windowMinutes === 10_080) return "w";
+  return formatDuration(windowMinutes * 60 * 1000);
+}
+
+function formatResetIn(resetIn: number): string {
+  if (resetIn <= 0) return "due";
+  if (resetIn < 60_000) return "<1m";
+  if (resetIn >= 86_400_000)
+    return `${Math.floor(resetIn / 86_400_000)}d${Math.floor(resetIn / 3_600_000) % 24}h`;
+  if (resetIn >= 3_600_000)
+    return `${Math.floor(resetIn / 3_600_000)}h${Math.floor(resetIn / 60_000) % 60}m`;
+  return `${Math.floor(resetIn / 60_000)}m`;
+}
+
 function formatWindow(window: UsageWindow, now: number): string {
-  const label =
-    window.windowMinutes === 300
-      ? "5h"
-      : window.windowMinutes === 10_080
-        ? "w"
-        : formatDuration(window.windowMinutes * 60 * 1000);
   const resetIn = window.resetAt * 1000 - now;
   const stale = now - window.observedAt > STALE_AFTER_MS || resetIn <= 0;
   // A passed reset is not evidence of a fresh quota allocation.
   const remaining = resetIn <= 0 ? "?" : `${Math.round(100 - window.usedPercent)}%`;
-  const reset =
-    resetIn <= 0
-      ? "due"
-      : resetIn < 60_000
-        ? "<1m"
-        : resetIn >= 86_400_000
-          ? `${Math.floor(resetIn / 86_400_000)}d${Math.floor(resetIn / 3_600_000) % 24}h`
-          : resetIn >= 3_600_000
-            ? `${Math.floor(resetIn / 3_600_000)}h${Math.floor(resetIn / 60_000) % 60}m`
-            : `${Math.floor(resetIn / 60_000)}m`;
-  return `${stale ? "~" : ""}${label} ${remaining} ${reset}`;
+  return `${stale ? "~" : ""}${formatWindowLabel(window.windowMinutes)} ${remaining} ${formatResetIn(resetIn)}`;
 }
 
 export default function (pi: ExtensionAPI) {

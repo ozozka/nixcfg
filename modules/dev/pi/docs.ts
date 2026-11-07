@@ -44,6 +44,7 @@ async function loadDocs(cwd: string, ctx: ExtensionContext): Promise<ContextFile
         const entries = await readdir(path);
         // Recurse in stable order, pruning underscore-prefixed files and subtrees.
         for (const name of entries.sort()) {
+          // biome-ignore lint/performance/noAwaitInLoops: sequential visits keep the file order stable.
           if (!name.startsWith("_")) await visit(join(path, name), true);
         }
       } else if (info.isFile() && (!recurse || path.endsWith(".md"))) {
