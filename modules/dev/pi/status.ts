@@ -1,13 +1,14 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-  createWriteToolDefinition,
-  generateUnifiedPatch,
-} from "@earendil-works/pi-coding-agent";
+import { generateUnifiedPatch, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "session-metrics";
 const CODEX_PROVIDER = "openai-codex";
 const STALE_AFTER_MS = 10 * 60 * 1000;
+const AT_PREFIX = /^@/;
+const HOME_PREFIX = /^~(?=$|\/)/;
 
 type UsageWindow = {
   usedPercent: number;
@@ -123,43 +124,10 @@ export default function (pi: ExtensionAPI) {
     updateStatus();
   }
 
-  // Preserve the built-in write tool, including its renderers and mutation
-  // queue. Reading inside writeFile observes preceding same-file mutations,
-  // even when tools run in parallel. Each execution owns its own snapshot.
-  const writeTool = createWriteToolDefinition(process.cwd());
-  pi.registerTool({
-    ...writeTool,
-    async execute(toolCallId, input, signal, onUpdate, ctx) {
-      const sessionContext = context;
-      let changes: LineChanges | undefined;
-      const tool = createWriteToolDefinition(ctx.cwd, {
-        operations: {
-          mkdir: async (dir) => {
-            await mkdir(dir, { recursive: true });
-          },
-          writeFile: async (path, content) => {
-            if (sessionContext) {
-              let previous: string | undefined;
-              try {
-                previous = await readFile(path, "utf8");
-              } catch (error) {
-                // Unreadable files should not make otherwise valid writes fail.
-                if (record(error)?.code === "ENOENT") previous = "";
-              }
-              if (previous !== undefined) {
-                changes = countPatchLines(generateUnifiedPatch(path, previous, content, 0));
-              }
-            }
-            await writeFile(path, content, "utf8");
-          },
-        },
-      });
-      const result = await tool.execute(toolCallId, input, signal, onUpdate, ctx);
-      // Failed/aborted writes throw above and never contribute to totals.
-      if (changes && sessionContext && context === sessionContext) addChanges(changes);
-      return result;
-    },
-  });
+  // The built-in write tool reports no patch, so snapshot the file before it
+  // runs and diff once it succeeds. Pi checks a batch's calls before running
+  // any of them, so another same-file mutation in one batch can skew counts.
+  const writes = new Map<string, { path: string; previous: string; content: string }>();
 
   function updateStatus() {
     if (!context) return;
@@ -220,6 +188,7 @@ export default function (pi: ExtensionAPI) {
     requestProvider = undefined;
     lastStatus = undefined;
     usage.clear();
+    writes.clear();
     toolCalls = 0;
     addedLines = 0;
     removedLines = 0;
@@ -231,10 +200,33 @@ export default function (pi: ExtensionAPI) {
     updateStatus();
   });
 
+  pi.on("tool_call", async (event, ctx) => {
+    if (!context || !isToolCallEventType("write", event)) return;
+    const { path, content } = event.input;
+    // Same resolution as the write tool: optional @ prefix, ~, then cwd.
+    const file = path.replace(AT_PREFIX, "").replace(HOME_PREFIX, homedir());
+    let previous: string | undefined;
+    try {
+      previous = await readFile(resolve(ctx.cwd, file), "utf8");
+    } catch (error) {
+      // Unreadable files are skipped; the write itself must still run.
+      if (record(error)?.code === "ENOENT") previous = "";
+    }
+    if (previous !== undefined) writes.set(event.toolCallId, { path, previous, content });
+  });
+
   pi.on("tool_execution_end", (event) => {
-    if (!context || event.toolName !== "edit" || event.isError) return;
-    const details = record(record(event.result)?.details);
-    if (typeof details?.patch === "string") addChanges(countPatchLines(details.patch));
+    const write = writes.get(event.toolCallId);
+    writes.delete(event.toolCallId);
+    if (!context || event.isError) return;
+    if (event.toolName === "write" && write) {
+      addChanges(
+        countPatchLines(generateUnifiedPatch(write.path, write.previous, write.content, 0)),
+      );
+    } else if (event.toolName === "edit") {
+      const details = record(record(event.result)?.details);
+      if (typeof details?.patch === "string") addChanges(countPatchLines(details.patch));
+    }
   });
 
   pi.on("session_start", (_event, ctx) => {
