@@ -182,7 +182,7 @@
   (tab-line-tabs-function #'tab-line-tabs-fixed-window-buffers)
   (tab-line-tabs-buffer-group-function #'tab-line-tabs-buffer-group-by-project)
   :bind
-  ("M-0" . (lambda () (interactive) (switch-to-buffer nil)))
+  ("M-`" . (lambda () (interactive) (switch-to-buffer nil)))
   :config
   (dotimes (index 9)
     (let ((number (1+ index)))
@@ -375,6 +375,7 @@
   (keymap-set term-raw-map "C-c f" (keymap-lookup global-map "C-c f"))
   (keymap-set term-raw-map "C-c q" (keymap-lookup global-map "C-c q"))
   (keymap-set term-raw-map "C-c k" (keymap-lookup global-map "C-c k"))
+  (keymap-set term-raw-map "M-`" (keymap-lookup global-map "M-`"))
   (dotimes (number 10)
     (let ((key (format "M-%d" number)))
       (keymap-set term-raw-map key (keymap-lookup global-map key)))))
