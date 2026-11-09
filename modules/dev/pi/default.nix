@@ -82,7 +82,7 @@ in
         };
       };
 
-      "keybindings.json" = settingsFormat.generate "settings.json" {
+      "keybindings.json" = settingsFormat.generate "keybindings.json" {
         "app.session.resume" = "ctrl+r";
         "app.thinking.cycle" = "ctrl+t";
       };
