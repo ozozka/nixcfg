@@ -12,7 +12,16 @@ let
   };
 in
 {
-  environment.systemPackages = with pkgs; [ codex ];
+  environment.systemPackages = [
+    (pkgs.codex.overrideAttrs (old: {
+      buildInputs = (old.buildInputs or [ ]) ++ [
+        pkgs.aws-lc
+        pkgs.zstd
+        pkgs.oniguruma
+        pkgs.sqlite
+      ];
+    }))
+  ];
 
   # System layer: defaults below ~/.codex/config.toml, which stays writable for
   # Codex's own state (trust, notices). Keys set there override these.
