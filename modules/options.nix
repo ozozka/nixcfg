@@ -103,7 +103,7 @@ in
         serifa = mkFont "Spectral" pkgs.spectral "Alternative serif font";
         serif = mkFont "Manuale" ozpkgs.manuale "Serif font";
         sansa = mkFont "Inter" pkgs.inter "Alternative sans font";
-        sans = mkFont "Pliant" ozpkgs.pliant "Sans font";
+        sans = mkFont "Pliant" ozpkgs.pliant-source "Sans font";
         mono = mkFont "Oziosevka" ozpkgs.oziosevka "Monospace font";
       };
 
