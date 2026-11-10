@@ -102,8 +102,8 @@ in
         emoji = mkFont "Noto Color Emoji" pkgs.noto-fonts-color-emoji "Emoji font";
         serifa = mkFont "Spectral" pkgs.spectral "Alternative serif font";
         serif = mkFont "Manuale" ozpkgs.manuale "Serif font";
-        sansa = mkFont "Source Sans 3" pkgs.source-sans "Alternative sans font";
-        sans = mkFont "Inter" pkgs.inter "Sans font";
+        sansa = mkFont "Inter" pkgs.inter "Alternative sans font";
+        sans = mkFont "Pliant" ozpkgs.pliant "Sans font";
         mono = mkFont "Oziosevka" ozpkgs.oziosevka "Monospace font";
       };
 
