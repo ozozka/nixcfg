@@ -24,6 +24,7 @@ in
       "extensions" = {
         "docs.ts" = ./docs.ts;
         "notify.ts" = ./notify.ts;
+        "questionnaire.ts" = ./questionnaire.ts;
         "status.ts" = ./status.ts;
       };
 
