@@ -4,8 +4,9 @@
  * and thinking level; leaving restores them.
  *
  * The state is recorded in the session on every switch and restored from the current branch,
- * so resuming or navigating with /tree brings back the matching mode. Derived from the Pi
- * preset example, with modes defined here instead of presets.json.
+ * so resuming or navigating with /tree brings back the matching mode. A plan run that leaves
+ * open tasks asks whether to implement them. Derived from the Pi preset example, with modes
+ * defined here instead of presets.json.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -33,7 +34,7 @@ Plan mode is active: explore and plan, and do not change anything.
 - Read the relevant code and documentation before proposing changes.
 - When a decision belongs to the user, ask with the questionnaire tool instead of guessing.
 - Write the plan to the task list with the todo tool, one pending item per step.
-- End with a short summary of the plan and the decisions it depends on.`,
+- End with a short summary of the plan and the decisions it depends on. The user is then asked whether to implement it.`,
   },
 } satisfies Record<string, Mode>;
 
@@ -52,6 +53,19 @@ interface ModeState {
 
 const ENTRY_TYPE = "mode";
 const OFF = "off";
+
+// Whether the latest todo tool result on the branch (see todo.ts) has unfinished items.
+function hasOpenTasks(ctx: ExtensionContext): boolean {
+  let items: { status?: string }[] = [];
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message") continue;
+    const msg = entry.message;
+    if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
+    const details = msg.details as { items?: unknown; error?: string } | undefined;
+    if (Array.isArray(details?.items) && !details.error) items = details.items;
+  }
+  return items.some((item) => item.status !== "completed");
+}
 
 function isModeName(value: unknown): value is ModeName {
   return typeof value === "string" && Object.hasOwn(MODES, value);
@@ -108,6 +122,15 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
+
+  pi.on("agent_settled", async (event, ctx) => {
+    if (state.name !== "plan" || event.aborted || !ctx.hasUI || !hasOpenTasks(ctx)) return;
+    const implement = "Yes, leave plan mode";
+    const choice = await ctx.ui.select("Implement the plan?", [implement, "Keep planning"]);
+    if (choice !== implement) return;
+    switchTo(ctx, undefined);
+    pi.sendUserMessage("Implement the plan.");
+  });
 
   pi.on("before_agent_start", (event) => {
     if (!state.name) return;
