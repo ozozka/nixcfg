@@ -3,12 +3,13 @@
  * model sends the whole list with a status per item on every update.
  *
  * State is stored in tool result details (not external files), so branching keeps the list
- * correct for that point in history. Vendored from the Pi todo example.
+ * correct for that point in history. A widget above the editor shows the list while items are
+ * open. Vendored from the Pi todo example.
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const STATUSES = ["pending", "in_progress", "completed"] as const;
@@ -69,53 +70,25 @@ function modelText(items: TodoItem[]): string {
   return `Task list updated (${summary(items)}):\n${lines.join("\n")}`;
 }
 
-/**
- * UI component for the /todos command
- */
-class TodoListComponent {
-  private items: TodoItem[];
-  private theme: Theme;
-  private onClose: () => void;
-
-  constructor(items: TodoItem[], theme: Theme, onClose: () => void) {
-    this.items = items;
-    this.theme = theme;
-    this.onClose = onClose;
-  }
-
-  handleInput(data: string): void {
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-      this.onClose();
-    }
-  }
-
-  render(width: number): string[] {
-    const th = this.theme;
-    const header =
-      th.fg("borderMuted", "─".repeat(3)) +
-      th.fg("accent", " Todos ") +
-      th.fg("borderMuted", "─".repeat(Math.max(0, width - 10)));
-    const body =
-      this.items.length === 0
-        ? [`  ${th.fg("dim", "No todos.")}`]
-        : [
-            `  ${th.fg("muted", summary(this.items))}`,
-            "",
-            ...this.items.map((item) => `  ${formatItem(item, th)}`),
-          ];
-    return ["", header, "", ...body, "", `  ${th.fg("dim", "Press Escape to close")}`, ""].map(
-      (line) => truncateToWidth(line, width),
-    );
-  }
-
-  invalidate(): void {
-    // Nothing is cached.
-  }
-}
-
 export default function (pi: ExtensionAPI) {
   // In-memory state, reconstructed from the session branch.
   let items: TodoItem[] = [];
+
+  // Shown while work is open; a finished or empty list leaves the editor area clean.
+  const updateWidget = (ctx: ExtensionContext) => {
+    if (!ctx.hasUI) return;
+    const open = items.some((item) => item.status !== "completed");
+    const theme = ctx.ui.theme;
+    ctx.ui.setWidget(
+      "todo",
+      open
+        ? [
+            theme.fg("muted", `Todos ${summary(items)}`),
+            ...items.map((item) => formatItem(item, theme)),
+          ]
+        : undefined,
+    );
+  };
 
   const reconstructState = (ctx: ExtensionContext) => {
     items = [];
@@ -125,6 +98,7 @@ export default function (pi: ExtensionAPI) {
       if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
       if (isTodoDetails(msg.details) && !msg.details.error) items = msg.details.items;
     }
+    updateWidget(ctx);
   };
 
   pi.on("session_start", (_event, ctx) => reconstructState(ctx));
@@ -137,7 +111,7 @@ export default function (pi: ExtensionAPI) {
     parameters: TodoParams,
 
     // biome-ignore lint/suspicious/useAwait: Pi's tool API requires a Promise.
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const next = params.items.map((item) => ({
         text: item.text.trim(),
         status: item.status,
@@ -151,6 +125,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
       items = next;
+      updateWidget(ctx);
       return {
         content: [{ type: "text", text: modelText(items) }],
         details: { items } satisfies TodoDetails,
@@ -179,20 +154,6 @@ export default function (pi: ExtensionAPI) {
         ...details.items.map((item) => formatItem(item, theme)),
       ];
       return new Text(lines.join("\n"), 0, 0);
-    },
-  });
-
-  pi.registerCommand("todos", {
-    description: "Show the task list on the current branch",
-    handler: async (_args, ctx) => {
-      if (ctx.mode !== "tui") {
-        ctx.ui.notify("/todos requires interactive mode", "error");
-        return;
-      }
-
-      await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
-        return new TodoListComponent(items, theme, () => done());
-      });
     },
   });
 }
