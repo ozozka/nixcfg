@@ -46,7 +46,11 @@ def parse_args():
         help="only return results from this period",
     )
     parser.add_argument(
-        "--limit", type=positive, default=8, metavar="N", help="number of results (default: 8)"
+        "--limit",
+        type=positive,
+        default=12,
+        metavar="N",
+        help="number of results (default: 12)",
     )
     return parser.parse_args()
 

@@ -8,7 +8,7 @@ description: Use to search the web, read web pages, or drive a browser (navigate
 - **Search** with `web-search 'query'` through the local SearXNG: numbered results with title,
   date when known, URL, and snippet. Run separate searches in parallel for different angles.
   - `--allowed-domain <domain>` / `--blocked-domain <domain>` (repeatable, subdomains included),
-    `--recency day|week|month|year`, `--limit <n>` (default 8).
+    `--recency day|week|month|year`, `--limit <n>` (default 12).
   - If it reports no results, search in the browser: `https://html.duckduckgo.com/html/?q=<query>`
     or `https://search.brave.com/search?q=<query>`.
 - **Read** a page as text or Markdown over HTTP, without a browser: `agent-browser read <url>`.
