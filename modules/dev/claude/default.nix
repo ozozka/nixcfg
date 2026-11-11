@@ -15,6 +15,11 @@ let
     theme = if config.ozozka.col.isDark then "dark-ansi" else "light-ansi";
     tui = "default";
     disableAgentView = true;
+    # Commands of the shared web skill.
+    permissions.allow = [
+      "Bash(curl -s --get http://127.0.0.1:8888/search:*)"
+      "Bash(agent-browser:*)"
+    ];
     attribution = {
       commit = "";
       pr = "";
