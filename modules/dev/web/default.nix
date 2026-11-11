@@ -29,11 +29,15 @@ in
         # Required by SearXNG; it signs only local cookies and image proxy URLs.
         secret_key = "ozozka-local-searxng";
       };
-      # JSON for web-search; it carries publication dates, unlike CSV.
-      search.formats = [
-        "html"
-        "json"
-      ];
+      search = {
+        # JSON for web-search; it carries publication dates, unlike CSV.
+        formats = [
+          "html"
+          "json"
+        ];
+        # Consistent English results instead of guessing from the query and locale.
+        default_lang = "en";
+      };
     };
   };
 
