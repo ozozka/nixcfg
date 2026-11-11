@@ -6,7 +6,7 @@ let
   inherit (pkgs.stdenv.hostPlatform) system;
 
   pname = "zen";
-  version = "1.24b";
+  version = "1.24.1b";
 
   meta = {
     platforms = [
@@ -21,11 +21,11 @@ let
     {
       x86_64-linux = {
         url = url + "zen-x86_64.AppImage";
-        hash = "sha256-xesF42xf/cLYwgtE5HA/JeDyhhGOWbqQP4LSEhtKfic=";
+        hash = "sha256-ALp2Ibp3F9klB32HIN3nkCPlmVCHLfuaAwIJ3qxxx9A=";
       };
       aarch64-linux = {
         url = url + "zen-aarch64.AppImage";
-        hash = "sha256-6pC3awuh0z//MAQt+WV4hxzzAKoovkWm1tDWQ27zzek=";
+        hash = "sha256-0Cag3UiRcx3vwD/WjuawHMT/4xTSU7YsxxxEoyQKbHQ=";
       };
     }
     .${system};
