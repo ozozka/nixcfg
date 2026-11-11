@@ -45,6 +45,9 @@ in
           "openai-codex/gpt-6.1-sol"
           "minimax/MiniMax-M3.1-Flash"
         ];
+        modelThinkingLevels = {
+          "minimax/MiniMax-M3.1-Flash" = "medium";
+        };
         hideThinkingBlock = true;
         showCacheMissNotices = true;
         # cacheWarming = "streaming"; # "off", "idle"
