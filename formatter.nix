@@ -133,6 +133,11 @@ pkgs.treefmt.withConfig {
       biome = {
         command = lib.getExe pkgs.biome;
         includes = [ "*.{md,yaml,yml,json,jsonc,html,css,js,jsx,mjs,cjs,ts,tsx,mts,cts}" ];
+        # Biome treats Markdown frontmatter as prose and merges its lines.
+        excludes = [
+          "modules/dev/agents/prompts/**"
+          "modules/dev/agents/skills/**"
+        ];
         options = [
           "check"
           "--write"
