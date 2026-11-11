@@ -54,11 +54,6 @@ in
           "ls"
           "codemode"
         ];
-        # Web access goes through the shared web skill instead of MCP servers.
-        extensions = [
-          "-builtin:mcp"
-          "-builtin:tool-search"
-        ];
 
         theme = "ozozka";
         quietStartup = true;
