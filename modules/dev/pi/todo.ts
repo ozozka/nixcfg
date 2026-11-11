@@ -4,7 +4,7 @@
  *
  * State is stored in tool result details (not external files), so branching keeps the list
  * correct for that point in history. A widget above the editor shows the list while items are
- * open. Vendored from the Pi todo example.
+ * open, and compaction re-sends open items to the model. Vendored from the Pi todo example.
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -64,10 +64,10 @@ function summary(items: TodoItem[]): string {
 }
 
 // Plain text for the model: one line per item with its status.
-function modelText(items: TodoItem[]): string {
+function modelText(heading: string, items: TodoItem[]): string {
   if (items.length === 0) return "Task list cleared.";
   const lines = items.map((item) => `[${item.status}] ${item.text}`);
-  return `Task list updated (${summary(items)}):\n${lines.join("\n")}`;
+  return `${heading} (${summary(items)}):\n${lines.join("\n")}`;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -104,6 +104,20 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => reconstructState(ctx));
   pi.on("session_tree", (_event, ctx) => reconstructState(ctx));
 
+  // The summary replaces earlier todo calls in the model's context, so it would lose the list.
+  pi.on("session_compact", (_event, ctx) => {
+    if (!items.some((item) => item.status !== "completed")) return;
+    pi.sendMessage(
+      {
+        customType: "todo-reminder",
+        content: modelText("Task list from before compaction", items),
+        display: false,
+      },
+      // Mid-run compaction reaches the next model call; manual /compact the next prompt.
+      { deliverAs: ctx.isIdle() ? "nextTurn" : "steer" },
+    );
+  });
+
   pi.registerTool({
     name: "todo",
     label: "Todo",
@@ -127,7 +141,7 @@ export default function (pi: ExtensionAPI) {
       items = next;
       updateWidget(ctx);
       return {
-        content: [{ type: "text", text: modelText(items) }],
+        content: [{ type: "text", text: modelText("Task list updated", items) }],
         details: { items } satisfies TodoDetails,
       };
     },
