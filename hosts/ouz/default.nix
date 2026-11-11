@@ -69,6 +69,7 @@ self.inputs.nixpkgs.lib.nixosSystem {
           ouz = {
             claude = true;
             pi = true;
+            web = true;
           };
         };
       };

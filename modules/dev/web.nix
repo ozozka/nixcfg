@@ -1,8 +1,16 @@
-_:
+self:
 
-_:
+{ config, pkgs, ... }:
 
+let
+  settingsFormat = pkgs.formats.json { };
+in
 {
+  imports = with self.nixosModules; [
+    home
+    options
+  ];
+
   # Local metasearch for agents: queries several engines, so one engine throttling or
   # asking for a CAPTCHA does not stop search. The web skill depends on the address.
   services.searx = {
@@ -22,4 +30,22 @@ _:
       ];
     };
   };
+
+  # Browser CLI for agents: reads pages over HTTP and drives Chromium when needed.
+  environment.systemPackages = with pkgs; [ agent-browser ];
+
+  ozozka.home.profiles.web.files.".agent-browser"."config.json" =
+    settingsFormat.generate "agent-browser.json"
+      {
+        # The package does not wire a browser.
+        executablePath = "${pkgs.chromium}/bin/chromium";
+        # A visible window shows what agents do; `--headed false` for a single run.
+        headed = true;
+        # Headed browsers otherwise stay open until closed.
+        idleTimeout = "30m";
+        colorScheme = if config.ozozka.col.isDark then "dark" else "light";
+        # Marks page text as untrusted against prompt injection.
+        contentBoundaries = true;
+        maxOutput = 40000;
+      };
 }
