@@ -263,6 +263,12 @@ hl.window_rule {
 }
 
 hl.window_rule {
+  name = "agent-browser-workspace",
+  match = { class = "^agent-browser$" },
+  workspace = "6 silent",
+}
+
+hl.window_rule {
   name = "move-hyprland-run",
   match = { class = "hyprland-run" },
   move = "20 monitor_h-120",

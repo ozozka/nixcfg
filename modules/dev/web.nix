@@ -41,6 +41,8 @@ in
         executablePath = "${pkgs.chromium}/bin/chromium";
         # A visible window shows what agents do; `--headed false` for a single run.
         headed = true;
+        # Own window class, so Hyprland places it on its workspace.
+        args = "--class=agent-browser";
         # Headed browsers otherwise stay open until closed.
         idleTimeout = "30m";
         colorScheme = if config.ozozka.col.isDark then "dark" else "light";
