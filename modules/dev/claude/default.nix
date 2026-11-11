@@ -17,7 +17,7 @@ let
     disableAgentView = true;
     # Commands of the shared web skill.
     permissions.allow = [
-      "Bash(curl -s --get http://127.0.0.1:8888/search:*)"
+      "Bash(web-search:*)"
       "Bash(agent-browser:*)"
     ];
     attribution = {
