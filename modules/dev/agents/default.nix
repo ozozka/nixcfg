@@ -1,31 +1,48 @@
 self:
 
-{ lib, ... }:
+{ lib, config, ... }:
 
 let
-  # Each entry of a directory, linked individually so targets can coexist with
-  # files the agents create themselves.
+  inherit (lib) mkOption types;
+  cfg = config.ozozka.mod.dev.agents;
+  # Each entry of a directory as its own path, so consumers can link entries
+  # individually beside files the agents create themselves.
   entries = dir: lib.mapAttrs (name: _: dir + "/${name}") (builtins.readDir dir);
-  prompts = entries ./prompts;
-  skills = entries ./skills;
 in
 {
   imports = [ self.nixosModules.home ];
 
-  # Shared by Pi and Claude Code. Pi reads its agent-directory AGENTS.md as a
-  # context file; Claude Code reads ~/.claude/CLAUDE.md the same way.
-  # Pi reads skills from the Agent Skills location ~/.agents/skills. In
-  # ~/.claude/skills each skill is linked on its own, beside claude.ai's synced/.
-  ozozka.home.profiles.agents.files = {
-    ".agents".skills = skills;
+  # Agent-agnostic assets. Each agent module links them into its own locations.
+  options.ozozka.mod.dev.agents = {
+    instructions = mkOption {
+      type = types.path;
+      default = ./AGENTS.md;
+      description = "Global instructions shared by every agent.";
+    };
+
+    prompts = mkOption {
+      type = types.attrsOf types.path;
+      default = entries ./prompts;
+      description = "Prompt templates by file name, exposed as slash commands.";
+    };
+
+    skills = mkOption {
+      type = types.attrsOf types.path;
+      default = entries ./skills;
+      description = "Agent Skills directories by skill name.";
+    };
+  };
+
+  config.ozozka.home.profiles.agents.files = {
+    ".agents".skills = cfg.skills;
     ".pi/agent" = {
-      "AGENTS.md" = ./AGENTS.md;
-      inherit prompts;
+      "AGENTS.md" = cfg.instructions;
+      inherit (cfg) prompts;
     };
     ".claude" = {
-      "CLAUDE.md" = ./AGENTS.md;
-      commands = prompts;
-      inherit skills;
+      "CLAUDE.md" = cfg.instructions;
+      commands = cfg.prompts;
+      inherit (cfg) skills;
     };
   };
 }
