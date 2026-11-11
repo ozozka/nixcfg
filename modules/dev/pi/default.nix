@@ -41,6 +41,10 @@ in
         defaultProvider = "openai-codex";
         defaultModel = "gpt-6.1-sol";
         defaultThinkingLevel = "medium";
+        enabledModels = [
+          "openai-codex/gpt-6.1-sol"
+          "minimax/MiniMax-M3.1-Flash"
+        ];
         hideThinkingBlock = true;
         showCacheMissNotices = true;
         # cacheWarming = "streaming"; # "off", "idle"
