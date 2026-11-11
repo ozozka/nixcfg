@@ -67,7 +67,7 @@ self.inputs.nixpkgs.lib.nixosSystem {
         };
         home.users = {
           ouz = {
-            agents = true;
+            claude = true;
             pi = true;
           };
         };

@@ -1,16 +1,15 @@
 self:
 
-{ lib, config, ... }:
+{ lib, ... }:
 
 let
   inherit (lib) mkOption types;
-  cfg = config.ozozka.mod.dev.agents;
   # Each entry of a directory as its own path, so consumers can link entries
   # individually beside files the agents create themselves.
   entries = dir: lib.mapAttrs (name: _: dir + "/${name}") (builtins.readDir dir);
 in
 {
-  imports = [ self.nixosModules.home ];
+  imports = [ self.nixosModules.options ];
 
   # Agent-agnostic assets. Each agent module links them into its own locations.
   options.ozozka.mod.dev.agents = {
@@ -30,14 +29,6 @@ in
       type = types.attrsOf types.path;
       default = entries ./skills;
       description = "Agent Skills directories by skill name.";
-    };
-  };
-
-  config.ozozka.home.profiles.agents.files = {
-    ".claude" = {
-      "CLAUDE.md" = cfg.instructions;
-      commands = cfg.prompts;
-      inherit (cfg) skills;
     };
   };
 }
