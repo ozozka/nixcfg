@@ -27,6 +27,7 @@ in
         "notify.ts" = ./notify.ts;
         "questionnaire.ts" = ./questionnaire.ts;
         "todo.ts" = ./todo.ts;
+        "undo.ts" = ./undo.ts;
         "status.ts" = ./status.ts;
       };
 
