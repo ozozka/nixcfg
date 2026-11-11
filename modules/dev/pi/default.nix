@@ -27,19 +27,6 @@ in
         "status.ts" = ./status.ts;
       };
 
-      "mcp.json" = settingsFormat.generate "mcp.json" {
-        mcpServers = {
-          exa = {
-            url = "https://mcp.exa.ai/mcp";
-            exposure = "hidden";
-            toolExposure = {
-              web_search_exa = "direct";
-              web_fetch_exa = "direct";
-            };
-          };
-        };
-      };
-
       "settings.json" = settingsFormat.generate "settings.json" {
         lastChangelogVersion = "1.5.0";
 
@@ -66,7 +53,11 @@ in
           "find"
           "ls"
           "codemode"
-          # "tool_search"
+        ];
+        # Web access goes through the shared web skill instead of MCP servers.
+        extensions = [
+          "-builtin:mcp"
+          "-builtin:tool-search"
         ];
 
         theme = "ozozka";
