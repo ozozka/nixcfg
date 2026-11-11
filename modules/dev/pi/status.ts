@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "session-metrics";
 const CODEX_PROVIDER = "openai-codex";
@@ -71,12 +71,17 @@ function formatResetIn(resetIn: number): string {
   return `${Math.floor(resetIn / 60_000)}m`;
 }
 
-function formatWindow(window: UsageWindow, now: number): string {
+function formatWindow(window: UsageWindow, now: number, theme: Theme): string {
   const resetIn = window.resetAt * 1000 - now;
   const stale = now - window.observedAt > STALE_AFTER_MS || resetIn <= 0;
+  const remaining = Math.round(100 - window.usedPercent);
   // A passed reset is not evidence of a fresh quota allocation.
-  const remaining = resetIn <= 0 ? "?" : `${Math.round(100 - window.usedPercent)}%`;
-  return `${stale ? "~" : ""}${formatWindowLabel(window.windowMinutes)} ${remaining} ${formatResetIn(resetIn)}`;
+  const text = `${stale ? "~" : ""}${formatWindowLabel(window.windowMinutes)} ${resetIn <= 0 ? "?" : `${remaining}%`} ${formatResetIn(resetIn)}`;
+  if (stale) return theme.fg("muted", text);
+  // Bold separates the levels in themes that share warning and error colors.
+  if (remaining <= 10) return theme.bold(theme.fg("error", text));
+  if (remaining <= 30) return theme.fg("warning", text);
+  return text;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -103,15 +108,15 @@ export default function (pi: ExtensionAPI) {
         : performance.now() - activeStartedAt,
     );
     const parts = [`${elapsed}-${promptElapsed}`];
+    const theme = context.ui.theme;
     if (selectedProvider === CODEX_PROVIDER && usage.size > 0) {
       parts.push(
         [...usage.values()]
           .sort((a, b) => a.windowMinutes - b.windowMinutes)
-          .map((window) => formatWindow(window, Date.now()))
+          .map((window) => formatWindow(window, Date.now(), theme))
           .join(" - "),
       );
     }
-    const theme = context.ui.theme;
     if (toolCalls > 0) parts.push(`${toolCalls} ${toolCalls === 1 ? "call" : "calls"}`);
     // Rebuild themed strings on every update so theme changes refresh colors.
     const status = parts.join(theme.fg("muted", " * "));
