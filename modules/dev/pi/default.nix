@@ -4,6 +4,7 @@ self:
 
 let
   cfg = config.ozozka;
+  agents = cfg.mod.dev.agents;
   settingsFormat = pkgs.formats.json { };
 in
 {
@@ -16,6 +17,10 @@ in
 
   ozozka.home.profiles.pi.files = {
     ".pi/agent" = {
+      # Shared agent assets: a global context file, prompt templates, and skills.
+      "AGENTS.md" = agents.instructions;
+      inherit (agents) prompts skills;
+
       "extensions" = {
         "docs.ts" = ./docs.ts;
         "notify.ts" = ./notify.ts;

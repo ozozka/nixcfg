@@ -34,11 +34,6 @@ in
   };
 
   config.ozozka.home.profiles.agents.files = {
-    ".agents".skills = cfg.skills;
-    ".pi/agent" = {
-      "AGENTS.md" = cfg.instructions;
-      inherit (cfg) prompts;
-    };
     ".claude" = {
       "CLAUDE.md" = cfg.instructions;
       commands = cfg.prompts;
