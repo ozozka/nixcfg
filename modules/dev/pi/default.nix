@@ -60,7 +60,7 @@ in
           "grep"
           "find"
           "ls"
-          # "codemode"
+          "codemode"
           # "tool_search"
         ];
 
