@@ -105,11 +105,7 @@ export default function (pi: ExtensionAPI) {
   let context: ExtensionContext | undefined;
   let activeMilliseconds = 0;
   let activeStartedAt: number | undefined;
-  let responseStartedAt: number | undefined;
   let lastPromptMilliseconds = 0;
-  let promptOutputTokens = 0;
-  let promptModelMilliseconds = 0;
-  let lastTps: number | undefined;
   let selectedProvider: string | undefined;
   let requestProvider: string | undefined;
   let lastStatus: string | undefined;
@@ -141,7 +137,6 @@ export default function (pi: ExtensionAPI) {
         : performance.now() - activeStartedAt,
     );
     const parts = [`${elapsed}-${promptElapsed}`];
-    if (lastTps !== undefined) parts.push(`${lastTps.toFixed(1)} tps`);
     if (selectedProvider === CODEX_PROVIDER && usage.size > 0) {
       parts.push(
         [...usage.values()]
@@ -179,11 +174,7 @@ export default function (pi: ExtensionAPI) {
     context = undefined;
     activeMilliseconds = 0;
     activeStartedAt = undefined;
-    responseStartedAt = undefined;
     lastPromptMilliseconds = 0;
-    promptOutputTokens = 0;
-    promptModelMilliseconds = 0;
-    lastTps = undefined;
     selectedProvider = undefined;
     requestProvider = undefined;
     lastStatus = undefined;
@@ -245,9 +236,6 @@ export default function (pi: ExtensionAPI) {
     if (!context || activeStartedAt !== undefined) return;
     // Accumulate working time across prompts, including tools and retries.
     activeStartedAt = performance.now();
-    promptOutputTokens = 0;
-    promptModelMilliseconds = 0;
-    lastTps = undefined;
     updateStatus();
   });
 
@@ -260,31 +248,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("context", (_event, ctx) => {
-    // Includes request latency and thinking, but excludes tool execution.
+    // Remember the request's provider so quota headers are attributed correctly.
     if (!context) return;
-    responseStartedAt = performance.now();
     requestProvider = ctx.model?.provider;
-    updateStatus();
-  });
-
-  pi.on("message_end", (event) => {
-    if (event.message.role !== "assistant" || responseStartedAt === undefined) return;
-    const responseMilliseconds = performance.now() - responseStartedAt;
-    responseStartedAt = undefined;
-    const message = event.message;
-    if (
-      message.stopReason !== "error" &&
-      message.stopReason !== "aborted" &&
-      responseMilliseconds > 0 &&
-      Number.isFinite(message.usage.output) &&
-      message.usage.output > 0
-    ) {
-      // Aggregate the prompt's measured model calls, excluding time in tools.
-      promptOutputTokens += message.usage.output;
-      promptModelMilliseconds += responseMilliseconds;
-      lastTps = promptOutputTokens / (promptModelMilliseconds / 1000);
-    }
-    updateStatus();
   });
 
   pi.on("after_provider_response", (event) => {
@@ -344,7 +310,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", () => {
-    responseStartedAt = undefined;
     requestProvider = undefined;
   });
 
