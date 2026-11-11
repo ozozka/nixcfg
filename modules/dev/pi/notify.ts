@@ -1,9 +1,8 @@
 import { basename } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
-  // Unlike agent_end, this fires only after retries and queued work finish.
-  pi.on("agent_settled", async (_event, ctx) => {
+  async function notify(ctx: ExtensionContext, message: string) {
     if (ctx.mode !== "tui") return;
 
     try {
@@ -26,7 +25,7 @@ export default function (pi: ExtensionAPI) {
           "0", // Create a new notification.
           "", // Use the notification service's default icon.
           projectName,
-          "Done",
+          message,
           "0", // No actions.
           "0", // No hints.
           "-1", // Use the notification service's default expiration.
@@ -40,5 +39,14 @@ export default function (pi: ExtensionAPI) {
       // A missing bus or notification service must not interrupt the agent.
       ctx.ui.notify("Could not send desktop notification", "warning");
     }
+  }
+
+  // Unlike agent_end, this fires only after retries and queued work finish.
+  pi.on("agent_settled", (_event, ctx) => notify(ctx, "Done"));
+
+  // Dialogs raised during a run (questions, confirmations) wait for the user; dialogs the
+  // user opens with a command while Pi is idle need no notification.
+  pi.on("ui_prompt_start", (_event, ctx) => {
+    if (!ctx.isIdle()) return notify(ctx, "Input required");
   });
 }
