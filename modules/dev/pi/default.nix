@@ -25,6 +25,7 @@ in
         "docs.ts" = ./docs.ts;
         "notify.ts" = ./notify.ts;
         "questionnaire.ts" = ./questionnaire.ts;
+        "todo.ts" = ./todo.ts;
         "status.ts" = ./status.ts;
       };
 
