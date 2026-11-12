@@ -10,6 +10,7 @@ reminder: |
 ---
 
 Manage plans on the project's roadmap board: docs/roadmap.md or README.md's Roadmap section when they have one, otherwise a root roadmap.md (created on the first change). The board has six sections: Status and Limitations (free text, edited like other documentation), Backlog, Plans, Active, and Completed.
+Each result identifies the board path and whether it is commit-eligible or local-only. The global instructions define which roadmap files may be committed.
 Actions:
 - show: the board's plans and the focused plan's text.
 - backlog: add an idea to Backlog as one line.

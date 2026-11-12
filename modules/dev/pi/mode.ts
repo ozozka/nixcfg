@@ -20,8 +20,9 @@
  * steps and compaction re-sends to the model. Derived from the Pi todo example.
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
@@ -505,8 +506,33 @@ const RoadmapParams = Type.Object({
   delivered: Type.Optional(Type.Array(Type.String(), { description: help.delivered })),
 });
 
+interface BoardLocation {
+  path: string;
+  commitEligible: boolean;
+}
+
 interface RoadmapDetails {
+  board?: BoardLocation;
   error?: string;
+}
+
+// HEAD, not the index: staging a new local board must not make it commit-eligible.
+// No HEAD, Git unavailable, or a failed lookup leaves a fallback board local-only.
+function boardLocation(cwd: string, path: string): BoardLocation {
+  const root = projectRoot(cwd);
+  const where = relative(root, path);
+  if (where === "README.md" || where.startsWith("docs/"))
+    return { path: where, commitEligible: true };
+  try {
+    execFileSync("git", ["cat-file", "-e", `HEAD:${where}`], {
+      cwd: root,
+      stdio: "ignore",
+      timeout: 5000,
+    });
+    return { path: where, commitEligible: true };
+  } catch {
+    return { path: where, commitEligible: false };
+  }
 }
 
 function progress(plan: Plan): string {
@@ -526,11 +552,12 @@ function roadmapAction(
   cwd: string,
   params: Static<typeof RoadmapParams>,
   focus: string | undefined,
-): { text: string; focus?: string | null; notice?: Notice } {
+): { text: string; board: BoardLocation; focus?: string | null; notice?: Notice } {
   let board = findBoard(cwd);
   // Changes complete the board's sections first.
   if (params.action !== "show") board = ensureSections(board);
-  const where = board.path.slice(projectRoot(cwd).length + 1);
+  const location = boardLocation(cwd, board.path);
+  const where = location.path;
   const target = () => {
     const plan = currentPlan(board, params.plan, focus);
     if (!plan)
@@ -543,13 +570,13 @@ function roadmapAction(
     case "show": {
       const plan = currentPlan(board, params.plan, focus);
       const text = plan ? `\n\nFocused plan:\n${planText(board, plan)}` : "";
-      return { text: `Board in ${where}:\n${boardOverview(board)}${text}` };
+      return { text: `${boardOverview(board)}${text}`, board: location };
     }
     case "backlog": {
       if (!params.idea) throw new Error("backlog needs idea");
       board = addBacklog(board, params.idea);
       saveBoard(board);
-      return { text: `Added to Backlog in ${where}.` };
+      return { text: `Added to Backlog in ${where}.`, board: location };
     }
     case "write": {
       if (!(params.plan && params.content)) throw new Error("write needs plan and content");
@@ -558,6 +585,7 @@ function roadmapAction(
       const plan = currentPlan(board, params.plan) as Plan;
       return {
         text: `Plan "${plan.name}" written to ${plan.section} in ${where}, and focused.`,
+        board: location,
         focus: plan.name,
       };
     }
@@ -565,7 +593,7 @@ function roadmapAction(
       if (!params.plan) throw new Error("focus needs plan");
       const plan = target();
       const text = `Focused plan "${plan.name}" (${progress(plan)} steps done).`;
-      return { text, focus: plan.name };
+      return { text, board: location, focus: plan.name };
     }
     case "tick": {
       if (params.step === undefined) throw new Error("tick needs step");
@@ -577,7 +605,7 @@ function roadmapAction(
       const title = plan.steps.find((step) => step.number === params.step)?.title ?? "";
       const text = `Step ${params.step} ticked (${progress(plan)}).${rest}`;
       const notice = { message: `Step ${params.step}/${plan.steps.length} done: ${title}` };
-      return { text, notice };
+      return { text, board: location, notice };
     }
     case "complete": {
       const plan = target();
@@ -586,7 +614,7 @@ function roadmapAction(
       const cleared = focus?.toLowerCase() === plan.name.toLowerCase();
       const text = `Plan "${plan.name}" completed in ${where}.`;
       const notice = { message: `Plan "${plan.name}" completed`, final: true };
-      return { text, focus: cleared ? null : undefined, notice };
+      return { text, board: location, focus: cleared ? null : undefined, notice };
     }
     default:
       throw new Error(`unknown action ${params.action}`);
@@ -702,7 +730,10 @@ export default function (pi: ExtensionAPI) {
         if (result.notice) sendNotice(pi, result.notice);
         if (params.action === "write") planWritten = true;
         updateWidget(ctx);
-        return reply(result.text, {} satisfies RoadmapDetails);
+        const status = result.board.commitEligible ? "commit-eligible" : "local-only";
+        return reply(`Board: ${result.board.path} (${status}).\n${result.text}`, {
+          board: result.board,
+        } satisfies RoadmapDetails);
       } catch (error) {
         const message = (error as Error).message;
         return reply(
