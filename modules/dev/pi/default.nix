@@ -29,6 +29,10 @@ in
         "todo.ts" = ./todo.ts;
         "undo.ts" = ./undo.ts;
         "status.ts" = ./status.ts;
+        "subagent" = {
+          "agents.ts" = ./subagent/agents.ts;
+          "index.ts" = ./subagent/index.ts;
+        };
       };
 
       "settings.json" = settingsFormat.generate "settings.json" {
