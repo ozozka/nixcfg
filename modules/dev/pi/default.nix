@@ -161,13 +161,13 @@ in
           syntaxOperator = "text";
           syntaxPunctuation = "text";
 
-          thinkingOff = "muted";
-          thinkingMinimal = "muted";
-          thinkingLow = "muted";
-          thinkingMedium = "muted";
-          thinkingHigh = "muted";
-          thinkingXhigh = "muted";
-          thinkingMax = "muted";
+          thinkingOff = "overlay";
+          thinkingMinimal = "overlay";
+          thinkingLow = "overlay";
+          thinkingMedium = "overlay";
+          thinkingHigh = "overlay";
+          thinkingXhigh = "overlay";
+          thinkingMax = "overlay";
 
           bashMode = "primary";
         };
