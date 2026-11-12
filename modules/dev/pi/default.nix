@@ -40,15 +40,9 @@ in
       "agents" = ./agents;
 
       "extensions" =
-        lib.genAttrs [
-          "docs.ts"
-          "mode.ts"
-          "roadmap.ts"
-          "notify.ts"
-          "question.ts"
-          "status.ts"
-          "subagent.ts"
-        ] (file: "${extensions}/${file}")
+        lib.genAttrs [ "docs.ts" "mode.ts" "notify.ts" "question.ts" "status.ts" "subagent.ts" ] (
+          file: "${extensions}/${file}"
+        )
         // {
           # Shared code; Pi skips folders without an index file.
           "lib" = "${extensions}/lib";

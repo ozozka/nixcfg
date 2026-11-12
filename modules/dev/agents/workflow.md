@@ -3,28 +3,48 @@
 Work in two stages when asked: spec writes an executable plan, exec carries out an approved one.
 Outside them, follow the request and the repository's conventions.
 
-## Plan storage
+## Roadmap board
 
-Plans live on a roadmap board. Use the roadmap tool when it is available; otherwise edit the
-board directly. The project's board is `docs/roadmap.md` or the Roadmap section of `README.md`
-when it already has these six sibling sections in order: Status, Limitations, Backlog, Plans,
-Active, Completed. Prefer the docs file when both qualify.
+Plans live on the project's roadmap board: `docs/roadmap.md`, or the Roadmap section of
+`README.md` when there is no docs board. If neither has one, ask before adding it. Edit the
+board directly, keeping unrelated document text intact. Keep lasting knowledge in its owning
+documentation, not in completed plans.
 
-Otherwise use the private board `.roadmap/roadmap.md` at the repository root. When it is
-missing, create it with a `# Roadmap` heading and the six `##` sections, plus
-`.roadmap/.gitignore` containing `*` so git ignores the folder. Never create or restructure
-project documents for a board. A plan is a `###` heading in Plans, moving to Active when its
-first step is ticked; a completed plan is replaced by one line per delivered capability in
-Completed. Keep lasting knowledge in its owning documentation, not in completed plans.
+The board has six sibling sections in this order, one heading level below its title (`##` in
+`docs/roadmap.md` under `# Roadmap`, `###` under `## Roadmap` in `README.md`):
+
+- **Status**: the current state in a few bullets.
+- **Limitations**: known gaps and constraints.
+- **Backlog**: one-line ideas.
+- **Plans**: approved or proposed plans not yet started.
+- **Active**: plans with at least one completed step; a plan moves here when its first step is
+  ticked.
+- **Completed**: one line per delivered capability, replacing the finished plan.
+
+A plan is a heading one level below the sections, named by its goal, with bold bullet groups:
+
+```markdown
+### Plan name
+
+- **Goal**: what the plan achieves.
+- **Findings**:
+  - facts that shaped the plan.
+- **Decisions**:
+  - choices made, including the user's.
+- **Specification**:
+  - requirements the steps must meet.
+- **Steps**:
+  - [ ] **1. Title**: what changes, where, and the checks that prove it.
+  - [ ] **2. Title**: ...
+```
+
+Leave out empty groups other than Steps. Number steps consecutively from 1, and tick a step with
+`[x]` only when it is done and verified.
 
 ## Spec: write an executable plan
 
-Shape the plan without changing project code or documentation. Resolve user-owned decisions
-before finalizing it.
-
-Record the plan with the available planning tools. Use nested bullets under Goal, then Findings,
-Decisions, and Specification where useful, followed by Steps. Number checkbox steps from 1, for
-example `- [ ] **1. Title**: details`.
+Shape the plan without changing project code or documentation other than the roadmap board.
+Resolve user-owned decisions before finalizing it, then record the plan in Plans.
 
 Each step is ordered, independently verifiable, and sized for one focused commit. Name the files
 or functions it changes, the checks that prove it, and any necessary documentation updates. Make
@@ -46,5 +66,5 @@ Stop and explain the blocker if checks keep failing, a decision is missing, or a
 contradicts the plan.
 
 After all steps, review the changes against the plan and documentation ownership, fix and verify
-any issues, and record one Completed line per delivered capability. Include project board
-completion updates in a commit; the private board is never committed.
+any issues, and record one Completed line per delivered capability. Include the board completion
+updates in a commit.

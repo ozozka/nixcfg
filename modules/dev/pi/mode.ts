@@ -1,6 +1,6 @@
 /**
- * Explicit modes set tools/thinking and contribute instructions. They have no
- * dependency on roadmap storage or execution progress and never start a run.
+ * Modes: Markdown files in modes/ under Pi's agent directory, switched with /mode or Shift+Tab.
+ * A mode excludes tools, sets the thinking level, and adds its body to the system prompt.
  */
 
 import {

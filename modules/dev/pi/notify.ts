@@ -1,9 +1,7 @@
 /**
  * Desktop notifications over D-Bus: "Done" with the first line of the final message when a run
  * settles, "Failed" with the error when it ended in one (nothing after Escape), "Input required"
- * when a dialog waits during a run, and notices other extensions send on the "notify" event bus channel as
- * { message, final? }, such as finished roadmap steps. A final notice (a completed plan) stays
- * on the card instead of the run's "Done".
+ * when a dialog waits during a run.
  *
  * Each session keeps one notification and replaces it in place (Notify's replaces_id), since
  * the notification server keeps cards until they are dismissed; a replaced card moves back to
@@ -12,7 +10,7 @@
 
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { assistantText, onNotice } from "./lib/shared.ts";
+import { assistantText } from "./lib/shared.ts";
 
 const NOTIFICATION_ID = /^u (\d+)/;
 // Longest summary shown after "Done: " or "Failed: ".
@@ -32,10 +30,6 @@ export default function (pi: ExtensionAPI) {
   // The session's notification ID; 0 creates a new one.
   let cardId = 0;
   let queue = Promise.resolve();
-  // The current session, for notices from other extensions.
-  let context: ExtensionContext | undefined;
-  // A final notice arrived during the current run, so "Done" would hide it.
-  let kept = false;
 
   async function send(ctx: ExtensionContext, message: string) {
     try {
@@ -98,24 +92,13 @@ export default function (pi: ExtensionAPI) {
   }
 
   // A new or resumed session starts its own notification.
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", () => {
     cardId = 0;
-    context = ctx;
-  });
-
-  onNotice(pi, ({ message, final }) => {
-    if (!context) return;
-    if (final) kept = true;
-    notify(context, message);
-  });
-
-  pi.on("agent_start", () => {
-    kept = false;
   });
 
   // Unlike agent_end, this fires only after retries and queued work finish.
   pi.on("agent_settled", (event, ctx) => {
-    if (kept || event.aborted) return;
+    if (event.aborted) return;
     return notify(ctx, outcome(ctx));
   });
 
