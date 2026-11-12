@@ -1,6 +1,7 @@
 /**
- * Desktop notifications over D-Bus: "Done" when a run settles, "Input required" when a dialog
- * waits during a run, and notices other extensions send on the "notify" event bus channel as
+ * Desktop notifications over D-Bus: "Done" with the first line of the final message when a run
+ * settles, "Failed" with the error when it ended in one (nothing after Escape), "Input required"
+ * when a dialog waits during a run, and notices other extensions send on the "notify" event bus channel as
  * { message, final? }, such as finished roadmap steps. A final notice (a completed plan) stays
  * on the card instead of the run's "Done".
  *
@@ -14,6 +15,18 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const NOTIFICATION_ID = /^u (\d+)/;
 const NOTIFY_CHANNEL = "notify";
+// Longest summary shown after "Done: " or "Failed: ".
+const SUMMARY_LENGTH = 80;
+
+// The first non-empty line of a text, shortened to fit a notification.
+function firstLine(text: string): string {
+  const line =
+    text
+      .split("\n")
+      .find((candidate) => candidate.trim() !== "")
+      ?.trim() ?? "";
+  return line.length > SUMMARY_LENGTH ? `${line.slice(0, SUMMARY_LENGTH - 1)}…` : line;
+}
 
 export default function (pi: ExtensionAPI) {
   // The session's notification ID; 0 creates a new one.
@@ -64,6 +77,25 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // "Failed: <error>" or "Done: <first line of the final message>", from the last assistant message.
+  function outcome(ctx: ExtensionContext): string {
+    const last = ctx.sessionManager
+      .getBranch()
+      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []))
+      .filter((message) => message.role === "assistant")
+      .at(-1);
+    if (last?.role !== "assistant") return "Done";
+    if (last.stopReason === "error") {
+      const error = firstLine(last.errorMessage ?? "");
+      return error ? `Failed: ${error}` : "Failed";
+    }
+    const text = last.content
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n");
+    const summary = firstLine(text);
+    return summary ? `Done: ${summary}` : "Done";
+  }
+
   function notify(ctx: ExtensionContext, message: string) {
     if (ctx.mode !== "tui") return;
     queue = queue.then(() => send(ctx, message));
@@ -88,8 +120,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Unlike agent_end, this fires only after retries and queued work finish.
-  pi.on("agent_settled", (_event, ctx) => {
-    if (!kept) return notify(ctx, "Done");
+  pi.on("agent_settled", (event, ctx) => {
+    if (kept || event.aborted) return;
+    return notify(ctx, outcome(ctx));
   });
 
   // Dialogs raised during a run (questions, confirmations) wait for the user; dialogs the

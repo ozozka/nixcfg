@@ -930,9 +930,18 @@ export default function (pi: ExtensionAPI) {
       last?.role === "assistant"
         ? last.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")
         : "";
-    if (BLOCKED.test(text)) return stop("blocked");
-    if (continuations >= AUTO_CONTINUE_LIMIT)
+    // A stop the user should see on the card; a run that ticks nothing usually asks something,
+    // which notify.ts's "Done" summary already shows.
+    const alert = (notice: string) =>
+      pi.events.emit(NOTIFY_CHANNEL, { message: notice, final: true });
+    if (BLOCKED.test(text)) {
+      alert(text.trim().split("\n")[0]);
+      return stop("blocked");
+    }
+    if (continuations >= AUTO_CONTINUE_LIMIT) {
+      alert(`Stopped after ${AUTO_CONTINUE_LIMIT} continuations`);
       return stop(`${AUTO_CONTINUE_LIMIT} continuations`);
+    }
 
     let message: string;
     if (plan.steps.some((step) => !step.done)) {
