@@ -3,6 +3,7 @@
  * in the top border): segments other extensions send on the "status" event bus channel as
  * { key, render? } (render: (theme) => string; none removes the segment), ordered by key, then
  * the session's work clock, Codex quota, and tool calls.
+ * Context use and the model with its thinking level are on the right of the same border.
  *
  * The border needs Pi's editor replaced with a subclass (StatusEditor), set for each session;
  * another extension that replaces the editor takes the line with it.
@@ -22,6 +23,10 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 const STATUS_CHANNEL = "status";
 const CODEX_PROVIDER = "openai-codex";
 const STALE_AFTER_MS = 10 * 60 * 1000;
+const TRAILING_ZERO = /\.0$/;
+// Context use above these percentages turns warning, then error, like Pi's footer.
+const CONTEXT_WARNING = 70;
+const CONTEXT_ERROR = 90;
 // Codex quotas belong to the account, not the session, so the latest snapshot is kept here for
 // the next session; the stale rule above marks it until a response refreshes it.
 const USAGE_FILE = join(getAgentDir(), "codex-usage.json");
@@ -110,26 +115,52 @@ function saveUsage(windows: UsageWindow[]) {
   }
 }
 
-// Pi's editor with the status line on the left of its bottom border, ahead of the scroll
-// marker; the line is cut to fit, and a border too narrow for it stays plain.
+// A border line `── left ──── marker ── right ──`, any part optional. The scroll marker always
+// fits; the left text keeps its room before the right one, and both are cut to fit.
+function borderLine(
+  width: number,
+  border: (text: string) => string,
+  left: string,
+  marker: string,
+  right: string,
+): string {
+  const markerText = marker ? ` ${marker} ──` : "";
+  // At least one "─" of fill, the closing "──", and the spaces around each text.
+  let room = width - 1 - 2 - visibleWidth(markerText) - (left ? 4 : 0) - (right ? 2 : 0);
+  const leftText = left && room > 0 ? truncateToWidth(left, room) : "";
+  room -= visibleWidth(leftText);
+  const rightText = right && room > 0 ? truncateToWidth(right, room) : "";
+  const start = leftText ? `${border("── ")}${leftText}${border(" ")}` : "";
+  const end = rightText ? `${border(" ")}${rightText}${border(" ──")}` : border("──");
+  const fill = width - visibleWidth(start) - visibleWidth(markerText) - visibleWidth(end);
+  return start + border("─".repeat(Math.max(1, fill)) + markerText) + end;
+}
+
+// Pi's editor with the status line on the left of its bottom border and the session's details
+// (context use, model) on the right, around the scroll marker.
 class StatusEditor extends CustomEditor {
   status = "";
+  details = "";
 
   protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
-    const marker = hiddenLineCount > 0 ? ` ↓ ${hiddenLineCount} more ──` : "─";
-    // "── " before the status, " " and at least one "─" or the marker after it.
-    const room = width - 4 - visibleWidth(marker);
-    if (this.status === "" || room < 1) return super.renderBottomBorder(width, hiddenLineCount);
-    const status = truncateToWidth(this.status, room);
-    const fill = "─".repeat(room - visibleWidth(status));
-    return this.borderColor("── ") + status + this.borderColor(` ${fill}${marker}`);
+    const marker = hiddenLineCount > 0 ? `↓ ${hiddenLineCount} more` : "";
+    if (width < 8) return super.renderBottomBorder(width, hiddenLineCount);
+    return borderLine(width, this.borderColor, this.status, marker, this.details);
   }
 
-  setStatus(status: string) {
-    if (status === this.status) return;
+  setStatus(status: string, details: string) {
+    if (status === this.status && details === this.details) return;
     this.status = status;
+    this.details = details;
     this.tui.requestRender();
   }
+}
+
+function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  return `${(count / 1_000_000).toFixed(1).replace(TRAILING_ZERO, "")}M`;
 }
 
 function formatWindowLabel(windowMinutes: number): string {
@@ -204,7 +235,26 @@ export default function (pi: ExtensionAPI) {
         .map(([, render]) => render(theme)),
       ...parts,
     ].join(theme.fg("muted", " * "));
-    editor?.setStatus(status);
+    editor?.setStatus(status, details(context, theme));
+  }
+
+  // Context use and the model with its thinking level, for the right of the bottom border.
+  function details(ctx: ExtensionContext, theme: Theme): string {
+    const parts: string[] = [];
+    const contextUsage = ctx.getContextUsage();
+    if (contextUsage) {
+      const { percent, contextWindow } = contextUsage;
+      const text = `${percent === null ? "?" : percent.toFixed(1)}%/${formatTokens(contextWindow)}`;
+      if (percent !== null && percent > CONTEXT_ERROR) parts.push(theme.fg("error", text));
+      else if (percent !== null && percent > CONTEXT_WARNING)
+        parts.push(theme.fg("warning", text));
+      else parts.push(text);
+    }
+    const model = ctx.model;
+    if (model) {
+      parts.push(model.reasoning ? `${model.id} • ${pi.getThinkingLevel()}` : model.id);
+    }
+    return parts.join(theme.fg("muted", " * "));
   }
 
   function saveWindows(windows: Array<UsageWindow | undefined>) {
@@ -223,7 +273,7 @@ export default function (pi: ExtensionAPI) {
     lastPromptMilliseconds = 0;
     selectedProvider = undefined;
     requestProvider = undefined;
-    editor?.setStatus("");
+    editor?.setStatus("", "");
     editor = undefined;
     usage.clear();
     toolCalls = 0;
@@ -364,6 +414,11 @@ export default function (pi: ExtensionAPI) {
     selectedProvider = event.model.provider;
     updateStatus();
   });
+
+  // Context use changes with each message and compaction, the thinking level by command.
+  pi.on("message_end", () => updateStatus());
+  pi.on("session_compact", () => updateStatus());
+  pi.on("thinking_level_select", () => updateStatus());
 
   pi.on("agent_end", () => {
     requestProvider = undefined;
