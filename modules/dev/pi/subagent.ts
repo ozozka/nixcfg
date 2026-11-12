@@ -1,8 +1,8 @@
 /**
  * Subagent tool: delegates tasks to agents, each in its own `pi` process with an isolated
  * context window. Modes: single ({ agent, task }), parallel ({ tasks }), and chain ({ chain },
- * where {previous} is replaced by the prior step's output). /review runs the reviewer through
- * the main agent.
+ * where {previous} is replaced by the prior step's output). /review asks the main agent for a
+ * read-only review by a subagent.
  *
  * Agents are Markdown files in agents/ under Pi's agent directory, loaded at startup: the
  * file name is the agent name, the frontmatter its settings, and the body is appended to its
@@ -482,7 +482,8 @@ const SubagentParams = Type.Object({
   chain: Type.Optional(Type.Array(ChainItem, { description: "Steps to run in sequence" })),
 });
 
-const REVIEW_PROMPT = `Use the subagent tool to have the reviewer agent review the current uncommitted changes. Report its findings, and do not fix anything until I ask.`;
+// The checklist travels with the request, so any read-only agent can review.
+const REVIEW_PROMPT = `Use the subagent tool to have the reader agent review the current uncommitted changes (git status and git diff HEAD, including untracked files). Give it this checklist: correctness, security, and maintainability; the changes against the focused roadmap plan, if there is one (missing work, unplanned work, contradicted decisions); and the documentation changes (a fact stated in two places, content in a document that does not own it, implementation details that belong in source comments, outdated text left next to its replacement). Report its findings by severity with file paths and line numbers, and do not fix anything until I ask.`;
 
 export default function (pi: ExtensionAPI) {
   if (process.env[CHILD_ENV]) return;
@@ -493,7 +494,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("review", {
-    description: "Review the current changes with the reviewer subagent: /review [focus]",
+    description: "Review the current changes with a read-only subagent: /review [focus]",
     handler: async (args, ctx) => {
       await ctx.waitForIdle();
       const focus = args.trim();

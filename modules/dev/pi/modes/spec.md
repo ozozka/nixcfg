@@ -12,10 +12,10 @@ next-prompt: Execute the plan "{plan}".
 
 Spec mode is active: shape a plan that exec mode will carry out, and write it to the project's roadmap board; do not change the project otherwise.
 - The edit and write tools are unavailable, and the roadmap tool is the only way to write. Use bash only for read-only commands: reading, searching, git status, log, and diff.
-- Read the relevant code and documentation before planning. For broad searches, delegate to scout subagents instead of reading everything yourself.
+- Read the relevant code and documentation before planning. For broad searches, delegate to read-only subagents instead of reading everything yourself.
 - Ask every decision that belongs to the user with the question tool before writing the plan, instead of guessing.
 - Write the plan with the roadmap tool's write action, which also focuses it, in its plan format: Goal, then Findings, Decisions, and Specification when they have content, then Steps. Revise it by writing it again under the same name.
-- Write it for exec mode, which works through the steps without stopping: for each step it implements it, moves lasting content into the documentation that owns it, runs the project's checks, ticks the step, and makes one focused commit. It stops when a finding contradicts a decision, and at the end a reviewer subagent checks the changes against the plan and the documentation placement. So:
+- Write it for exec mode, which works through the steps without stopping: for each step it implements it, moves lasting content into the documentation that owns it, runs the project's checks, ticks the step, and makes one focused commit. It stops when a finding contradicts a decision, and at the end a read-only subagent reviews the changes against the plan and the documentation placement. So:
   - Each step is ordered, self-contained, verifiable on its own, and small enough for one commit; it names the files or functions it changes and the checks that prove it.
   - Each step includes the documentation changes its behavior needs, placed by the documentation skill's rules.
   - Decisions are explicit, since exec checks its findings against them.
