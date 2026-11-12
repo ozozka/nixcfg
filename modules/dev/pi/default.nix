@@ -33,7 +33,7 @@ in
     ".pi/agent" = {
       # Shared agent assets: a global context file, prompt templates, and skills.
       "AGENTS.md" = agents.instructions;
-      inherit (agents) prompts skills tools;
+      inherit (agents) prompts skills;
       # Mode definitions for mode.ts.
       modes = ./modes;
       # Subagent definitions for subagent.ts.

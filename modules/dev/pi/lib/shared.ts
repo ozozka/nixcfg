@@ -10,7 +10,6 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
   getAgentDir,
-  parseFrontmatter,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 
@@ -133,35 +132,6 @@ export function loadDefinitions<T>(
     }
   }
   return { definitions, errors };
-}
-
-// Configured Markdown owns static tool text and prompt bodies. Requiring the frontmatter
-// keys at load time catches missing help and misspellings before a tool is registered.
-export function loadMarkdown<K extends string>(
-  path: string | URL,
-  keys: readonly K[],
-): { body: string; fields: Record<K, string> } {
-  try {
-    const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(
-      readFileSync(path, "utf8"),
-    );
-    if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter))
-      throw new Error("frontmatter must be a mapping");
-    const fields = Object.fromEntries(
-      keys.map((key) => [key, requiredText(frontmatter[key], key)]),
-    ) as Record<K, string>;
-    rejectUnknown(
-      Object.fromEntries(
-        Object.entries(frontmatter).filter(([key]) => !keys.includes(key as K)),
-      ),
-    );
-    return { body: requiredText(body, "the body"), fields };
-  } catch (error) {
-    throw new Error(
-      `${typeof path === "string" ? path : path.pathname}: ${(error as Error).message}`,
-      { cause: error },
-    );
-  }
 }
 
 // Unknown keys are errors, so typos do not pass silently.

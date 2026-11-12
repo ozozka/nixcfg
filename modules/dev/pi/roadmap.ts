@@ -9,12 +9,11 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
-  getAgentDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import { loadMarkdown, projectRoot, reply, sendNotice } from "./lib/shared.ts";
+import { projectRoot, reply, sendNotice } from "./lib/shared.ts";
 
 export interface Step {
   number: number;
@@ -442,22 +441,31 @@ export function saveProject(board: Board, original: string): void {
 // Pi adapter
 
 const ENTRY = "roadmap-state";
-const text = loadMarkdown(join(getAgentDir(), "tools", "roadmap.md"), [
-  "plan",
-  "content",
-  "idea",
-  "step",
-  "delivered",
-  "reminder",
-]);
-const help = text.fields;
+const DESCRIPTION = `Manage plans with show, backlog (idea), write (plan and content), focus (plan), tick (step), and complete (delivered summaries).
+
+Use an existing board with Status, Limitations, Backlog, Plans, Active, and Completed in docs/roadmap.md or README.md's Roadmap section; otherwise keep resumable session state. Never create or repair project files. Pending focused session plans transfer on the next board mutation when a compatible board appears; differing name collisions fail.
+
+Plan content is bullets with a \`- **Steps**:\` group and consecutive checkbox steps: \`  - [ ] **1. Title**: details\`. Other bullet groups are optional. Ticking starts a plan; completing requires all steps ticked.`;
 const Params = Type.Object({
   action: StringEnum(["show", "backlog", "write", "focus", "tick", "complete"] as const),
-  plan: Type.Optional(Type.String({ description: help.plan })),
-  content: Type.Optional(Type.String({ description: help.content })),
-  idea: Type.Optional(Type.String({ description: help.idea })),
-  step: Type.Optional(Type.Number({ description: help.step })),
-  delivered: Type.Optional(Type.Array(Type.String(), { description: help.delivered })),
+  plan: Type.Optional(
+    Type.String({
+      description:
+        "Plan name; write and focus need it, the others default to the focused plan (or the only active one)",
+    }),
+  ),
+  content: Type.Optional(
+    Type.String({
+      description: "write: the plan body in the plan format, without its heading",
+    }),
+  ),
+  idea: Type.Optional(Type.String({ description: "backlog: the idea, one line" })),
+  step: Type.Optional(Type.Number({ description: "tick: the step number" })),
+  delivered: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "complete: one Completed line per delivered capability",
+    }),
+  ),
 });
 
 const progress = (plan: { steps: { done: boolean }[] }) =>
@@ -620,7 +628,7 @@ export default function (pi: ExtensionAPI) {
     pi.sendMessage(
       {
         customType: "roadmap-reminder",
-        content: help.reminder.replaceAll("{plan}", planText(board, plan)),
+        content: `Roadmap plan from before compaction:\n${planText(board, plan)}`,
         display: false,
       },
       { deliverAs: ctx.isIdle() ? "nextTurn" : "steer" },
@@ -630,7 +638,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "roadmap",
     label: "Roadmap",
-    description: text.body,
+    description: DESCRIPTION,
     parameters: Params,
     async execute(_id, params, _signal, _update, ctx) {
       try {

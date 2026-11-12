@@ -15,12 +15,10 @@
 
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   formatReadLineRange,
-  getAgentDir,
   getMarkdownTheme,
   parseFrontmatter,
   type Theme,
@@ -31,7 +29,6 @@ import {
   assistantText,
   formatTokens,
   loadDefinitions,
-  loadMarkdown,
   optionalList,
   optionalThinking,
   rejectUnknown,
@@ -385,36 +382,27 @@ async function runAgent(
   return result;
 }
 
-const subagentText = loadMarkdown(join(getAgentDir(), "tools", "subagent.md"), [
-  "agent",
-  "task",
-  "tasks",
-  "chain",
-  "item-agent",
-  "item-task",
-  "chain-task",
-]);
-const help = subagentText.fields;
-
 const TaskItem = Type.Object({
-  agent: Type.String({ description: help["item-agent"] }),
-  task: Type.String({ description: help["item-task"] }),
+  agent: Type.String({ description: "Name of the agent to invoke" }),
+  task: Type.String({ description: "Task to delegate to the agent" }),
 });
 
 const ChainItem = Type.Object({
-  agent: Type.String({ description: help["item-agent"] }),
-  task: Type.String({ description: help["chain-task"] }),
+  agent: Type.String({ description: "Name of the agent to invoke" }),
+  task: Type.String({
+    description: "Task with an optional {previous} placeholder for the prior step's output",
+  }),
 });
 
 const SubagentParams = Type.Object({
-  agent: Type.Optional(Type.String({ description: help.agent })),
-  task: Type.Optional(Type.String({ description: help.task })),
+  agent: Type.Optional(Type.String({ description: "Agent to invoke (single mode)" })),
+  task: Type.Optional(Type.String({ description: "Task to delegate (single mode)" })),
   tasks: Type.Optional(
     Type.Array(TaskItem, {
-      description: help.tasks.replaceAll("{maxParallelTasks}", String(MAX_PARALLEL_TASKS)),
+      description: `Tasks to run in parallel (at most ${MAX_PARALLEL_TASKS})`,
     }),
   ),
-  chain: Type.Optional(Type.Array(ChainItem, { description: help.chain })),
+  chain: Type.Optional(Type.Array(ChainItem, { description: "Steps to run in sequence" })),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -440,10 +428,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: subagentText.body.replaceAll(
-      "{agents}",
-      [...agents].map(([name, agent]) => `- ${name}: ${agent.description}`).join("\n"),
-    ),
+    description: [
+      "Run tasks in subagents with isolated contexts. Each subagent receives its task, not the parent conversation.",
+      "Modes: single (agent + task), parallel (tasks array), chain (sequential, with {previous} replaced by the prior step's output).",
+      `Agents:\n${[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`).join("\n")}`,
+    ].join("\n\n"),
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {

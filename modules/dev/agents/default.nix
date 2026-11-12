@@ -25,12 +25,6 @@ in
       description = "Personal workflow instructions, loaded only by the workflow wrappers.";
     };
 
-    tools = mkOption {
-      type = types.attrsOf types.path;
-      default = entries ./tools;
-      description = "Tool-help Markdown by file name, loaded only by its consumer.";
-    };
-
     prompts = mkOption {
       type = types.attrsOf types.path;
       default = entries ./prompts;
