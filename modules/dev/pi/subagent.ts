@@ -346,6 +346,8 @@ function piArgs(agent: Agent, defaults: DispatchDefaults, task: string): string[
   if (model) args.push("--model", model);
   if (thinkingLevel) args.push("--thinking", thinkingLevel);
   if (agent.tools) args.push("--tools", agent.tools.join(","));
+  // The roadmap belongs to the main session; children report back instead of editing it.
+  args.push("--exclude-tools", "roadmap");
   args.push("--append-system-prompt", agent.prompt, `Task: ${task}`);
   return args;
 }

@@ -1,5 +1,5 @@
 /**
- * Named modes and the task list.
+ * Named modes and the roadmap.
  *
  * Modes: each sets the thinking level, removes tools, and appends instructions to the system
  * prompt. The default mode, free, is the normal settings. Entering a mode saves the current
@@ -8,20 +8,16 @@
  *
  * Modes are Markdown files in modes/ under Pi's agent directory, loaded at startup: the file
  * name is the mode name, the frontmatter its settings (including `order` and the status
- * `color`), and the body its instructions. A mode with `next` asks, when a run ends with open
- * tasks, whether to switch to that mode and send `next-prompt`. The mode state is recorded in
- * the session on every switch and restored from the current branch, so resuming or navigating
- * with /tree brings back the matching mode. Derived from the Pi preset example.
+ * `color`), and the body its instructions. A mode with `next` asks, when a run wrote a plan
+ * that still has open steps, whether to switch to that mode and send `next-prompt`. The mode
+ * state is recorded in the session on every switch and restored from the current branch, so
+ * resuming or navigating with /tree brings back the matching mode. Derived from the Pi preset
+ * example.
  *
- * Task list: the `todo` tool, shaped like Claude's TodoWrite and Codex's update_plan: the model
- * sends the whole list with a status per item on every update. State is stored in tool result
- * details, so branching keeps the list correct for that point in history. A widget above the
- * editor shows the list while items are open, and compaction re-sends open items to the model.
- * Derived from the Pi todo example.
- *
- * Roadmap: modes with `roadmap: true` get the `roadmap` tool, which writes plans to the project's
- * roadmap board and ticks their steps (see Roadmap board below); the widget then shows the current plan
- * above the session tasks, and `next` checks the plan's open steps instead of the tasks.
+ * Roadmap: the only place for task organization, in every mode. The `roadmap` tool writes plans
+ * to the project's roadmap board and ticks their steps (see Roadmap board below). Each session
+ * focuses one plan (`/roadmap`), which the widget above the editor shows while it has open
+ * steps and compaction re-sends to the model. Derived from the Pi todo example.
  */
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -72,8 +68,6 @@ interface Mode {
   // Mode to offer when a run ends with open tasks, and the prompt sent after switching.
   next?: string;
   nextPrompt?: string;
-  // Enables the roadmap tool and tracks open work on the roadmap plan.
-  roadmap: boolean;
   // Continues the run while the roadmap plan makes progress (see agent_before_settle).
   autoContinue: boolean;
   instructions: string;
@@ -88,7 +82,6 @@ type ModeFrontmatter = {
   "exclude-tools"?: unknown;
   next?: unknown;
   "next-prompt"?: unknown;
-  roadmap?: unknown;
   "auto-continue"?: unknown;
 };
 
@@ -109,7 +102,6 @@ function parseMode(content: string): Mode {
     "exclude-tools": exclude,
     next,
     "next-prompt": nextPrompt,
-    roadmap = false,
     "auto-continue": autoContinue = false,
     ...unknown
   } = frontmatter;
@@ -127,9 +119,7 @@ function parseMode(content: string): Mode {
   const list = typeof exclude === "string" ? exclude.split(",") : (exclude ?? []);
   if (!(Array.isArray(list) && list.every((t) => typeof t === "string")))
     throw new Error("exclude-tools must be a comma-separated string or a list");
-  if (typeof roadmap !== "boolean") throw new Error("roadmap must be true or false");
   if (typeof autoContinue !== "boolean") throw new Error("auto-continue must be true or false");
-  if (autoContinue && !roadmap) throw new Error("auto-continue needs roadmap: true");
   if ((next === undefined) !== (nextPrompt === undefined))
     throw new Error("next and next-prompt go together");
   if (!body.trim()) throw new Error("the instructions (body) are empty");
@@ -141,7 +131,6 @@ function parseMode(content: string): Mode {
     excludeTools: list.map((t) => t.trim()).filter(Boolean),
     next: optionalString(next, "next"),
     nextPrompt: optionalString(nextPrompt, "next-prompt"),
-    roadmap,
     autoContinue,
     instructions: body.trim(),
   };
@@ -193,42 +182,9 @@ interface ModeState {
   saved?: Saved;
 }
 
-// Task list
+// Plan display
 
-const STATUSES = ["pending", "in_progress", "completed"] as const;
-type Status = (typeof STATUSES)[number];
-
-interface TodoItem {
-  text: string;
-  status: Status;
-}
-
-interface TodoDetails {
-  items: TodoItem[];
-  error?: string;
-}
-
-const TodoParams = Type.Object({
-  items: Type.Array(
-    Type.Object({
-      text: Type.String({ description: "Task, phrased as an action" }),
-      status: StringEnum(STATUSES),
-    }),
-    { description: "The complete list; it replaces the previous one. Empty clears it." },
-  ),
-});
-
-const TODO_DESCRIPTION = `Track multi-step work in a task list the user can follow.
-Send the whole list on every update; it replaces the previous one.
-- Use it for work with three or more steps, or when the user lists several tasks; skip it for trivial requests.
-- Keep exactly one item in_progress while working, and mark items completed as soon as they are done.
-- Add newly discovered steps, and remove steps that no longer apply.`;
-
-function isTodoDetails(value: unknown): value is TodoDetails {
-  return (
-    typeof value === "object" && value !== null && Array.isArray((value as TodoDetails).items)
-  );
-}
+type Status = "pending" | "in_progress" | "completed";
 
 // Checkboxes as markdown-ts-mode shows them in Emacs (my-modes.el, my-theme.el): a bold ✔ in
 // the primary color (success) and a bold ⬦ in the secondary color (warning); ◆, the filled ⬦,
@@ -238,29 +194,9 @@ function checkbox(status: Status, theme: Theme): string {
   return theme.bold(theme.fg("warning", status === "in_progress" ? "◆" : "⬦"));
 }
 
-function formatItem(item: TodoItem, theme: Theme): string {
-  return `${checkbox(item.status, theme)} ${item.text}`;
-}
-
 // A list header like a Markdown heading: the title bold, its progress muted.
 function header(title: string, done: number, total: number, theme: Theme): string {
   return `${theme.bold(title)} ${theme.fg("muted", `${done}/${total}`)}`;
-}
-
-function doneCount(items: TodoItem[]): number {
-  return items.filter((item) => item.status === "completed").length;
-}
-
-function summary(items: TodoItem[]): string {
-  const done = items.filter((item) => item.status === "completed").length;
-  return `${done}/${items.length} completed`;
-}
-
-// Plain text for the model: one line per item with its status.
-function modelText(heading: string, items: TodoItem[]): string {
-  if (items.length === 0) return "Task list cleared.";
-  const lines = items.map((item) => `[${item.status}] ${item.text}`);
-  return `${heading} (${summary(items)}):\n${lines.join("\n")}`;
 }
 
 // Roadmap board: finding, reading, and changing plans in Markdown. A board is six sibling
@@ -751,29 +687,25 @@ function trackedPlan(cwd: string, focus: string | undefined): Plan | undefined {
 export default function (pi: ExtensionAPI) {
   const { modes, errors } = loadModes();
   let state: ModeState = {};
-  // In-memory task list, reconstructed from the session branch.
-  let items: TodoItem[] = [];
-  // A plan was written in the current run; roadmap modes offer `next` only then.
+  // A plan was written in the current run; modes offer `next` only then.
   let planWritten = false;
   // The roadmap plan this session works on, recorded in the session (see setFocus).
   let focus: string | undefined;
 
   const isModeName = (value: unknown): value is string =>
     typeof value === "string" && modes.has(value);
-  const hasOpenTasks = () => items.some((item) => item.status !== "completed");
   const currentMode = () => (state.name ? modes.get(state.name) : undefined);
-  const roadmapMode = () => currentMode()?.roadmap === true;
   const hasOpenSteps = (ctx: ExtensionContext) =>
     trackedPlan(ctx.cwd, focus)?.steps.some((step) => !step.done) === true;
 
-  // Task list
+  // Roadmap
 
-  // Shown while work is open: the roadmap plan in roadmap modes, then the session tasks.
+  // Shows the focused plan while it has open steps.
   function updateWidget(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     const theme = ctx.ui.theme;
     const lines: string[] = [];
-    const plan = roadmapMode() ? trackedPlan(ctx.cwd, focus) : undefined;
+    const plan = trackedPlan(ctx.cwd, focus);
     if (plan?.steps.some((step) => !step.done)) {
       const next = plan.steps.find((step) => !step.done);
       const done = plan.steps.filter((step) => step.done).length;
@@ -784,11 +716,7 @@ export default function (pi: ExtensionAPI) {
         lines.push(`${checkbox(status, theme)} ${theme.bold(`${step.number}. ${step.title}`)}`);
       }
     }
-    if (hasOpenTasks()) {
-      lines.push(header("Todos", doneCount(items), items.length, theme));
-      lines.push(...items.map((item) => formatItem(item, theme)));
-    }
-    ctx.ui.setWidget("todo", lines.length > 0 ? lines : undefined);
+    ctx.ui.setWidget(ROADMAP_TOOL, lines.length > 0 ? lines : undefined);
   }
 
   function setFocus(ctx: ExtensionContext, name: string | undefined) {
@@ -807,94 +735,25 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function restoreTasks(ctx: ExtensionContext) {
-    items = [];
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "message") continue;
-      const msg = entry.message;
-      if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
-      if (isTodoDetails(msg.details) && !msg.details.error) items = msg.details.items;
-    }
-    updateWidget(ctx);
-  }
-
-  // The summary replaces earlier todo calls in the model's context, so it would lose the list.
-  // In roadmap modes the current plan is re-sent too, read from the board.
+  // The summary replaces earlier roadmap calls in the model's context, so the focused plan is
+  // re-sent, read from the board.
   pi.on("session_compact", (_event, ctx) => {
-    const reminders: string[] = [];
-    if (roadmapMode()) {
-      try {
-        const board = findBoard(ctx.cwd);
-        const plan = board.created ? undefined : currentPlan(board, undefined, focus);
-        if (plan?.steps.some((step) => !step.done))
-          reminders.push(`Roadmap plan from before compaction:\n${planText(board, plan)}`);
-      } catch {
-        // An unreadable board has nothing to re-send.
-      }
+    let reminder: string | undefined;
+    try {
+      const board = findBoard(ctx.cwd);
+      const plan = board.created ? undefined : currentPlan(board, undefined, focus);
+      if (plan?.steps.some((step) => !step.done))
+        reminder = `Roadmap plan from before compaction:\n${planText(board, plan)}`;
+    } catch {
+      // An unreadable board has nothing to re-send.
     }
-    if (hasOpenTasks()) reminders.push(modelText("Task list from before compaction", items));
-    if (reminders.length === 0) return;
+    if (!reminder) return;
     pi.sendMessage(
-      { customType: "todo-reminder", content: reminders.join("\n\n"), display: false },
+      { customType: "roadmap-reminder", content: reminder, display: false },
       // Mid-run compaction reaches the next model call; manual /compact the next prompt.
       { deliverAs: ctx.isIdle() ? "nextTurn" : "steer" },
     );
   });
-
-  pi.registerTool({
-    name: "todo",
-    label: "Todo",
-    description: TODO_DESCRIPTION,
-    parameters: TodoParams,
-
-    // biome-ignore lint/suspicious/useAwait: Pi's tool API requires a Promise.
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const next = params.items.map((item) => ({
-        text: item.text.trim(),
-        status: item.status,
-      }));
-      const active = next.filter((item) => item.status === "in_progress").length;
-      if (active > 1) {
-        const error = `${active} items are in_progress; keep at most one.`;
-        return {
-          content: [{ type: "text", text: `Error: ${error} The list was not changed.` }],
-          details: { items, error } satisfies TodoDetails,
-        };
-      }
-      items = next;
-      updateWidget(ctx);
-      return {
-        content: [{ type: "text", text: modelText("Task list updated", items) }],
-        details: { items } satisfies TodoDetails,
-      };
-    },
-
-    renderCall(args, theme, _context) {
-      const count = Array.isArray(args.items) ? args.items.length : 0;
-      const text =
-        theme.fg("toolTitle", theme.bold("todo ")) +
-        theme.fg("muted", count === 0 ? "clear" : `${count} items`);
-      return new Text(text, 0, 0);
-    },
-
-    renderResult(result, _options, theme, _context) {
-      const details = result.details;
-      if (!isTodoDetails(details)) {
-        const text = result.content[0];
-        return new Text(text?.type === "text" ? text.text : "", 0, 0);
-      }
-      if (details.error) return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
-      if (details.items.length === 0)
-        return new Text(theme.fg("dim", "Task list cleared"), 0, 0);
-      const lines = [
-        header("Todos", doneCount(details.items), details.items.length, theme),
-        ...details.items.map((item) => formatItem(item, theme)),
-      ];
-      return new Text(lines.join("\n"), 0, 0);
-    },
-  });
-
-  // Roadmap
 
   pi.registerTool({
     name: ROADMAP_TOOL,
@@ -963,7 +822,7 @@ export default function (pi: ExtensionAPI) {
     const mode = next.name ? modes.get(next.name) : undefined;
     if (mode && next.saved) {
       const tools = next.saved.tools.filter((tool) => !mode.excludeTools.includes(tool));
-      pi.setActiveTools(mode.roadmap ? [...tools, ROADMAP_TOOL] : tools);
+      pi.setActiveTools(tools);
       pi.setThinkingLevel(mode.thinkingLevel ?? next.saved.thinkingLevel);
     } else if (state.saved) {
       pi.setActiveTools(state.saved.tools);
@@ -996,30 +855,24 @@ export default function (pi: ExtensionAPI) {
     // A mode removed since it was recorded counts as free.
     if (isModeName(recorded.name) && recorded.saved) apply(ctx, recorded);
     else if (state.name) apply(ctx, {});
-    else {
-      // Outside roadmap modes the roadmap tool stays inactive.
-      pi.setActiveTools(pi.getActiveTools().filter((tool) => tool !== ROADMAP_TOOL));
-      updateStatus(ctx);
-    }
+    else updateStatus(ctx);
   }
 
   pi.on("session_start", (_event, ctx) => {
     if (errors.length > 0) ctx.ui.notify(`Modes: ${errors.join("; ")}`, "warning");
     restoreFocus(ctx);
     restoreMode(ctx);
-    restoreTasks(ctx);
   });
   pi.on("session_tree", (_event, ctx) => {
     restoreFocus(ctx);
     restoreMode(ctx);
-    restoreTasks(ctx);
   });
 
   pi.on("agent_settled", async (event, ctx) => {
     const mode = state.name ? modes.get(state.name) : undefined;
     updateWidget(ctx);
     if (!(mode?.next && mode.nextPrompt) || event.aborted || !ctx.hasUI) return;
-    if (!(mode.roadmap ? planWritten && hasOpenSteps(ctx) : hasOpenTasks())) return;
+    if (!(planWritten && hasOpenSteps(ctx))) return;
     const { next, nextPrompt } = mode;
     const accept = next === FREE ? `Yes, leave ${state.name} mode` : `Yes, switch to ${next}`;
     const choice = await ctx.ui.select(nextPrompt.replace(TRAILING_PERIOD, "?"), [

@@ -2,7 +2,6 @@
 description: Execute the roadmap plan, one commit per step
 order: 3
 color: warning
-roadmap: true
 auto-continue: true
 ---
 
@@ -10,7 +9,7 @@ auto-continue: true
 
 Exec mode is active: carry out the current plan on the project's roadmap board. Use the roadmap tool's show action to read it; the current plan is the first one in Active, otherwise the only one in Plans.
 - Work through the unticked steps in order, without stopping for approval between them. For each step:
-  1. Implement it; track its tasks with the todo tool when it has several.
+  1. Implement it.
   2. Move lasting content (behavior, contracts, decisions) into the documentation section that owns it.
   3. Run the project's checks for the change.
   4. Tick the step with the roadmap tool, then commit the step, its documentation, and the roadmap change together, following the project's commit conventions.

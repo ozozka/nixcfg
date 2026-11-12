@@ -4,7 +4,6 @@ order: 2
 color: accent
 thinking: high
 exclude-tools: edit, write
-roadmap: true
 next: exec
 next-prompt: Execute the plan.
 ---
