@@ -18,6 +18,10 @@
  * details, so branching keeps the list correct for that point in history. A widget above the
  * editor shows the list while items are open, and compaction re-sends open items to the model.
  * Derived from the Pi todo example.
+ *
+ * Roadmap: modes with `roadmap: true` get the `roadmap` tool, which writes plans to the project's
+ * roadmap board and ticks their steps (see roadmap.ts); the widget then shows the current plan
+ * above the session tasks, and `next` checks the plan's open steps instead of the tasks.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -32,6 +36,18 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+  type Board,
+  completePlan,
+  currentPlan,
+  findBoard,
+  type Plan,
+  planText,
+  projectRoot,
+  saveBoard,
+  tickStep,
+  writePlan,
+} from "./roadmap.ts";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
@@ -65,6 +81,8 @@ interface Mode {
   // Mode to offer when a run ends with open tasks, and the prompt sent after switching.
   next?: string;
   nextPrompt?: string;
+  // Enables the roadmap tool and tracks open work on the roadmap plan.
+  roadmap: boolean;
   instructions: string;
 }
 
@@ -77,6 +95,7 @@ type ModeFrontmatter = {
   "exclude-tools"?: unknown;
   next?: unknown;
   "next-prompt"?: unknown;
+  roadmap?: unknown;
 };
 
 function optionalString(value: unknown, key: string): string | undefined {
@@ -96,6 +115,7 @@ function parseMode(content: string): Mode {
     "exclude-tools": exclude,
     next,
     "next-prompt": nextPrompt,
+    roadmap = false,
     ...unknown
   } = frontmatter;
   const extra = Object.keys(unknown);
@@ -112,6 +132,7 @@ function parseMode(content: string): Mode {
   const list = typeof exclude === "string" ? exclude.split(",") : (exclude ?? []);
   if (!(Array.isArray(list) && list.every((t) => typeof t === "string")))
     throw new Error("exclude-tools must be a comma-separated string or a list");
+  if (typeof roadmap !== "boolean") throw new Error("roadmap must be true or false");
   if ((next === undefined) !== (nextPrompt === undefined))
     throw new Error("next and next-prompt go together");
   if (!body.trim()) throw new Error("the instructions (body) are empty");
@@ -123,6 +144,7 @@ function parseMode(content: string): Mode {
     excludeTools: list.map((t) => t.trim()).filter(Boolean),
     next: optionalString(next, "next"),
     nextPrompt: optionalString(nextPrompt, "next-prompt"),
+    roadmap,
     instructions: body.trim(),
   };
 }
@@ -233,6 +255,144 @@ function modelText(heading: string, items: TodoItem[]): string {
   return `${heading} (${summary(items)}):\n${lines.join("\n")}`;
 }
 
+// Roadmap
+
+const ROADMAP_TOOL = "roadmap";
+const ROADMAP_ACTIONS = ["show", "write", "tick", "complete"] as const;
+
+const RoadmapParams = Type.Object({
+  action: StringEnum(ROADMAP_ACTIONS),
+  plan: Type.Optional(
+    Type.String({
+      description:
+        "Plan name; write needs it, the others default to the active plan (or the only one in Plans)",
+    }),
+  ),
+  content: Type.Optional(
+    Type.String({
+      description: "write: the plan body in the plan format, without its heading",
+    }),
+  ),
+  step: Type.Optional(Type.Number({ description: "tick: the step number" })),
+  delivered: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "complete: one Completed line per delivered capability",
+    }),
+  ),
+});
+
+const ROADMAP_DESCRIPTION = `Manage plans on the project's roadmap board (docs/roadmap.md, README.md's Roadmap section, or a root todo.md that is created when there is no board).
+Actions:
+- show: the board's plans and the current plan's text.
+- write: add a plan to Plans, or replace an existing plan's body where it is.
+- tick: mark a step done; the plan moves from Plans to Active on its first tick.
+- complete: when all steps are ticked, replace the plan with Completed lines.
+Plan format (the body, without the heading): bullets only; bold groups \`- **Goal**:\`, \`- **Findings**:\`, \`- **Decisions**:\`, \`- **Specification**:\`, and \`- **Steps**:\`, leaving out empty ones; each step under Steps is \`  - [ ] **1. Title**: details\`, numbered from 1, one commit each.`;
+
+interface RoadmapDetails {
+  path?: string;
+  plan?: { name: string; section: string; steps: { title: string; done: boolean }[] };
+  error?: string;
+}
+
+function planSummary(plan: Plan): RoadmapDetails["plan"] {
+  return {
+    name: plan.name,
+    section: plan.section,
+    steps: plan.steps.map((step) => ({
+      title: `${step.number}. ${step.title}`,
+      done: step.done,
+    })),
+  };
+}
+
+function progress(plan: Plan): string {
+  return `${plan.steps.filter((step) => step.done).length}/${plan.steps.length}`;
+}
+
+function boardOverview(board: Board): string {
+  if (board.plans.length === 0) return "No plans on the board.";
+  return board.plans
+    .map((plan) => `- ${plan.name} (${plan.section}, ${progress(plan)} steps done)`)
+    .join("\n");
+}
+
+interface RoadmapInput {
+  action: string;
+  plan?: string;
+  content?: string;
+  step?: number;
+  delivered?: string[];
+}
+
+// Runs a roadmap action and returns the message for the model and the plan it concerns.
+function roadmapAction(
+  cwd: string,
+  params: {
+    action: string;
+    plan?: string;
+    content?: string;
+    step?: number;
+    delivered?: string[];
+  },
+): { text: string; board: Board; plan?: Plan } {
+  let board = findBoard(cwd);
+  const where = board.path.slice(projectRoot(cwd).length + 1);
+  const target = () => {
+    const plan = currentPlan(board, params.plan);
+    if (!plan)
+      throw new Error(
+        params.plan ? `no plan named "${params.plan}"` : "no active plan; name the plan",
+      );
+    return plan;
+  };
+  switch (params.action) {
+    case "show": {
+      const plan = currentPlan(board, params.plan);
+      const text = plan ? `\n\n${planText(board, plan)}` : "";
+      return { text: `Board in ${where}:\n${boardOverview(board)}${text}`, board, plan };
+    }
+    case "write": {
+      if (!(params.plan && params.content)) throw new Error("write needs plan and content");
+      board = writePlan(board, params.plan, params.content);
+      saveBoard(board);
+      const plan = currentPlan(board, params.plan) as Plan;
+      return {
+        text: `Plan "${plan.name}" written to ${plan.section} in ${where}.`,
+        board,
+        plan,
+      };
+    }
+    case "tick": {
+      if (params.step === undefined) throw new Error("tick needs step");
+      board = tickStep(board, target(), params.step);
+      saveBoard(board);
+      const plan = currentPlan(board, params.plan) as Plan;
+      const next = plan.steps.find((step) => !step.done);
+      const rest = next ? ` Next: ${next.number}. ${next.title}` : " All steps are done.";
+      return { text: `Step ${params.step} ticked (${progress(plan)}).${rest}`, board, plan };
+    }
+    case "complete": {
+      const plan = target();
+      board = completePlan(board, plan, params.delivered ?? []);
+      saveBoard(board);
+      return { text: `Plan "${plan.name}" completed in ${where}.`, board };
+    }
+    default:
+      throw new Error(`unknown action ${params.action}`);
+  }
+}
+
+// The plan the widget and the mode checks follow, or undefined without a readable board.
+function trackedPlan(cwd: string): Plan | undefined {
+  try {
+    const board = findBoard(cwd);
+    return board.created ? undefined : currentPlan(board);
+  } catch {
+    return undefined;
+  }
+}
+
 export default function (pi: ExtensionAPI) {
   const { modes, errors } = loadModes();
   let state: ModeState = {};
@@ -242,22 +402,37 @@ export default function (pi: ExtensionAPI) {
   const isModeName = (value: unknown): value is string =>
     typeof value === "string" && modes.has(value);
   const hasOpenTasks = () => items.some((item) => item.status !== "completed");
+  const currentMode = () => (state.name ? modes.get(state.name) : undefined);
+  const roadmapMode = () => currentMode()?.roadmap === true;
+  const hasOpenSteps = (ctx: ExtensionContext) =>
+    trackedPlan(ctx.cwd)?.steps.some((step) => !step.done) === true;
 
   // Task list
 
-  // Shown while work is open; a finished or empty list leaves the editor area clean.
+  // Shown while work is open: the roadmap plan in roadmap modes, then the session tasks.
   function updateWidget(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     const theme = ctx.ui.theme;
-    ctx.ui.setWidget(
-      "todo",
-      hasOpenTasks()
-        ? [
-            theme.fg("muted", `Todos ${summary(items)}`),
-            ...items.map((item) => formatItem(item, theme)),
-          ]
-        : undefined,
-    );
+    const lines: string[] = [];
+    const plan = roadmapMode() ? trackedPlan(ctx.cwd) : undefined;
+    if (plan?.steps.some((step) => !step.done)) {
+      const next = plan.steps.find((step) => !step.done);
+      lines.push(theme.fg("muted", `Plan ${plan.name} ${progress(plan)}`));
+      for (const step of plan.steps) {
+        const mark = step.done
+          ? theme.fg("success", "✓")
+          : step === next
+            ? theme.fg("accent", "▸")
+            : theme.fg("dim", "○");
+        const title = `${step.number}. ${step.title}`;
+        lines.push(`${mark} ${step.done ? theme.fg("dim", title) : title}`);
+      }
+    }
+    if (hasOpenTasks()) {
+      lines.push(theme.fg("muted", `Todos ${summary(items)}`));
+      lines.push(...items.map((item) => formatItem(item, theme)));
+    }
+    ctx.ui.setWidget("todo", lines.length > 0 ? lines : undefined);
   }
 
   function restoreTasks(ctx: ExtensionContext) {
@@ -338,6 +513,55 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // Roadmap
+
+  pi.registerTool({
+    name: ROADMAP_TOOL,
+    label: "Roadmap",
+    description: ROADMAP_DESCRIPTION,
+    parameters: RoadmapParams,
+
+    // biome-ignore lint/suspicious/useAwait: Pi's tool API requires a Promise.
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      try {
+        const result = roadmapAction(ctx.cwd, params as RoadmapInput);
+        updateWidget(ctx);
+        return {
+          content: [{ type: "text", text: result.text }],
+          details: {
+            path: result.board.path,
+            plan: result.plan && planSummary(result.plan),
+          } satisfies RoadmapDetails,
+        };
+      } catch (error) {
+        const message = (error as Error).message;
+        return {
+          content: [{ type: "text", text: `Error: ${message}. The board was not changed.` }],
+          details: { error: message } satisfies RoadmapDetails,
+          isError: true,
+        };
+      }
+    },
+
+    renderCall(args, theme, _context) {
+      const target =
+        args.action === "tick" ? `step ${args.step ?? "?"}` : (args.plan ?? "current plan");
+      return new Text(
+        theme.fg("toolTitle", theme.bold(`roadmap ${args.action} `)) +
+          theme.fg("muted", target),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result, _options, theme, _context) {
+      const details = result.details as RoadmapDetails | undefined;
+      if (details?.error) return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+      const text = result.content[0];
+      return new Text(theme.fg("muted", text?.type === "text" ? text.text : ""), 0, 0);
+    },
+  });
+
   // Modes
 
   function updateStatus(ctx: ExtensionContext) {
@@ -355,7 +579,8 @@ export default function (pi: ExtensionAPI) {
   function apply(ctx: ExtensionContext, next: ModeState) {
     const mode = next.name ? modes.get(next.name) : undefined;
     if (mode && next.saved) {
-      pi.setActiveTools(next.saved.tools.filter((tool) => !mode.excludeTools.includes(tool)));
+      const tools = next.saved.tools.filter((tool) => !mode.excludeTools.includes(tool));
+      pi.setActiveTools(mode.roadmap ? [...tools, ROADMAP_TOOL] : tools);
       pi.setThinkingLevel(mode.thinkingLevel ?? next.saved.thinkingLevel);
     } else if (state.saved) {
       pi.setActiveTools(state.saved.tools);
@@ -363,6 +588,7 @@ export default function (pi: ExtensionAPI) {
     }
     state = mode ? next : {};
     updateStatus(ctx);
+    updateWidget(ctx);
   }
 
   function switchTo(ctx: ExtensionContext, name: string | undefined) {
@@ -387,7 +613,11 @@ export default function (pi: ExtensionAPI) {
     // A mode removed since it was recorded counts as free.
     if (isModeName(recorded.name) && recorded.saved) apply(ctx, recorded);
     else if (state.name) apply(ctx, {});
-    else updateStatus(ctx);
+    else {
+      // Outside roadmap modes the roadmap tool stays inactive.
+      pi.setActiveTools(pi.getActiveTools().filter((tool) => tool !== ROADMAP_TOOL));
+      updateStatus(ctx);
+    }
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -402,8 +632,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("agent_settled", async (event, ctx) => {
     const mode = state.name ? modes.get(state.name) : undefined;
+    updateWidget(ctx);
     if (!(mode?.next && mode.nextPrompt) || event.aborted || !ctx.hasUI) return;
-    if (!hasOpenTasks()) return;
+    if (!(mode.roadmap ? hasOpenSteps(ctx) : hasOpenTasks())) return;
     const { next, nextPrompt } = mode;
     const accept = next === FREE ? `Yes, leave ${state.name} mode` : `Yes, switch to ${next}`;
     const choice = await ctx.ui.select(nextPrompt.replace(TRAILING_PERIOD, "?"), [
