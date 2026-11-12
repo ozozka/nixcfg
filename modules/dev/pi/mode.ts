@@ -30,7 +30,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Key, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import {
   assistantText,
   lastEntry,
@@ -152,23 +152,6 @@ interface Saved {
 interface ModeState {
   name?: string;
   saved?: Saved;
-}
-
-// Plan display
-
-type Status = "pending" | "in_progress" | "completed";
-
-// Checkboxes as markdown-ts-mode shows them in Emacs (my-modes.el, my-theme.el): a bold ✔ in
-// the primary color (success) and a bold ⬦ in the secondary color (warning); ◆, the filled ⬦,
-// marks the item in progress. The text keeps the normal foreground.
-function checkbox(status: Status, theme: Theme): string {
-  if (status === "completed") return theme.bold(theme.fg("success", "✔"));
-  return theme.bold(theme.fg("warning", status === "in_progress" ? "◆" : "⬦"));
-}
-
-// A list header like a Markdown heading: the title bold, its progress muted.
-function header(title: string, done: number, total: number, theme: Theme): string {
-  return `${theme.bold(title)} ${theme.fg("muted", `${done}/${total}`)}`;
 }
 
 // Roadmap board: finding, reading, and changing plans in Markdown. A board is six sibling
@@ -332,9 +315,11 @@ function saveBoard(board: Board) {
   writeFileSync(board.path, board.lines.join("\n"));
 }
 
-function reparse(board: Board, lines: string[]): Board {
+// Parses edited lines; a board that lost its sections (or, while sections are still being
+// added, its container) is an error, so nothing broken is written.
+function reparse(board: Board, lines: string[], complete = true): Board {
   const parsed = parseBoard(board.path, lines, board.created);
-  if (!(parsed && hasBoard(parsed)))
+  if (!(parsed && (!complete || hasBoard(parsed))))
     throw new Error("the board was lost while editing; nothing was written");
   return parsed;
 }
@@ -376,13 +361,7 @@ function ensureSections(board: Board): Board {
       .map((next) => sections.get(next))
       .find((range) => range !== undefined);
     const at = later ? later.start : contentEnd(current.lines, current.container);
-    const parsed = parseBoard(
-      current.path,
-      splice(current.lines, at, at, [heading]),
-      current.created,
-    );
-    if (!parsed) throw new Error("the board was lost while adding sections");
-    current = parsed;
+    current = reparse(current, splice(current.lines, at, at, [heading]), false);
   }
   return current;
 }
@@ -530,20 +509,7 @@ Actions:
 Plan format (the body, without the heading): bullets only; bold groups \`- **Goal**:\`, \`- **Findings**:\`, \`- **Decisions**:\`, \`- **Specification**:\`, and \`- **Steps**:\`, leaving out empty ones; each step under Steps is \`  - [ ] **1. Title**: details\`, numbered from 1, one commit each.`;
 
 interface RoadmapDetails {
-  path?: string;
-  plan?: { name: string; section: string; steps: { title: string; done: boolean }[] };
   error?: string;
-}
-
-function planSummary(plan: Plan): RoadmapDetails["plan"] {
-  return {
-    name: plan.name,
-    section: plan.section,
-    steps: plan.steps.map((step) => ({
-      title: `${step.number}. ${step.title}`,
-      done: step.done,
-    })),
-  };
 }
 
 function progress(plan: Plan): string {
@@ -557,28 +523,13 @@ function boardOverview(board: Board): string {
     .join("\n");
 }
 
-interface RoadmapInput {
-  action: string;
-  plan?: string;
-  content?: string;
-  idea?: string;
-  step?: number;
-  delivered?: string[];
-}
-
-// Runs a roadmap action and returns the message for the model, the plan it concerns, and the
-// session's focus afterwards (null clears it).
+// Runs a roadmap action and returns the message for the model, the session's focus afterwards
+// (null clears it), and a notice for the desktop.
 function roadmapAction(
   cwd: string,
-  params: RoadmapInput,
+  params: Static<typeof RoadmapParams>,
   focus: string | undefined,
-): {
-  text: string;
-  board: Board;
-  plan?: Plan;
-  focus?: string | null;
-  notice?: Notice;
-} {
+): { text: string; focus?: string | null; notice?: Notice } {
   let board = findBoard(cwd);
   // Changes complete the board's sections first.
   if (params.action !== "show") board = ensureSections(board);
@@ -595,13 +546,13 @@ function roadmapAction(
     case "show": {
       const plan = currentPlan(board, params.plan, focus);
       const text = plan ? `\n\nFocused plan:\n${planText(board, plan)}` : "";
-      return { text: `Board in ${where}:\n${boardOverview(board)}${text}`, board, plan };
+      return { text: `Board in ${where}:\n${boardOverview(board)}${text}` };
     }
     case "backlog": {
       if (!params.idea) throw new Error("backlog needs idea");
       board = addBacklog(board, params.idea);
       saveBoard(board);
-      return { text: `Added to Backlog in ${where}.`, board };
+      return { text: `Added to Backlog in ${where}.` };
     }
     case "write": {
       if (!(params.plan && params.content)) throw new Error("write needs plan and content");
@@ -610,8 +561,6 @@ function roadmapAction(
       const plan = currentPlan(board, params.plan) as Plan;
       return {
         text: `Plan "${plan.name}" written to ${plan.section} in ${where}, and focused.`,
-        board,
-        plan,
         focus: plan.name,
       };
     }
@@ -619,7 +568,7 @@ function roadmapAction(
       if (!params.plan) throw new Error("focus needs plan");
       const plan = target();
       const text = `Focused plan "${plan.name}" (${progress(plan)} steps done).`;
-      return { text, board, plan, focus: plan.name };
+      return { text, focus: plan.name };
     }
     case "tick": {
       if (params.step === undefined) throw new Error("tick needs step");
@@ -631,7 +580,7 @@ function roadmapAction(
       const title = plan.steps.find((step) => step.number === params.step)?.title ?? "";
       const text = `Step ${params.step} ticked (${progress(plan)}).${rest}`;
       const notice = { message: `Step ${params.step}/${plan.steps.length} done: ${title}` };
-      return { text, board, plan, notice };
+      return { text, notice };
     }
     case "complete": {
       const plan = target();
@@ -640,21 +589,40 @@ function roadmapAction(
       const cleared = focus?.toLowerCase() === plan.name.toLowerCase();
       const text = `Plan "${plan.name}" completed in ${where}.`;
       const notice = { message: `Plan "${plan.name}" completed`, final: true };
-      return { text, board, focus: cleared ? null : undefined, notice };
+      return { text, focus: cleared ? null : undefined, notice };
     }
     default:
       throw new Error(`unknown action ${params.action}`);
   }
 }
 
-// The plan the widget and the mode checks follow, or undefined without a readable board.
-function trackedPlan(cwd: string, focus: string | undefined): Plan | undefined {
+// The plan the widget and the mode checks follow, with its board; undefined without a plan on
+// a readable board.
+function trackedPlan(
+  cwd: string,
+  focus: string | undefined,
+): { board: Board; plan: Plan } | undefined {
   try {
     const board = findBoard(cwd);
-    return board.created ? undefined : currentPlan(board, undefined, focus);
+    const plan = board.created ? undefined : currentPlan(board, undefined, focus);
+    return plan && { board, plan };
   } catch {
     return undefined;
   }
+}
+
+// Asks the user to pick one of the labeled values; undefined when cancelled.
+async function pick<T>(
+  ctx: ExtensionContext,
+  title: string,
+  entries: [label: string, value: T][],
+): Promise<{ value: T } | undefined> {
+  const choice = await ctx.ui.select(
+    title,
+    entries.map(([label]) => label),
+  );
+  const entry = entries.find(([label]) => label === choice);
+  return entry && { value: entry[1] };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -671,23 +639,28 @@ export default function (pi: ExtensionAPI) {
 
   // Roadmap
 
-  // Shows the focused plan while it has open steps.
+  // Shows the focused plan while it has open steps: a header like a Markdown heading (the name
+  // bold, its progress muted) and checkboxes as markdown-ts-mode shows them in Emacs
+  // (my-modes.el, my-theme.el): a bold ✔ in the primary color (success), a bold ⬦ in the
+  // secondary color (warning), and ◆, the filled ⬦, for the next step.
   function updateWidget(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     const theme = ctx.ui.theme;
-    const lines: string[] = [];
-    const plan = trackedPlan(ctx.cwd, focus);
-    if (plan?.steps.some((step) => !step.done)) {
-      const next = plan.steps.find((step) => !step.done);
-      const done = plan.steps.filter((step) => step.done).length;
-      lines.push(header(plan.name, done, plan.steps.length, theme));
-      for (const step of plan.steps) {
-        const status = step.done ? "completed" : step === next ? "in_progress" : "pending";
-        // Bold like the step's `**1. Title**` in the roadmap file.
-        lines.push(`${checkbox(status, theme)} ${theme.bold(`${step.number}. ${step.title}`)}`);
-      }
-    }
-    ctx.ui.setWidget(ROADMAP_TOOL, lines.length > 0 ? lines : undefined, {
+    const plan = trackedPlan(ctx.cwd, focus)?.plan;
+    const next = plan?.steps.find((step) => !step.done);
+    const lines =
+      plan && next
+        ? [
+            `${theme.bold(plan.name)} ${theme.fg("muted", progress(plan))}`,
+            ...plan.steps.map((step) => {
+              const mark = step.done ? "✔" : step === next ? "◆" : "⬦";
+              const box = theme.bold(theme.fg(step.done ? "success" : "warning", mark));
+              // Bold like the step's `**1. Title**` in the roadmap file.
+              return `${box} ${theme.bold(`${step.number}. ${step.title}`)}`;
+            }),
+          ]
+        : undefined;
+    ctx.ui.setWidget(ROADMAP_TOOL, lines, {
       placement: "belowEditor",
     });
   }
@@ -708,16 +681,9 @@ export default function (pi: ExtensionAPI) {
   // The summary replaces earlier roadmap calls in the model's context, so the focused plan is
   // re-sent, read from the board.
   pi.on("session_compact", (_event, ctx) => {
-    let reminder: string | undefined;
-    try {
-      const board = findBoard(ctx.cwd);
-      const plan = board.created ? undefined : currentPlan(board, undefined, focus);
-      if (plan?.steps.some((step) => !step.done))
-        reminder = `Roadmap plan from before compaction:\n${planText(board, plan)}`;
-    } catch {
-      // An unreadable board has nothing to re-send.
-    }
-    if (!reminder) return;
+    const tracked = trackedPlan(ctx.cwd, focus);
+    if (!tracked?.plan.steps.some((step) => !step.done)) return;
+    const reminder = `Roadmap plan from before compaction:\n${planText(tracked.board, tracked.plan)}`;
     pi.sendMessage(
       { customType: "roadmap-reminder", content: reminder, display: false },
       // Mid-run compaction reaches the next model call; manual /compact the next prompt.
@@ -734,15 +700,12 @@ export default function (pi: ExtensionAPI) {
     // biome-ignore lint/suspicious/useAwait: Pi's tool API requires a Promise.
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
-        const result = roadmapAction(ctx.cwd, params as RoadmapInput, focus);
+        const result = roadmapAction(ctx.cwd, params, focus);
         if (result.focus !== undefined) setFocus(ctx, result.focus ?? undefined);
         if (result.notice) sendNotice(pi, result.notice);
         if (params.action === "write") planWritten = true;
         updateWidget(ctx);
-        return reply(result.text, {
-          path: result.board.path,
-          plan: result.plan && planSummary(result.plan),
-        } satisfies RoadmapDetails);
+        return reply(result.text, {} satisfies RoadmapDetails);
       } catch (error) {
         const message = (error as Error).message;
         return reply(
@@ -776,7 +739,7 @@ export default function (pi: ExtensionAPI) {
 
   // Sends the mode to status.ts, which starts its status line with it (segments sort by key).
   function updateStatus() {
-    const mode = state.name ? modes.get(state.name) : undefined;
+    const mode = currentMode();
     const name = state.name ?? FREE;
     const color = mode?.color ?? FREE_COLOR;
     sendStatus(pi, {
@@ -834,10 +797,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async (event, ctx) => {
-    const mode = state.name ? modes.get(state.name) : undefined;
+    const mode = currentMode();
     updateWidget(ctx);
     if (!(mode?.next && mode.nextPrompt) || event.aborted || !ctx.hasUI) return;
-    const plan = planWritten ? trackedPlan(ctx.cwd, focus) : undefined;
+    const plan = planWritten ? trackedPlan(ctx.cwd, focus)?.plan : undefined;
     if (!plan?.steps.some((step) => !step.done)) return;
     const { next } = mode;
     // `{plan}` in next-prompt names the plan, so the message and the focus agree.
@@ -860,16 +823,16 @@ export default function (pi: ExtensionAPI) {
   let continuations = 0;
   let finishRequested = false;
 
-  const snapshot = (cwd: string) => {
-    const plan = trackedPlan(cwd, focus);
-    return { plan: plan?.name, done: plan?.steps.filter((step) => step.done).length ?? 0 };
-  };
+  const snapshot = (plan: Plan | undefined) => ({
+    plan: plan?.name,
+    done: plan?.steps.filter((step) => step.done).length ?? 0,
+  });
 
   pi.on("agent_before_settle", (event, ctx) => {
     if (!currentMode()?.autoContinue || event.outcome !== "completed") return;
+    const plan = trackedPlan(ctx.cwd, focus)?.plan;
     const previous = baseline;
-    baseline = snapshot(ctx.cwd);
-    const plan = trackedPlan(ctx.cwd, focus);
+    baseline = snapshot(plan);
     if (!plan) return;
     const stop = (reason: string) => ctx.ui.notify(`Exec stopped: ${reason}`, "info");
 
@@ -914,10 +877,10 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", (event, ctx) => {
     planWritten = false;
-    baseline = snapshot(ctx.cwd);
+    baseline = snapshot(trackedPlan(ctx.cwd, focus)?.plan);
     continuations = 0;
     finishRequested = false;
-    const mode = state.name ? modes.get(state.name) : undefined;
+    const mode = currentMode();
     if (!mode) return;
     return { systemPrompt: `${event.systemPrompt}\n\n${mode.instructions}` };
   });
@@ -946,14 +909,16 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("No plans on the board", "info");
           return;
         }
-        const labels = new Map<string, string>(
-          board.plans.map(
-            (plan) => [`${plan.name} (${plan.section}, ${progress(plan)})`, plan.name] as const,
-          ),
+        const choice = await pick(
+          ctx,
+          "Focus plan",
+          board.plans.map((plan) => [
+            `${plan.name} (${plan.section}, ${progress(plan)})`,
+            plan.name,
+          ]),
         );
-        const choice = await ctx.ui.select("Focus plan", [...labels.keys()]);
-        if (choice === undefined) return;
-        name = labels.get(choice);
+        if (!choice) return;
+        name = choice.value;
       }
       setFocus(ctx, name);
       ctx.ui.notify(`Focus: ${name}`, "info");
@@ -973,12 +938,14 @@ export default function (pi: ExtensionAPI) {
       }
       if (!ctx.hasUI) return;
 
-      const labels = new Map<string, string | undefined>([
+      const choice = await pick<string | undefined>(ctx, "Mode", [
         [`${FREE}: normal settings`, undefined],
-        ...[...modes].map(([name, mode]) => [`${name}: ${mode.description}`, name] as const),
+        ...[...modes].map(([name, mode]): [string, string] => [
+          `${name}: ${mode.description}`,
+          name,
+        ]),
       ]);
-      const choice = await ctx.ui.select("Mode", [...labels.keys()]);
-      if (choice !== undefined) switchTo(ctx, labels.get(choice));
+      if (choice) switchTo(ctx, choice.value);
     },
   });
 
