@@ -10,7 +10,8 @@
  * without tools, it gets the default tools. Project-local agents are not loaded.
  *
  * Children run with PI_SUBAGENT set and do not get this tool, so delegation stays one level
- * deep. Vendored from the Pi subagent example.
+ * deep. While children run, their count is shown in the status line (status.ts). Vendored
+ * from the Pi subagent example.
  */
 
 import { spawn } from "node:child_process";
@@ -33,6 +34,8 @@ import { Type } from "typebox";
 const CHILD_ENV = "PI_SUBAGENT";
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
+// The status line (status.ts) takes the running count on this event bus channel.
+const STATUS_CHANNEL = "status";
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const PREVIOUS = /\{previous\}/g;
@@ -489,6 +492,18 @@ export default function (pi: ExtensionAPI) {
   if (process.env[CHILD_ENV]) return;
 
   const { agents, errors } = loadAgents();
+  // Children running now, across parallel tasks and concurrent tool calls.
+  let runningChildren = 0;
+  function sendRunning() {
+    const count = runningChildren;
+    pi.events.emit(STATUS_CHANNEL, {
+      key: "subagents",
+      render:
+        count > 0
+          ? (theme: Theme) => theme.fg("accent", `${count} ${count === 1 ? "agent" : "agents"}`)
+          : undefined,
+    });
+  }
   pi.on("session_start", (_event, ctx) => {
     if (errors.length > 0) ctx.ui.notify(`Subagents: ${errors.join("; ")}`, "warning");
   });
@@ -527,8 +542,10 @@ export default function (pi: ExtensionAPI) {
         step: number | undefined,
         update: OnUpdate | undefined,
         mode: SubagentDetails["mode"],
-      ) =>
-        runSingleAgent(
+      ) => {
+        runningChildren++;
+        sendRunning();
+        return runSingleAgent(
           ctx.cwd,
           defaults,
           agents,
@@ -538,7 +555,11 @@ export default function (pi: ExtensionAPI) {
           signal,
           update,
           makeDetails(mode),
-        );
+        ).finally(() => {
+          runningChildren--;
+          sendRunning();
+        });
+      };
 
       const hasChain = (params.chain?.length ?? 0) > 0;
       const hasTasks = (params.tasks?.length ?? 0) > 0;
