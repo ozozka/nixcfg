@@ -84,13 +84,11 @@ export default function (pi: ExtensionAPI) {
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []))
       .filter((message) => message.role === "assistant")
       .at(-1);
+    const labeled = (label: string, text: string) =>
+      firstLine(text) ? `${label}: ${firstLine(text)}` : label;
     if (last?.role !== "assistant") return "Done";
-    if (last.stopReason === "error") {
-      const error = firstLine(last.errorMessage ?? "");
-      return error ? `Failed: ${error}` : "Failed";
-    }
-    const summary = firstLine(assistantText(last));
-    return summary ? `Done: ${summary}` : "Done";
+    if (last.stopReason === "error") return labeled("Failed", last.errorMessage ?? "");
+    return labeled("Done", assistantText(last));
   }
 
   function notify(ctx: ExtensionContext, message: string) {
