@@ -74,5 +74,8 @@ in
   };
 
   # Commands have no managed location, so shared prompts are linked per user.
-  ozozka.home.profiles.claude.files.".claude".commands = agents.prompts;
+  # The workflow command is Claude-only; Pi has the spec and exec modes instead.
+  ozozka.home.profiles.claude.files.".claude".commands = agents.prompts // {
+    "workflow.md" = ./workflow.md;
+  };
 }
