@@ -12,7 +12,4 @@
   link to it elsewhere, and replace outdated text instead of appending. Implementation details
   belong in source comments next to the code.
 - Commit only when asked or when the active workflow says so, in focused, atomic commits.
-- Include a roadmap in commits only if it is in the project's README.md, under docs/, or the
-  file already exists in Git HEAD. Keep other root roadmap.md files local: do not stage them or
-  create commits solely for their updates.
 - Never write secrets into files, commits, or logs.

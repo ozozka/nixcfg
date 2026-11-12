@@ -40,6 +40,7 @@ in
         lib.genAttrs [
           "docs.ts"
           "mode.ts"
+          "roadmap.ts"
           "notify.ts"
           "question.ts"
           "status.ts"
