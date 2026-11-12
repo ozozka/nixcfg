@@ -15,22 +15,32 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   formatReadLineRange,
-  getAgentDir,
   getMarkdownTheme,
   parseFrontmatter,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { sendStatus } from "./lib/shared.ts";
+import {
+  assistantText,
+  formatTokens,
+  loadDefinitions,
+  optionalList,
+  optionalText,
+  optionalThinking,
+  rejectUnknown,
+  requiredText,
+  sendStatus,
+  type ThemeColor,
+  type ThinkingLevel,
+} from "./lib/shared.ts";
 
 const CHILD_ENV = "PI_SUBAGENT";
 const MAX_PARALLEL_TASKS = 8;
@@ -39,19 +49,6 @@ const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const PREVIOUS = /\{previous\}/g;
 const RUNTIME = /^(node|bun)(\.exe)?$/i;
-
-type ThemeColor = Parameters<Theme["fg"]>[0];
-type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
-
-const THINKING_LEVELS: readonly string[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
 
 interface Agent {
   description: string;
@@ -69,50 +66,18 @@ type AgentFrontmatter = {
   tools?: unknown;
 };
 
-// Validates one agent file; unknown keys are errors, so typos do not pass silently.
+// Validates one agent file.
 function parseAgent(content: string): Agent {
   const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(content);
   const { description, model, thinking, tools, ...unknown } = frontmatter;
-  const extra = Object.keys(unknown);
-  if (extra.length > 0) throw new Error(`unknown keys: ${extra.join(", ")}`);
-  if (typeof description !== "string" || !description.trim())
-    throw new Error("description is required");
-  if (model !== undefined && typeof model !== "string")
-    throw new Error("model must be a string");
-  if (thinking !== undefined && !THINKING_LEVELS.includes(String(thinking)))
-    throw new Error(`thinking must be one of: ${THINKING_LEVELS.join(", ")}`);
-  // Accepts both YAML spellings: `tools: read, bash` and `tools: [read, bash]`.
-  const list = typeof tools === "string" ? tools.split(",") : tools;
-  if (list !== undefined && !(Array.isArray(list) && list.every((t) => typeof t === "string")))
-    throw new Error("tools must be a comma-separated string or a list");
-  if (!body.trim()) throw new Error("the prompt (body) is empty");
+  rejectUnknown(unknown);
   return {
-    description: description.trim(),
-    model,
-    thinkingLevel: thinking as ThinkingLevel | undefined,
-    tools: list?.map((t) => t.trim()).filter(Boolean),
-    prompt: body.trim(),
+    description: requiredText(description, "description"),
+    model: optionalText(model, "model"),
+    thinkingLevel: optionalThinking(thinking),
+    tools: optionalList(tools, "tools"),
+    prompt: requiredText(body, "the prompt (body)"),
   };
-}
-
-function loadAgents(): { agents: Map<string, Agent>; errors: string[] } {
-  const dir = join(getAgentDir(), "agents");
-  const agents = new Map<string, Agent>();
-  const errors: string[] = [];
-  let files: string[] = [];
-  try {
-    files = readdirSync(dir).filter((file) => file.endsWith(".md"));
-  } catch {
-    errors.push(`no agents directory at ${dir}`);
-  }
-  for (const file of files.sort()) {
-    try {
-      agents.set(basename(file, ".md"), parseAgent(readFileSync(join(dir, file), "utf8")));
-    } catch (error) {
-      errors.push(`${file}: ${(error as Error).message}`);
-    }
-  }
-  return { agents, errors };
 }
 
 interface UsageStats {
@@ -165,13 +130,6 @@ function emptyUsage(): UsageStats {
     contextTokens: 0,
     turns: 0,
   };
-}
-
-function formatTokens(count: number): string {
-  if (count < 1000) return count.toString();
-  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1000000) return `${Math.round(count / 1000)}k`;
-  return `${(count / 1000000).toFixed(1)}M`;
 }
 
 function formatUsageStats(usage: Partial<UsageStats>, model?: string): string {
@@ -254,13 +212,11 @@ function formatToolCall(toolName: string, args: Record<string, unknown>, theme: 
   }
 }
 
+// The text of the latest assistant message that has any.
 function getFinalOutput(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "assistant") continue;
-    for (const part of msg.content) {
-      if (part.type === "text") return part.text;
-    }
+  for (const message of [...messages].reverse()) {
+    const text = message.role === "assistant" ? assistantText(message) : "";
+    if (text) return text;
   }
   return "";
 }
@@ -490,7 +446,7 @@ const REVIEW_PROMPT = `Use the subagent tool to have the reader agent review the
 export default function (pi: ExtensionAPI) {
   if (process.env[CHILD_ENV]) return;
 
-  const { agents, errors } = loadAgents();
+  const { definitions: agents, errors } = loadDefinitions("agents", parseAgent);
   // Children running now, across parallel tasks and concurrent tool calls.
   let runningChildren = 0;
   function sendRunning() {

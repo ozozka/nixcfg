@@ -1,34 +1,14 @@
-import { existsSync } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { lastEntry, projectRoot } from "./lib/shared.ts";
 
 const ENTRY_TYPE = "project-docs-setting";
 type ContextFile = { path: string; content: string };
 
-function projectRoot(cwd: string): string {
-  const start = resolve(cwd);
-  for (let directory = start; ; directory = dirname(directory)) {
-    // Supports both repositories and worktrees (.git can be a file).
-    if (existsSync(join(directory, ".git"))) return directory;
-    if (dirname(directory) === directory) return start;
-  }
-}
-
 function restoreSetting(ctx: ExtensionContext): boolean {
-  let enabled = true;
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (
-      entry.type === "custom" &&
-      entry.customType === ENTRY_TYPE &&
-      typeof entry.data === "object" &&
-      entry.data !== null &&
-      "enabled" in entry.data &&
-      typeof entry.data.enabled === "boolean"
-    )
-      enabled = entry.data.enabled;
-  }
-  return enabled;
+  const enabled = lastEntry<{ enabled?: unknown }>(ctx, ENTRY_TYPE)?.enabled;
+  return typeof enabled === "boolean" ? enabled : true;
 }
 
 async function loadDocs(cwd: string, ctx: ExtensionContext): Promise<ContextFile[]> {

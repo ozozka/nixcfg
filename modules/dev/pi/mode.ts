@@ -20,33 +20,35 @@
  * steps and compaction re-sends to the model. Derived from the Pi todo example.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
-  getAgentDir,
   parseFrontmatter,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { type Notice, sendNotice, sendStatus } from "./lib/shared.ts";
-
-type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+import {
+  assistantText,
+  lastEntry,
+  loadDefinitions,
+  type Notice,
+  optionalList,
+  optionalText,
+  optionalThinking,
+  projectRoot,
+  rejectUnknown,
+  reply,
+  requiredText,
+  sendNotice,
+  sendStatus,
+  type ThinkingLevel,
+} from "./lib/shared.ts";
 
 // Modes
-
-const THINKING_LEVELS: readonly string[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
 
 const MODE_ENTRY = "mode";
 // The default mode: no mode file, the normal settings.
@@ -87,14 +89,9 @@ type ModeFrontmatter = {
   "auto-continue"?: unknown;
 };
 
-function optionalString(value: unknown, key: string): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be a string`);
-  return value.trim();
-}
-
-// Validates one mode file; unknown keys are errors, so typos do not pass silently.
-function parseMode(content: string): Mode {
+// Validates one mode file.
+function parseMode(content: string, name: string): Mode {
+  if (name === FREE) throw new Error(`"${FREE}" is the default mode`);
   const { frontmatter, body } = parseFrontmatter<ModeFrontmatter>(content);
   const {
     description,
@@ -107,56 +104,29 @@ function parseMode(content: string): Mode {
     "auto-continue": autoContinue = false,
     ...unknown
   } = frontmatter;
-  const extra = Object.keys(unknown);
-  if (extra.length > 0) throw new Error(`unknown keys: ${extra.join(", ")}`);
-  if (typeof description !== "string" || !description.trim())
-    throw new Error("description is required");
+  rejectUnknown(unknown);
   if (order !== undefined && typeof order !== "number")
     throw new Error("order must be a number");
   if (!COLORS.includes(color as Color))
     throw new Error(`color must be one of: ${COLORS.join(", ")}`);
-  if (thinking !== undefined && !THINKING_LEVELS.includes(String(thinking)))
-    throw new Error(`thinking must be one of: ${THINKING_LEVELS.join(", ")}`);
-  // Accepts both YAML spellings: `exclude-tools: edit, write` and `[edit, write]`.
-  const list = typeof exclude === "string" ? exclude.split(",") : (exclude ?? []);
-  if (!(Array.isArray(list) && list.every((t) => typeof t === "string")))
-    throw new Error("exclude-tools must be a comma-separated string or a list");
   if (typeof autoContinue !== "boolean") throw new Error("auto-continue must be true or false");
   if ((next === undefined) !== (nextPrompt === undefined))
     throw new Error("next and next-prompt go together");
-  if (!body.trim()) throw new Error("the instructions (body) are empty");
   return {
-    description: description.trim(),
+    description: requiredText(description, "description"),
     order,
     color: color as Color,
-    thinkingLevel: thinking as ThinkingLevel | undefined,
-    excludeTools: list.map((t) => t.trim()).filter(Boolean),
-    next: optionalString(next, "next"),
-    nextPrompt: optionalString(nextPrompt, "next-prompt"),
+    thinkingLevel: optionalThinking(thinking),
+    excludeTools: optionalList(exclude, "exclude-tools") ?? [],
+    next: optionalText(next, "next"),
+    nextPrompt: optionalText(nextPrompt, "next-prompt"),
     autoContinue,
-    instructions: body.trim(),
+    instructions: requiredText(body, "the instructions (body)"),
   };
 }
 
 function loadModes(): { modes: Map<string, Mode>; errors: string[] } {
-  const dir = join(getAgentDir(), "modes");
-  const modes = new Map<string, Mode>();
-  const errors: string[] = [];
-  let files: string[] = [];
-  try {
-    files = readdirSync(dir).filter((file) => file.endsWith(".md"));
-  } catch {
-    errors.push(`no modes directory at ${dir}`);
-  }
-  for (const file of files) {
-    try {
-      const name = basename(file, ".md");
-      if (name === FREE) throw new Error(`"${FREE}" is the default mode`);
-      modes.set(name, parseMode(readFileSync(join(dir, file), "utf8")));
-    } catch (error) {
-      errors.push(`${file}: ${(error as Error).message}`);
-    }
-  }
+  const { definitions: modes, errors } = loadDefinitions("modes", parseMode);
   for (const [name, mode] of modes) {
     if (mode.next && mode.next !== FREE && !modes.has(mode.next)) {
       errors.push(`${name}.md: next mode "${mode.next}" does not exist`);
@@ -339,15 +309,6 @@ function parseBoard(path: string, lines: string[], created = false): Board | und
     }
   }
   return { path, created, lines, container: range, level, sections, plans };
-}
-
-// The project root: the nearest directory with .git (a directory or a worktree file).
-function projectRoot(cwd: string): string {
-  const start = resolve(cwd);
-  for (let directory = start; ; directory = dirname(directory)) {
-    if (existsSync(join(directory, ".git"))) return directory;
-    if (dirname(directory) === directory) return start;
-  }
 }
 
 const hasBoard = (board: Board) => REQUIRED.every((name) => board.sections.has(name));
@@ -739,12 +700,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   function restoreFocus(ctx: ExtensionContext) {
-    focus = undefined;
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "custom" || entry.customType !== FOCUS_ENTRY) continue;
-      const plan = (entry.data as { plan?: unknown } | undefined)?.plan;
-      focus = typeof plan === "string" ? plan : undefined;
-    }
+    const plan = lastEntry<{ plan?: unknown }>(ctx, FOCUS_ENTRY)?.plan;
+    focus = typeof plan === "string" ? plan : undefined;
     updateWidget(ctx);
   }
 
@@ -782,20 +739,17 @@ export default function (pi: ExtensionAPI) {
         if (result.notice) sendNotice(pi, result.notice);
         if (params.action === "write") planWritten = true;
         updateWidget(ctx);
-        return {
-          content: [{ type: "text", text: result.text }],
-          details: {
-            path: result.board.path,
-            plan: result.plan && planSummary(result.plan),
-          } satisfies RoadmapDetails,
-        };
+        return reply(result.text, {
+          path: result.board.path,
+          plan: result.plan && planSummary(result.plan),
+        } satisfies RoadmapDetails);
       } catch (error) {
         const message = (error as Error).message;
-        return {
-          content: [{ type: "text", text: `Error: ${message}. The board was not changed.` }],
-          details: { error: message } satisfies RoadmapDetails,
-          isError: true,
-        };
+        return reply(
+          `Error: ${message}. The board was not changed.`,
+          { error: message } satisfies RoadmapDetails,
+          true,
+        );
       }
     },
 
@@ -862,12 +816,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function restoreMode(ctx: ExtensionContext) {
-    let recorded: ModeState = {};
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type === "custom" && entry.customType === MODE_ENTRY) {
-        recorded = entry.data as ModeState;
-      }
-    }
+    const recorded = lastEntry<ModeState>(ctx, MODE_ENTRY) ?? {};
     // A mode removed since it was recorded counts as free.
     if (isModeName(recorded.name) && recorded.saved) apply(ctx, recorded);
     else if (state.name) apply(ctx, {});
@@ -925,10 +874,7 @@ export default function (pi: ExtensionAPI) {
     const stop = (reason: string) => ctx.ui.notify(`Exec stopped: ${reason}`, "info");
 
     const last = event.context.llmMessages.filter((entry) => entry.role === "assistant").at(-1);
-    const text =
-      last?.role === "assistant"
-        ? last.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")
-        : "";
+    const text = last?.role === "assistant" ? assistantText(last) : "";
     // A stop the user should see on the card; a run that ticks nothing usually asks something,
     // which notify.ts's "Done" summary already shows.
     const alert = (notice: string) => sendNotice(pi, { message: notice, final: true });

@@ -12,7 +12,7 @@
 
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { onNotice } from "./lib/shared.ts";
+import { assistantText, onNotice } from "./lib/shared.ts";
 
 const NOTIFICATION_ID = /^u (\d+)/;
 // Longest summary shown after "Done: " or "Failed: ".
@@ -89,10 +89,7 @@ export default function (pi: ExtensionAPI) {
       const error = firstLine(last.errorMessage ?? "");
       return error ? `Failed: ${error}` : "Failed";
     }
-    const text = last.content
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
-      .join("\n");
-    const summary = firstLine(text);
+    const summary = firstLine(assistantText(last));
     return summary ? `Done: ${summary}` : "Done";
   }
 

@@ -16,6 +16,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { reply } from "./lib/shared.ts";
 
 // Types
 interface QuestionOption {
@@ -78,14 +79,8 @@ const QuestionParams = Type.Object({
   questions: Type.Array(QuestionSchema, { description: "Questions to ask the user" }),
 });
 
-function errorResult(
-  message: string,
-  questions: Question[] = [],
-): { content: { type: "text"; text: string }[]; details: QuestionResult } {
-  return {
-    content: [{ type: "text", text: message }],
-    details: { questions, answers: [], cancelled: true },
-  };
+function errorResult(message: string) {
+  return reply<QuestionResult>(message, { questions: [], answers: [], cancelled: true });
 }
 
 export default function (pi: ExtensionAPI) {
@@ -409,10 +404,7 @@ export default function (pi: ExtensionAPI) {
       });
 
       if (result.cancelled) {
-        return {
-          content: [{ type: "text", text: "User cancelled the questions" }],
-          details: result,
-        };
+        return reply("User cancelled the questions", result);
       }
 
       const answerLines = result.answers.map((a) => {
@@ -423,10 +415,7 @@ export default function (pi: ExtensionAPI) {
         return `${qLabel}: user selected: ${a.index}. ${a.label}`;
       });
 
-      return {
-        content: [{ type: "text", text: answerLines.join("\n") }],
-        details: result,
-      };
+      return reply(answerLines.join("\n"), result);
     },
 
     renderCall(args, theme, _context) {

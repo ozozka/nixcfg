@@ -23,13 +23,12 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { onStatus, type ThemeColor } from "./lib/shared.ts";
+import { formatTokens, onStatus, type ThemeColor } from "./lib/shared.ts";
 
 // Without a segment's color, the working spinner uses this one.
 const SPINNER_COLOR = "accent";
 const CODEX_PROVIDER = "openai-codex";
 const STALE_AFTER_MS = 10 * 60 * 1000;
-const TRAILING_ZERO = /\.0$/;
 // Context use above these percentages turns warning, then error, like Pi's footer.
 const CONTEXT_WARNING = 70;
 const CONTEXT_ERROR = 90;
@@ -190,13 +189,6 @@ class StatusEditor extends CustomEditor {
     this.place = place;
     this.tui.requestRender();
   }
-}
-
-function formatTokens(count: number): string {
-  if (count < 1000) return String(count);
-  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
-  return `${(count / 1_000_000).toFixed(1).replace(TRAILING_ZERO, "")}M`;
 }
 
 function formatWindowLabel(windowMinutes: number): string {
