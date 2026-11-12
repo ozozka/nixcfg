@@ -263,13 +263,14 @@ function modelText(heading: string, items: TodoItem[]): string {
   return `${heading} (${summary(items)}):\n${lines.join("\n")}`;
 }
 
-// Roadmap board: finding, reading, and changing plans in Markdown. A board is a set of
-// sibling headings named Backlog (optional), Plans, Active, and Completed, searched in
-// docs/roadmap.md, the Roadmap section of README.md, and a root todo.md; a missing todo.md is
-// created on the first save. Plans are headings one level below their section, and their steps
-// are `- [ ] **1. Title**` lines (ticked with `[x]`). Only these parts are parsed; edits touch
-// only the plan lines and the blank lines next to them. Changes return a new Board; nothing is
-// written until `saveBoard`.
+// Roadmap board: finding, reading, and changing plans in Markdown. A board is six sibling
+// headings: Status, Limitations, Backlog, Plans, Active, and Completed. It is docs/roadmap.md or
+// the Roadmap section of README.md when they already have Plans, Active, and Completed;
+// otherwise a root roadmap.md, created on the first save. Changes add missing sections in
+// order. Plans are headings one level below their section, and their steps are
+// `- [ ] **1. Title**` lines (ticked with `[x]`). Only Backlog, Plans, Active, and Completed are
+// parsed; edits touch only their lines and the blank lines next to them. Changes return a new
+// Board; nothing is written until `saveBoard`.
 
 interface Step {
   number: number;
@@ -279,7 +280,7 @@ interface Step {
   line: number;
 }
 
-type SectionName = "Backlog" | "Plans" | "Active" | "Completed";
+type SectionName = "Status" | "Limitations" | "Backlog" | "Plans" | "Active" | "Completed";
 
 interface Plan {
   name: string;
@@ -300,7 +301,8 @@ interface Board {
   // The file does not exist yet; saveBoard creates it.
   created: boolean;
   lines: string[];
-  // Heading level of the board sections.
+  // The part of the file that holds the board, and the heading level of its sections.
+  container: Range;
   level: number;
   sections: Map<SectionName, Range>;
   plans: Plan[];
@@ -321,9 +323,18 @@ const TRAILING_SPACE = /\s+$/;
 // A lone "- No plans recorded." style line in an otherwise empty section.
 const PLACEHOLDER = /^- (No|None)\b/;
 const BULLET = /^- /;
-const SECTION_NAMES: readonly string[] = ["Backlog", "Plans", "Active", "Completed"];
+const SECTION_NAMES: readonly SectionName[] = [
+  "Status",
+  "Limitations",
+  "Backlog",
+  "Plans",
+  "Active",
+  "Completed",
+];
+// The sections that make an existing document a board.
 const REQUIRED: SectionName[] = ["Plans", "Active", "Completed"];
-const TODO_TEMPLATE = "# Todo\n\n## Backlog\n\n## Plans\n\n## Active\n\n## Completed\n";
+const ROADMAP_FILE = "roadmap.md";
+const ROADMAP_TEMPLATE = `# Roadmap\n\n${SECTION_NAMES.map((name) => `## ${name}`).join("\n\n")}\n`;
 
 function headings(lines: string[]): Heading[] {
   const found: Heading[] = [];
@@ -353,26 +364,29 @@ function container(path: string, lines: string[], all: Heading[]): Range | undef
   return roadmap && { start: roadmap.line, end: sectionEnd(all, roadmap, lines.length) };
 }
 
-// Parses the board in a file's lines, or returns undefined without one.
+// Parses the board sections in a file's lines; some may be missing. Undefined for a README
+// without a Roadmap section.
 function parseBoard(path: string, lines: string[], created = false): Board | undefined {
   const all = headings(lines);
   const range = container(path, lines, all);
   if (!range) return undefined;
-  const named = all.filter(
-    (h) => h.line > range.start && h.line < range.end && SECTION_NAMES.includes(h.text),
-  );
-  if (named.length === 0) return undefined;
-  const level = Math.min(...named.map((h) => h.level));
+  const inside = all.filter((h) => h.line > range.start && h.line < range.end);
+  const named = inside.filter((h) => SECTION_NAMES.includes(h.text as SectionName));
+  // Without sections yet: one level below the README's Roadmap heading or the file's title.
+  const parent = isReadme(path) ? all.find((h) => h.line === range.start) : all[0];
+  const level =
+    named.length > 0 ? Math.min(...named.map((h) => h.level)) : (parent?.level ?? 1) + 1;
   const sections = new Map<SectionName, Range>();
   for (const heading of named.filter((h) => h.level === level)) {
     const end = sectionEnd(all, heading, range.end);
     sections.set(heading.text as SectionName, { start: heading.line, end });
   }
-  if (!REQUIRED.every((name) => sections.has(name))) return undefined;
 
   const plans: Plan[] = [];
   for (const section of ["Plans", "Active"] as const) {
-    const { start, end } = sections.get(section) as Range;
+    const sectionRange = sections.get(section);
+    if (!sectionRange) continue;
+    const { start, end } = sectionRange;
     for (const heading of all) {
       if (heading.line <= start || heading.line >= end || heading.level !== level + 1) continue;
       const planEnd = sectionEnd(all, heading, end);
@@ -386,7 +400,7 @@ function parseBoard(path: string, lines: string[], created = false): Board | und
       plans.push({ name: heading.text, section, start: heading.line, end: planEnd, steps });
     }
   }
-  return { path, created, lines, level, sections, plans };
+  return { path, created, lines, container: range, level, sections, plans };
 }
 
 // The project root: the nearest directory with .git (a directory or a worktree file).
@@ -398,20 +412,21 @@ function projectRoot(cwd: string): string {
   }
 }
 
-// Finds the board, or a new todo.md board to create. Throws when todo.md exists without one.
+const hasBoard = (board: Board) => REQUIRED.every((name) => board.sections.has(name));
+
+// Finds the board: an existing one in docs/roadmap.md or README.md, else the root roadmap.md,
+// which may not exist yet or may still miss sections (ensureSections adds them).
 function findBoard(cwd: string): Board {
   const root = projectRoot(cwd);
-  const todo = join(root, "todo.md");
-  for (const path of [join(root, "docs", "roadmap.md"), join(root, "README.md"), todo]) {
+  for (const path of [join(root, "docs", "roadmap.md"), join(root, "README.md")]) {
     if (!existsSync(path)) continue;
     const board = parseBoard(path, readFileSync(path, "utf8").split("\n"));
-    if (board) return board;
+    if (board && hasBoard(board)) return board;
   }
-  if (existsSync(todo))
-    throw new Error(
-      "todo.md exists without a board (Plans, Active, and Completed sections); add them to it or a board to the roadmap",
-    );
-  return parseBoard(todo, TODO_TEMPLATE.split("\n"), true) as Board;
+  const path = join(root, ROADMAP_FILE);
+  if (existsSync(path))
+    return parseBoard(path, readFileSync(path, "utf8").split("\n")) as Board;
+  return parseBoard(path, ROADMAP_TEMPLATE.split("\n"), true) as Board;
 }
 
 function saveBoard(board: Board) {
@@ -420,7 +435,8 @@ function saveBoard(board: Board) {
 
 function reparse(board: Board, lines: string[]): Board {
   const parsed = parseBoard(board.path, lines, board.created);
-  if (!parsed) throw new Error("the board was lost while editing; nothing was written");
+  if (!(parsed && hasBoard(parsed)))
+    throw new Error("the board was lost while editing; nothing was written");
   return parsed;
 }
 
@@ -448,6 +464,28 @@ function appendToSection(lines: string[], range: Range, block: string[]): string
   const body = lines.slice(range.start + 1, end).filter((line) => line.trim() !== "");
   const lonePlaceholder = body.length === 1 && PLACEHOLDER.test(body[0]);
   return splice(lines, lonePlaceholder ? range.start + 1 : end, end, block);
+}
+
+// Adds missing sections in their order: before the next existing one, else after the board.
+function ensureSections(board: Board): Board {
+  let current = board;
+  for (const [index, name] of SECTION_NAMES.entries()) {
+    if (current.sections.has(name)) continue;
+    const heading = `${"#".repeat(current.level)} ${name}`;
+    const { sections } = current;
+    const later = SECTION_NAMES.slice(index + 1)
+      .map((next) => sections.get(next))
+      .find((range) => range !== undefined);
+    const at = later ? later.start : contentEnd(current.lines, current.container);
+    const parsed = parseBoard(
+      current.path,
+      splice(current.lines, at, at, [heading]),
+      current.created,
+    );
+    if (!parsed) throw new Error("the board was lost while adding sections");
+    current = parsed;
+  }
+  return current;
 }
 
 function findPlan(board: Board, name: string): Plan | undefined {
@@ -569,7 +607,7 @@ const RoadmapParams = Type.Object({
   ),
 });
 
-const ROADMAP_DESCRIPTION = `Manage plans on the project's roadmap board (docs/roadmap.md, README.md's Roadmap section, or a root todo.md that is created when there is no board).
+const ROADMAP_DESCRIPTION = `Manage plans on the project's roadmap board: docs/roadmap.md or README.md's Roadmap section when they have one, otherwise a root roadmap.md (created on the first change). The board has six sections: Status and Limitations (free text, edited like other documentation), Backlog, Plans, Active, and Completed.
 Actions:
 - show: the board's plans and the current plan's text.
 - write: add a plan to Plans, or replace an existing plan's body where it is.
@@ -616,15 +654,11 @@ interface RoadmapInput {
 // Runs a roadmap action and returns the message for the model and the plan it concerns.
 function roadmapAction(
   cwd: string,
-  params: {
-    action: string;
-    plan?: string;
-    content?: string;
-    step?: number;
-    delivered?: string[];
-  },
+  params: RoadmapInput,
 ): { text: string; board: Board; plan?: Plan } {
   let board = findBoard(cwd);
+  // Changes complete the board's sections first.
+  if (params.action !== "show") board = ensureSections(board);
   const where = board.path.slice(projectRoot(cwd).length + 1);
   const target = () => {
     const plan = currentPlan(board, params.plan);
