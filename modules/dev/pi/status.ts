@@ -118,7 +118,10 @@ function saveUsage(windows: UsageWindow[]) {
   }
 }
 
-// A border line `── left ──── marker ── right ──`, any part optional. The scroll marker always
+// The editor borders' line character.
+const LINE = "━";
+
+// A border line `━━ left ━━━━ marker ━━ right ━━`, any part optional. The scroll marker always
 // fits; the left text keeps its room before the right one, and both are cut to fit.
 function borderLine(
   width: number,
@@ -127,16 +130,18 @@ function borderLine(
   marker: string,
   right: string,
 ): string {
-  const markerText = marker ? ` ${marker} ──` : "";
-  // At least one "─" of fill, the closing "──", and the spaces around each text.
+  const markerText = marker ? ` ${marker} ${LINE}${LINE}` : "";
+  // At least one line character of fill, the closing two, and the spaces around each text.
   let room = width - 1 - 2 - visibleWidth(markerText) - (left ? 4 : 0) - (right ? 2 : 0);
   const leftText = left && room > 0 ? truncateToWidth(left, room) : "";
   room -= visibleWidth(leftText);
   const rightText = right && room > 0 ? truncateToWidth(right, room) : "";
-  const start = leftText ? `${border("── ")}${leftText}${border(" ")}` : "";
-  const end = rightText ? `${border(" ")}${rightText}${border(" ──")}` : border("──");
+  const start = leftText ? `${border(`${LINE}${LINE} `)}${leftText}${border(" ")}` : "";
+  const end = rightText
+    ? `${border(" ")}${rightText}${border(` ${LINE}${LINE}`)}`
+    : border(LINE + LINE);
   const fill = width - visibleWidth(start) - visibleWidth(markerText) - visibleWidth(end);
-  return start + border("─".repeat(Math.max(1, fill)) + markerText) + end;
+  return start + border(LINE.repeat(Math.max(1, fill)) + markerText) + end;
 }
 
 type WorkingIndicator = Parameters<CustomEditor["setWorkingStatusIndicator"]>[0];
@@ -158,14 +163,14 @@ class StatusEditor extends CustomEditor {
 
   protected override renderTopBorder(width: number, hiddenLineCount: number): string {
     const marker = hiddenLineCount > 0 ? `↑ ${hiddenLineCount} more` : "";
-    if (width < 8) return super.renderTopBorder(width, hiddenLineCount);
+    if (width < 8) return this.borderColor(LINE.repeat(width));
     const working = this.working?.renderInBorder(width) ?? "";
     return borderLine(width, this.borderColor, working, marker, this.place);
   }
 
   protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
     const marker = hiddenLineCount > 0 ? `↓ ${hiddenLineCount} more` : "";
-    if (width < 8) return super.renderBottomBorder(width, hiddenLineCount);
+    if (width < 8) return this.borderColor(LINE.repeat(width));
     return borderLine(width, this.borderColor, this.status, marker, this.details);
   }
 
