@@ -2,7 +2,7 @@
 description: Read-only exploration and discussion
 order: 1
 color: muted
-thinking: high
+thinking: medium
 exclude-tools: edit, write
 next: free
 next-prompt: Implement the plan "{plan}".

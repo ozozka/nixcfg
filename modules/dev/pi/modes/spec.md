@@ -2,7 +2,7 @@
 description: Write an executable plan for exec mode, read-only
 order: 2
 color: accent
-thinking: high
+thinking: medium
 exclude-tools: edit, write
 next: exec
 next-prompt: Execute the plan "{plan}".
