@@ -1,11 +1,11 @@
 /**
  * Roadmap tool: plans on a Markdown board, the project's own when it has a compatible one,
- * otherwise a private board in .git. Shows the focused plan's progress below the editor,
+ * otherwise a private board in .roadmap/. Shows the focused plan's progress below the editor,
  * sends notices for ticked steps and completed plans, and reminds the agent of the focused
  * plan after compaction.
  */
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
@@ -306,31 +306,20 @@ export function planText(board: Board, plan: Plan): string {
   return board.lines.slice(plan.start, contentEnd(board.lines, plan)).join("\n");
 }
 
-// Storage: the project's compatible board, otherwise a private board in the repository's
-// common git directory (shared by its worktrees, never tracked). Reads never create files.
+// Storage: the project's compatible board, otherwise a private board in .roadmap/, a folder
+// that ignores itself through its own .gitignore. Reads never create files.
 
 export interface Location {
   board: Board;
-  // How results name the board, e.g. docs/roadmap.md or .git/roadmap.md.
+  // How results name the board, e.g. docs/roadmap.md or .roadmap/roadmap.md.
   label: string;
   // File content before the action; undefined when the file does not exist yet.
   original?: string;
 }
 
-const GITDIR = /^gitdir:\s*(.+)$/m;
-
-// The git directory shared by all worktrees, or undefined outside a repository.
-function gitCommonDir(root: string): string | undefined {
-  const dotGit = join(root, ".git");
-  if (!existsSync(dotGit)) return undefined;
-  if (statSync(dotGit).isDirectory()) return dotGit;
-  // A worktree: .git names its own git directory, whose commondir file names the shared one.
-  const match = GITDIR.exec(readFileSync(dotGit, "utf8"));
-  if (!match) return undefined;
-  const gitDir = resolve(root, match[1].trim());
-  const common = join(gitDir, "commondir");
-  return existsSync(common) ? resolve(gitDir, readFileSync(common, "utf8").trim()) : gitDir;
-}
+// Not .git/: Claude Code, which shares the board through workflow.md, treats files there as
+// sensitive and asks before every write, whatever its allow rules say.
+const PRIVATE_DIR = ".roadmap";
 
 export function projectBoard(root: string): Board | undefined {
   for (const name of ["docs/roadmap.md", "README.md"]) {
@@ -350,9 +339,10 @@ export function locate(root: string): Location {
       label: relative(root, project.path),
       original: project.lines.join("\n"),
     };
-  const gitDir = gitCommonDir(root);
-  if (!gitDir) return { board: newBoard(""), label: "no board (not a git repository)" };
-  const path = join(gitDir, "roadmap.md");
+  // Outside a repository the folder could be any directory, such as home; store nothing there.
+  if (!existsSync(join(root, ".git")))
+    return { board: newBoard(""), label: "no board (not a git repository)" };
+  const path = join(root, PRIVATE_DIR, "roadmap.md");
   const label = relative(root, path);
   if (!existsSync(path)) return { board: newBoard(path), label };
   const original = readFileSync(path, "utf8");
@@ -368,6 +358,11 @@ export function save(location: Location, board: Board): void {
   const current = existsSync(board.path) ? readFileSync(board.path, "utf8") : undefined;
   if (current !== location.original)
     throw new Error("the board changed during this action; retry");
+  if (current === undefined) {
+    mkdirSync(dirname(board.path), { recursive: true });
+    const ignore = join(dirname(board.path), ".gitignore");
+    if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
+  }
   writeFileSync(board.path, board.lines.join("\n"));
 }
 
@@ -377,7 +372,7 @@ export function save(location: Location, board: Board): void {
 const ENTRY = "roadmap-focus";
 const DESCRIPTION = `Manage plans with show, backlog (idea), write (plan and content), focus (plan), tick (step), and complete (delivered summaries).
 
-Use an existing board with Status, Limitations, Backlog, Plans, Active, and Completed in docs/roadmap.md or README.md's Roadmap section; otherwise use the private .git/roadmap.md, created on the first change. Never create or repair project files.
+Use an existing board with Status, Limitations, Backlog, Plans, Active, and Completed in docs/roadmap.md or README.md's Roadmap section; otherwise use the private .roadmap/roadmap.md, created on the first change in a folder git ignores. Never create or repair project files.
 
 Plan content is bullets with a \`- **Steps**:\` group and consecutive checkbox steps: \`  - [ ] **1. Title**: details\`. Other bullet groups are optional. Ticking starts a plan; completing requires all steps ticked.`;
 const Params = Type.Object({

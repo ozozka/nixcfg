@@ -10,12 +10,12 @@ board directly. The project's board is `docs/roadmap.md` or the Roadmap section 
 when it already has these six sibling sections in order: Status, Limitations, Backlog, Plans,
 Active, Completed. Prefer the docs file when both qualify.
 
-Otherwise use the private board `roadmap.md` in the repository's common git directory
-(`git rev-parse --git-common-dir`), creating it with a `# Roadmap` heading and the six `##`
-sections when missing. Never create or restructure project documents for a board. A plan is a
-`###` heading in Plans, moving to Active when its first step is ticked; a completed plan is
-replaced by one line per delivered capability in Completed. Keep lasting knowledge in its owning
-documentation, not in completed plans.
+Otherwise use the private board `.roadmap/roadmap.md` at the repository root. When it is
+missing, create it with a `# Roadmap` heading and the six `##` sections, plus
+`.roadmap/.gitignore` containing `*` so git ignores the folder. Never create or restructure
+project documents for a board. A plan is a `###` heading in Plans, moving to Active when its
+first step is ticked; a completed plan is replaced by one line per delivered capability in
+Completed. Keep lasting knowledge in its owning documentation, not in completed plans.
 
 ## Spec: write an executable plan
 
@@ -47,4 +47,4 @@ contradicts the plan.
 
 After all steps, review the changes against the plan and documentation ownership, fix and verify
 any issues, and record one Completed line per delivered capability. Include project board
-completion updates in a commit; the private board in the git directory is never committed.
+completion updates in a commit; the private board is never committed.
