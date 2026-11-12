@@ -21,7 +21,7 @@ import {
   type ReadonlyFooterDataProvider,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const STATUS_CHANNEL = "status";
 const CODEX_PROVIDER = "openai-codex";
@@ -155,6 +155,8 @@ class StatusEditor extends CustomEditor {
   place = "";
   // Pi's working status, which the base class keeps private.
   working: WorkingIndicator;
+  // Colors the working spinner; Pi would draw it in the border color.
+  spinnerColor = (text: string) => text;
 
   override setWorkingStatusIndicator(indicator: WorkingIndicator) {
     this.working = indicator;
@@ -164,7 +166,11 @@ class StatusEditor extends CustomEditor {
   protected override renderTopBorder(width: number, hiddenLineCount: number): string {
     const marker = hiddenLineCount > 0 ? `↑ ${hiddenLineCount} more` : "";
     if (width < 8) return this.borderColor(LINE.repeat(width));
-    const working = this.working?.renderInBorder(width) ?? "";
+    // While working, only the spinner shows; retry and compaction keep their text and colors.
+    const working =
+      this.working?.kind === "working"
+        ? this.spinnerColor(stripTerminalSequences(this.working.renderSpinnerInBorder(width)))
+        : (this.working?.renderInBorder(width) ?? "");
     return borderLine(width, this.borderColor, working, marker, this.place);
   }
 
@@ -357,6 +363,7 @@ export default function (pi: ExtensionAPI) {
     // Pi restores its own editor between sessions, so each session sets this one again.
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       editor = new StatusEditor(tui, theme, keybindings, { embedWorkingStatus: true });
+      editor.spinnerColor = (text) => ctx.ui.theme.fg("accent", text);
       return editor;
     });
     // The borders show what Pi's footer did, so the footer draws nothing; it stays to receive
