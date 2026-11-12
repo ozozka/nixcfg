@@ -1,8 +1,18 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  getAgentDir,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "session-metrics";
 const CODEX_PROVIDER = "openai-codex";
 const STALE_AFTER_MS = 10 * 60 * 1000;
+// Codex quotas belong to the account, not the session, so the latest snapshot is kept here for
+// the next session; the stale rule above marks it until a response refreshes it.
+const USAGE_FILE = join(getAgentDir(), "codex-usage.json");
 
 type UsageWindow = {
   usedPercent: number;
@@ -52,6 +62,39 @@ function readWindow(
 function record(value: unknown): Record<string, unknown> | undefined {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
+  }
+}
+
+function loadUsage(): UsageWindow[] {
+  try {
+    const windows: unknown = JSON.parse(readFileSync(USAGE_FILE, "utf8"));
+    if (!Array.isArray(windows)) return [];
+    return windows.flatMap((value) => {
+      const window = record(value);
+      const observedAt = readNumber(window?.observedAt);
+      if (!window || observedAt === undefined) return [];
+      const valid = readWindow(
+        window.usedPercent,
+        window.windowMinutes,
+        window.resetAt,
+        observedAt,
+      );
+      return valid ? [valid] : [];
+    });
+  } catch {
+    // A missing or unreadable file only means no snapshot yet.
+    return [];
+  }
+}
+
+function saveUsage(windows: UsageWindow[]) {
+  try {
+    // Write then rename, so concurrent sessions never read a partial file.
+    const temporary = `${USAGE_FILE}.${process.pid}`;
+    writeFileSync(temporary, JSON.stringify(windows));
+    renameSync(temporary, USAGE_FILE);
+  } catch {
+    // The snapshot is a convenience; the status line works without it.
   }
 }
 
@@ -127,9 +170,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   function saveWindows(windows: Array<UsageWindow | undefined>) {
-    for (const window of windows) {
-      if (window) usage.set(window.windowMinutes, window);
-    }
+    const received = windows.filter((window) => window !== undefined);
+    for (const window of received) usage.set(window.windowMinutes, window);
+    if (received.length > 0) saveUsage([...usage.values()]);
     updateStatus();
   }
 
@@ -159,6 +202,7 @@ export default function (pi: ExtensionAPI) {
     if (ctx.mode !== "tui") return;
     context = ctx;
     selectedProvider = ctx.model?.provider;
+    for (const window of loadUsage()) usage.set(window.windowMinutes, window);
     updateStatus();
     // Local display updates only: no quota queries or other network requests.
     // While idle the work clock stays frozen; reset countdowns can still change.
