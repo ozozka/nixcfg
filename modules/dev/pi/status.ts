@@ -202,8 +202,8 @@ export default function (pi: ExtensionAPI) {
       ...[...segments.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([, render]) => render(theme)),
-      parts.join(theme.fg("muted", " * ")),
-    ].join(" ");
+      ...parts,
+    ].join(theme.fg("muted", " * "));
     editor?.setStatus(status);
   }
 
