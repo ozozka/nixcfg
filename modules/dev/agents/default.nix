@@ -19,18 +19,16 @@ in
       description = "Global instructions shared by every agent.";
     };
 
+    workflow = mkOption {
+      type = types.path;
+      default = ./workflow.md;
+      description = "Personal workflow instructions, loaded only by the workflow wrappers.";
+    };
+
     modes = mkOption {
       type = types.attrsOf types.lines;
-      default =
-        let
-          roadmap = "\n" + builtins.readFile ./modes/roadmap.md;
-        in
-        {
-          plan = builtins.readFile ./modes/plan.md;
-          spec = builtins.readFile ./modes/spec.md + roadmap;
-          exec = builtins.readFile ./modes/exec.md + roadmap;
-        };
-      description = "Explicitly selected workflow instructions shared by modes and output styles.";
+      default.plan = builtins.readFile ./modes/plan.md;
+      description = "Mode instructions by name.";
     };
 
     tools = mkOption {

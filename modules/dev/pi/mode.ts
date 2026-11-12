@@ -26,7 +26,7 @@ import {
 const MODE_ENTRY = "mode";
 // The default mode: no mode file, the normal settings.
 const FREE = "free";
-const FREE_COLOR = "text";
+const FREE_COLOR = "warning";
 // Theme colors a mode can use in the status line.
 const COLORS = ["text", "muted", "dim", "accent", "success", "warning", "error"] as const;
 type Color = (typeof COLORS)[number];

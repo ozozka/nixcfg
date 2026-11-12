@@ -1,11 +1,6 @@
 self:
 
-{
-  config,
-  lib,
-  pkgs,
-  ...
-}:
+{ config, pkgs, ... }:
 
 let
   agents = config.ozozka.mod.dev.agents;
@@ -68,7 +63,11 @@ in
   nixpkgs.config.allowUnfreePackages = [ "claude-code" ];
 
   environment = {
-    systemPackages = with pkgs; [ claude-code ];
+    systemPackages = [
+      pkgs.claude-code
+      # Claude Code with the personal workflow appended to its system prompt.
+      (pkgs.writeShellScriptBin "wclaude" ''exec ${pkgs.claude-code}/bin/claude --append-system-prompt "$(< ${agents.workflow})" "$@"'')
+    ];
 
     # Shared agent instructions and skills use Claude Code's managed (system-wide) locations.
     etc = {
@@ -78,23 +77,5 @@ in
     };
   };
 
-  # Native user-selected styles share their instruction bodies with Pi modes.
-  ozozka.home.profiles.claude.files.".claude" = {
-    commands = agents.prompts;
-    "output-styles" = lib.mapAttrs' (
-      name: body:
-      lib.nameValuePair "${name}.md" (
-        pkgs.writeText "${name}.md" (
-          "---\n"
-          + builtins.toJSON {
-            inherit name;
-            description = lib.removePrefix "# " (lib.head (lib.splitString "\n" body));
-            keep-coding-instructions = true;
-          }
-          + "\n---\n\n"
-          + body
-        )
-      )
-    ) agents.modes;
-  };
+  ozozka.home.profiles.claude.files.".claude".commands = agents.prompts;
 }

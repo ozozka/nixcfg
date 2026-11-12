@@ -13,26 +13,12 @@ let
   settingsFormat = pkgs.formats.json { };
   modeSettings = {
     plan = {
-      order = 1;
-      color = "muted";
-      thinking = "medium";
-      exclude-tools = [
-        "edit"
-        "write"
-      ];
-    };
-    spec = {
-      order = 2;
       color = "accent";
       thinking = "medium";
       exclude-tools = [
         "edit"
         "write"
       ];
-    };
-    exec = {
-      order = 3;
-      color = "warning";
     };
   };
   modes = lib.mapAttrs' (
@@ -63,7 +49,11 @@ in
     options
   ];
 
-  environment.systemPackages = with pkgs; [ pi-coding-agent ];
+  environment.systemPackages = [
+    pkgs.pi-coding-agent
+    # Pi with the personal workflow appended to its system prompt.
+    (pkgs.writeShellScriptBin "wpi" ''exec ${pkgs.pi-coding-agent}/bin/pi --append-system-prompt ${agents.workflow} "$@"'')
+  ];
 
   ozozka.home.profiles.pi.files = {
     ".pi/agent" = {
