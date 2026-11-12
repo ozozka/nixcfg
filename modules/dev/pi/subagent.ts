@@ -1,8 +1,7 @@
 /**
  * Subagent tool: delegates tasks to agents, each in its own `pi` process with an isolated
  * context window. Modes: single ({ agent, task }), parallel ({ tasks }), and chain ({ chain },
- * where {previous} is replaced by the prior step's output). /review asks the main agent for a
- * read-only review by a subagent.
+ * where {previous} is replaced by the prior step's output).
  *
  * Agents are Markdown files in agents/ under Pi's agent directory, loaded at startup: the
  * file name is the agent name, the frontmatter its settings, and the body is appended to its
@@ -401,9 +400,6 @@ const SubagentParams = Type.Object({
   chain: Type.Optional(Type.Array(ChainItem, { description: "Steps to run in sequence" })),
 });
 
-// The checklist travels with the request, so any read-only agent can review.
-const REVIEW_PROMPT = `Use the subagent tool to have the reader agent review the current uncommitted changes (git status and git diff HEAD, including untracked files). Give it this checklist: correctness, security, and maintainability; the changes against the focused roadmap plan, if there is one (missing work, unplanned work, contradicted decisions); and the documentation changes (a fact stated in two places, content in a document that does not own it, implementation details that belong in source comments, outdated text left next to its replacement). Report its findings by severity with file paths and line numbers, and do not fix anything until I ask.`;
-
 export default function (pi: ExtensionAPI) {
   if (process.env[CHILD_ENV]) return;
 
@@ -424,20 +420,11 @@ export default function (pi: ExtensionAPI) {
     if (errors.length > 0) ctx.ui.notify(`Subagents: ${errors.join("; ")}`, "warning");
   });
 
-  pi.registerCommand("review", {
-    description: "Review the current changes with a read-only subagent: /review [focus]",
-    handler: async (args, ctx) => {
-      await ctx.waitForIdle();
-      const focus = args.trim();
-      pi.sendUserMessage(focus ? `${REVIEW_PROMPT}\n\nFocus: ${focus}` : REVIEW_PROMPT);
-    },
-  });
-
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
     description: [
-      "Delegate tasks to specialized subagents, each with an isolated context. The subagent sees only the task, so include the context it needs.",
+      "Run tasks in subagents with isolated contexts. Each subagent receives its task, not the parent conversation.",
       "Modes: single (agent + task), parallel (tasks array), chain (sequential, with {previous} replaced by the prior step's output).",
       "Agents:",
       ...[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`),

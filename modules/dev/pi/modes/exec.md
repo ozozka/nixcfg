@@ -15,6 +15,6 @@ Exec mode is active: carry out the focused plan on the project's roadmap board. 
   4. Tick the step with the roadmap tool, then make one focused commit with exactly the step's changes, its documentation, and the tick, and nothing else, following the project's commit conventions.
 - Never tick a step whose checks fail. When a step is blocked (a check keeps failing, a decision is missing, or a finding contradicts a decision of the plan), stop and start your final message with "Blocked:" and the reason.
 - When all steps are ticked, finish the plan:
-  1. Have a read-only subagent review the plan's changes against the plan and the documentation placement; fix and commit what it finds.
+  1. Review the plan's changes against the plan and the documentation placement; fix and commit any issues.
   2. Check that the plan's lasting content is in the documentation.
   3. Complete the plan with the roadmap tool, one Completed line per delivered capability, and commit the roadmap.
