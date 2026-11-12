@@ -836,6 +836,8 @@ export default function (pi: ExtensionAPI) {
     pi.events.emit(STATUS_CHANNEL, {
       key: MODE_ENTRY,
       render: (theme: Theme) => theme.bold(theme.fg(color, name)),
+      // The working spinner takes the mode color too.
+      spinner: color,
     });
   }
 

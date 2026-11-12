@@ -1,7 +1,8 @@
 /**
  * The status line, drawn on the left of the editor's bottom border (Pi draws its working status
  * in the top border): segments other extensions send on the "status" event bus channel as
- * { key, render? } (render: (theme) => string; none removes the segment), ordered by key, then
+ * { key, render?, spinner? } (render: (theme) => string, none removes the segment; spinner: a
+ * theme color for the working spinner, accent when no segment sets one), ordered by key, then
  * the session's work clock and Codex quota.
  * Context use and the model with its thinking level are on the right of the same border, and
  * the folder, git branch, and session name on the right of the top border, after Pi's working
@@ -24,6 +25,8 @@ import {
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const STATUS_CHANNEL = "status";
+// Without a segment's color, the working spinner uses this one.
+const SPINNER_COLOR = "accent";
 const CODEX_PROVIDER = "openai-codex";
 const STALE_AFTER_MS = 10 * 60 * 1000;
 const TRAILING_ZERO = /\.0$/;
@@ -33,6 +36,8 @@ const CONTEXT_ERROR = 90;
 // Codex quotas belong to the account, not the session, so the latest snapshot is kept here for
 // the next session; the stale rule above marks it until a response refreshes it.
 const USAGE_FILE = join(getAgentDir(), "codex-usage.json");
+
+type ThemeColor = Parameters<Theme["fg"]>[0];
 
 type UsageWindow = {
   usedPercent: number;
@@ -239,6 +244,8 @@ export default function (pi: ExtensionAPI) {
   const usage = new Map<number, UsageWindow>();
   // Segments from other extensions by key; kept across sessions, since they resend on change.
   const segments = new Map<string, (theme: Theme) => string>();
+  // Spinner colors segments ask for, by key; the first by key wins.
+  const spinnerColors = new Map<string, ThemeColor>();
 
   function updateStatus() {
     if (!context) return;
@@ -347,10 +354,17 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.events.on(STATUS_CHANNEL, (data) => {
-    const { key, render } = (data ?? {}) as { key?: unknown; render?: unknown };
+    const { key, render, spinner } = (data ?? {}) as {
+      key?: unknown;
+      render?: unknown;
+      spinner?: unknown;
+    };
     if (typeof key !== "string") return;
     if (typeof render === "function") segments.set(key, render as (theme: Theme) => string);
     else segments.delete(key);
+    if (typeof render === "function" && typeof spinner === "string")
+      spinnerColors.set(key, spinner as ThemeColor);
+    else spinnerColors.delete(key);
     updateStatus();
   });
 
@@ -363,7 +377,10 @@ export default function (pi: ExtensionAPI) {
     // Pi restores its own editor between sessions, so each session sets this one again.
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       editor = new StatusEditor(tui, theme, keybindings, { embedWorkingStatus: true });
-      editor.spinnerColor = (text) => ctx.ui.theme.fg("accent", text);
+      editor.spinnerColor = (text) => {
+        const [first] = [...spinnerColors.entries()].sort(([a], [b]) => a.localeCompare(b));
+        return ctx.ui.theme.fg(first?.[1] ?? SPINNER_COLOR, text);
+      };
       return editor;
     });
     // The borders show what Pi's footer did, so the footer draws nothing; it stays to receive
