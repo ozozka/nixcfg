@@ -4,8 +4,6 @@ order: 2
 color: accent
 thinking: medium
 exclude-tools: edit, write
-next: exec
-next-prompt: Execute the plan "{plan}".
 ---
 
 ## Spec mode

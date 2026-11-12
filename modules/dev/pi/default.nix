@@ -17,7 +17,6 @@ let
     root = ./.;
     fileset = lib.fileset.fileFilter (file: file.hasExt "ts" || file.hasExt "md") ./.;
   };
-  prompts = lib.mapAttrs (name: _: ./prompts + "/${name}") (builtins.readDir ./prompts);
 in
 {
   imports = with self.nixosModules; [
@@ -31,12 +30,7 @@ in
     ".pi/agent" = {
       # Shared agent assets: a global context file, prompt templates, and skills.
       "AGENTS.md" = agents.instructions;
-      inherit (agents) skills;
-      "prompts" =
-        assert lib.assertMsg (
-          lib.intersectAttrs agents.prompts prompts == { }
-        ) "Pi-specific prompt names must not conflict with shared prompts.";
-        agents.prompts // prompts;
+      inherit (agents) prompts skills;
       # Mode definitions for mode.ts.
       "modes" = ./modes;
       # Subagent definitions for subagent.ts.
@@ -57,7 +51,6 @@ in
         // {
           # Shared code; Pi skips folders without an index file.
           "lib" = "${extensions}/lib";
-          "prompts" = "${extensions}/prompts";
         };
 
       "settings.json" = settingsFormat.generate "settings.json" {

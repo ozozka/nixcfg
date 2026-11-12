@@ -2,7 +2,6 @@
 description: Execute the focused roadmap plan, one commit per step
 order: 3
 color: warning
-auto-continue: true
 ---
 
 ## Exec mode

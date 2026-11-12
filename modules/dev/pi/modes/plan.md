@@ -4,8 +4,6 @@ order: 1
 color: muted
 thinking: medium
 exclude-tools: edit, write
-next: free
-next-prompt: Implement the plan "{plan}".
 ---
 
 ## Plan mode

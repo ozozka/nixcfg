@@ -1,23 +1,6 @@
 /**
- * Named modes and the roadmap.
- *
- * Modes: each sets the thinking level, removes tools, and appends instructions to the system
- * prompt. The default mode, free, is the normal settings. Entering a mode saves the current
- * tools and thinking level; leaving restores them. The mode starts the status line
- * (status.ts) in bold, in its color; Shift+Tab cycles the modes by their order.
- *
- * Modes are Markdown files in modes/ under Pi's agent directory, loaded at startup: the file
- * name is the mode name, the frontmatter its settings (including `order` and the status
- * `color`), and the body its instructions. A mode with `next` asks, when a run wrote a plan
- * that still has open steps, whether to switch to that mode and send `next-prompt`, where
- * `{plan}` stands for the plan's name. The mode state is recorded in the session on every
- * switch and restored from the current branch, so resuming or navigating with /tree brings
- * back the matching mode. Derived from the Pi preset example.
- *
- * Roadmap: the only place for task organization, in every mode. The `roadmap` tool writes plans
- * to the project's roadmap board and ticks their steps (see Roadmap board below). Each session
- * focuses one plan (`/roadmap`), which the widget below the editor shows while it has open
- * steps and compaction re-sends to the model. Derived from the Pi todo example.
+ * Explicit named modes and roadmap tools. Modes set tools/thinking and contribute
+ * instructions; they never start or continue a run. Roadmap ownership is split out below.
  */
 
 import { execFileSync } from "node:child_process";
@@ -33,13 +16,11 @@ import {
 import { Key, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
-  assistantText,
   lastEntry,
   loadDefinitions,
   loadMarkdown,
   type Notice,
   optionalList,
-  optionalText,
   optionalThinking,
   projectRoot,
   rejectUnknown,
@@ -59,11 +40,6 @@ const FREE_COLOR = "text";
 // Theme colors a mode can use in the status line.
 const COLORS = ["text", "muted", "dim", "accent", "success", "warning", "error"] as const;
 type Color = (typeof COLORS)[number];
-const TRAILING_PERIOD = /\.$/;
-const PLAN_PLACEHOLDER = "{plan}";
-const BLOCKED = /^\s*Blocked:/;
-// Upper bound on automatic continuations per prompt.
-const AUTO_CONTINUE_LIMIT = 50;
 
 interface Mode {
   description: string;
@@ -71,11 +47,6 @@ interface Mode {
   color: Color;
   thinkingLevel?: ThinkingLevel;
   excludeTools: string[];
-  // Mode to offer when a run ends with open tasks, and the prompt sent after switching.
-  next?: string;
-  nextPrompt?: string;
-  // Continues the run while the roadmap plan makes progress (see agent_before_settle).
-  autoContinue: boolean;
   instructions: string;
 }
 
@@ -86,9 +57,6 @@ type ModeFrontmatter = {
   color?: unknown;
   thinking?: unknown;
   "exclude-tools"?: unknown;
-  next?: unknown;
-  "next-prompt"?: unknown;
-  "auto-continue"?: unknown;
 };
 
 // Validates one mode file.
@@ -101,9 +69,6 @@ function parseMode(content: string, name: string): Mode {
     color = "text",
     thinking,
     "exclude-tools": exclude,
-    next,
-    "next-prompt": nextPrompt,
-    "auto-continue": autoContinue = false,
     ...unknown
   } = frontmatter;
   rejectUnknown(unknown);
@@ -111,31 +76,18 @@ function parseMode(content: string, name: string): Mode {
     throw new Error("order must be a number");
   if (!COLORS.includes(color as Color))
     throw new Error(`color must be one of: ${COLORS.join(", ")}`);
-  if (typeof autoContinue !== "boolean") throw new Error("auto-continue must be true or false");
-  if ((next === undefined) !== (nextPrompt === undefined))
-    throw new Error("next and next-prompt go together");
   return {
     description: requiredText(description, "description"),
     order,
     color: color as Color,
     thinkingLevel: optionalThinking(thinking),
     excludeTools: optionalList(exclude, "exclude-tools") ?? [],
-    next: optionalText(next, "next"),
-    nextPrompt: optionalText(nextPrompt, "next-prompt"),
-    autoContinue,
     instructions: requiredText(body, "the instructions (body)"),
   };
 }
 
 function loadModes(): { modes: Map<string, Mode>; errors: string[] } {
   const { definitions: modes, errors } = loadDefinitions("modes", parseMode);
-  for (const [name, mode] of modes) {
-    if (mode.next && mode.next !== FREE && !modes.has(mode.next)) {
-      errors.push(`${name}.md: next mode "${mode.next}" does not exist`);
-      mode.next = undefined;
-      mode.nextPrompt = undefined;
-    }
-  }
   // Cycle order: by `order`, then by name.
   const sorted = [...modes].sort(
     ([a, x], [b, y]) =>
@@ -488,15 +440,6 @@ const roadmapText = loadMarkdown(new URL("./roadmap.md", import.meta.url), [
 ]);
 const help = roadmapText.fields;
 
-// These zero-argument templates are also native /commands. Reading their bodies here
-// keeps rendering independent of delivery: continuation must not start a new user turn.
-const continuePrompt = loadMarkdown(new URL("./prompts/continue-plan.md", import.meta.url), [
-  "description",
-]).body;
-const finishPrompt = loadMarkdown(new URL("./prompts/finish-plan.md", import.meta.url), [
-  "description",
-]).body;
-
 const RoadmapParams = Type.Object({
   action: StringEnum(ROADMAP_ACTIONS),
   plan: Type.Optional(Type.String({ description: help.plan })),
@@ -653,8 +596,6 @@ async function pick<T>(
 export default function (pi: ExtensionAPI) {
   const { modes, errors } = loadModes();
   let state: ModeState = {};
-  // A plan was written in the current run; modes offer `next` only then.
-  let planWritten = false;
   // The roadmap plan this session works on, recorded in the session (see setFocus).
   let focus: string | undefined;
 
@@ -728,7 +669,6 @@ export default function (pi: ExtensionAPI) {
         const result = roadmapAction(ctx.cwd, params, focus);
         if (result.focus !== undefined) setFocus(ctx, result.focus ?? undefined);
         if (result.notice) sendNotice(pi, result.notice);
-        if (params.action === "write") planWritten = true;
         updateWidget(ctx);
         const status = result.board.commitEligible ? "commit-eligible" : "local-only";
         return reply(`Board: ${result.board.path} (${status}).\n${result.text}`, {
@@ -824,93 +764,9 @@ export default function (pi: ExtensionAPI) {
     restoreMode(ctx);
   });
 
-  pi.on("agent_settled", async (event, ctx) => {
+  pi.on("before_agent_start", (event) => {
     const mode = currentMode();
-    updateWidget(ctx);
-    if (!(mode?.next && mode.nextPrompt) || event.aborted || !ctx.hasUI) return;
-    const plan = planWritten ? trackedPlan(ctx.cwd, focus)?.plan : undefined;
-    if (!plan?.steps.some((step) => !step.done)) return;
-    const { next } = mode;
-    // `{plan}` in next-prompt names the plan, so the message and the focus agree.
-    const nextPrompt = mode.nextPrompt.replaceAll(PLAN_PLACEHOLDER, plan.name);
-    const accept = next === FREE ? `Yes, leave ${state.name} mode` : `Yes, switch to ${next}`;
-    const choice = await ctx.ui.select(nextPrompt.replace(TRAILING_PERIOD, "?"), [
-      accept,
-      `Keep ${state.name} mode`,
-    ]);
-    if (choice !== accept) return;
-    switchTo(ctx, next === FREE ? undefined : next);
-    pi.sendUserMessage(nextPrompt);
-  });
-
-  // Auto-continue: a prompt's run keeps going while each part of it ticks a step, so a model
-  // that stops early resumes the plan. It stops when a part ticks nothing, the model reports
-  // "Blocked:", the run fails or is aborted, or the limit is reached; with all steps ticked it
-  // asks once to finish the plan. Continuing before settling keeps notify.ts quiet between steps.
-  let baseline: { plan?: string; done: number } = { done: 0 };
-  let continuations = 0;
-  let finishRequested = false;
-
-  const snapshot = (plan: Plan | undefined) => ({
-    plan: plan?.name,
-    done: plan?.steps.filter((step) => step.done).length ?? 0,
-  });
-
-  pi.on("agent_before_settle", (event, ctx) => {
-    if (!currentMode()?.autoContinue || event.outcome !== "completed") return;
-    const plan = trackedPlan(ctx.cwd, focus)?.plan;
-    const previous = baseline;
-    baseline = snapshot(plan);
-    if (!plan) return;
-    const stop = (reason: string) => ctx.ui.notify(`Exec stopped: ${reason}`, "info");
-
-    const last = event.context.llmMessages.filter((entry) => entry.role === "assistant").at(-1);
-    const text = last?.role === "assistant" ? assistantText(last) : "";
-    // A stop the user should see on the card; a run that ticks nothing usually asks something,
-    // which notify.ts's "Done" summary already shows.
-    const alert = (notice: string) => sendNotice(pi, { message: notice, final: true });
-    if (BLOCKED.test(text)) {
-      alert(text.trim().split("\n")[0]);
-      return stop("blocked");
-    }
-    if (continuations >= AUTO_CONTINUE_LIMIT) {
-      alert(`Stopped after ${AUTO_CONTINUE_LIMIT} continuations`);
-      return stop(`${AUTO_CONTINUE_LIMIT} continuations`);
-    }
-
-    let message: string;
-    if (plan.steps.some((step) => !step.done)) {
-      if (previous.plan !== plan.name || baseline.done <= previous.done)
-        return stop("no step was ticked");
-      message = continuePrompt;
-    } else {
-      if (finishRequested) return;
-      finishRequested = true;
-      message = finishPrompt;
-    }
-    continuations++;
-    return {
-      entries: [
-        ...event.entries,
-        {
-          type: "custom_message",
-          customType: "exec-continue",
-          content: message,
-          display: true,
-        },
-      ],
-      continue: true,
-    };
-  });
-
-  pi.on("before_agent_start", (event, ctx) => {
-    planWritten = false;
-    baseline = snapshot(trackedPlan(ctx.cwd, focus)?.plan);
-    continuations = 0;
-    finishRequested = false;
-    const mode = currentMode();
-    if (!mode) return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${mode.instructions}` };
+    if (mode) event.systemPromptOptions.sections.mode = mode.instructions;
   });
 
   pi.registerCommand("roadmap", {
