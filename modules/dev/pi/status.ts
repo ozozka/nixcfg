@@ -264,7 +264,7 @@ export default function (pi: ExtensionAPI) {
         .map(([, render]) => render(theme)),
       ...parts,
     ].join(theme.fg("muted", " * "));
-    editor?.setStatus(status, details(context, theme), place(context));
+    editor?.setStatus(status, details(context, theme), place(context, theme));
   }
 
   // Context use and the model with its thinking level, for the right of the bottom border.
@@ -286,11 +286,14 @@ export default function (pi: ExtensionAPI) {
     return parts.join(theme.fg("muted", " * "));
   }
 
-  // The folder, git branch, and session name, for the right of the top border.
-  function place(ctx: ExtensionContext): string {
+  // The folder, git branch, and session name, muted, for the right of the top border.
+  function place(ctx: ExtensionContext, theme: Theme): string {
     const branch = footerData?.getGitBranch();
     const name = pi.getSessionName();
-    return `${basename(ctx.cwd) || ctx.cwd}${branch ? ` (${branch})` : ""}${name ? ` • ${name}` : ""}`;
+    return theme.fg(
+      "muted",
+      `${basename(ctx.cwd) || ctx.cwd}${branch ? ` (${branch})` : ""}${name ? ` • ${name}` : ""}`,
+    );
   }
 
   function saveWindows(windows: Array<UsageWindow | undefined>) {
