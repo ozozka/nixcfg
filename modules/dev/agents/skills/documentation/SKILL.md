@@ -69,11 +69,12 @@ presentations, reports are out of the scope if they not contain files and parts 
   3. Topic files under a document: `docs/development/testing.md`; topic names are free, the
      parent document keeps its overview and links.
 - **Roadmap shapes**:
-  - **Board** (projects driven by one owner): Status, Limitations, and Direction around a small
-    kanban board: Backlog (ideas, one line each), Plans (specified, ready to start), Active (in
-    progress), Completed (one line per delivered capability). Plans are written inline in the
-    plan format of the workflow that manages them, and shrink to Completed lines when done;
-    their lasting content moves into the documents that own it.
+  - **Board** (projects driven by one owner): six sections in this order: Status (general
+    overview), Limitations (limitations worth noting), Backlog (ideas, one line each), Plans
+    (specified, ready to start), Active (in progress), Completed (one line per delivered
+    capability). Plans are written inline in the plan format of the workflow that manages them,
+    and shrink to Completed lines when done; their lasting content moves into the documents
+    that own it.
   - **Overview** (team and open-source projects): status, limitations, and high-level direction;
     detailed planning lives in issues or pull requests.
   - Released software hands delivered changes over to `CHANGELOG.md`.
