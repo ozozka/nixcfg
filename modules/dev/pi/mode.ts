@@ -1,10 +1,12 @@
 /**
  * Named modes: each sets the thinking level, removes tools, and appends instructions to the
- * system prompt. No mode means the normal settings. Entering a mode saves the current tools and
- * thinking level; leaving restores them.
+ * system prompt. The default mode, free, is the normal settings. Entering a mode saves the
+ * current tools and thinking level; leaving restores them. The mode starts the status line in
+ * bold, in its color; Shift+Tab cycles the modes by their order.
  *
  * Modes are Markdown files in modes/ under Pi's agent directory, loaded at startup: the file
- * name is the mode name, the frontmatter its settings, and the body its instructions. A mode
+ * name is the mode name, the frontmatter its settings (including `order` and the status
+ * `color`), and the body its instructions. A mode
  * with `next` asks, when a run ends with open tasks, whether to switch to that mode and send
  * `next-prompt`.
  *
@@ -36,12 +38,18 @@ const THINKING_LEVELS: readonly string[] = [
 ];
 
 const ENTRY_TYPE = "mode";
-// The name of no mode: the normal settings.
-const OFF = "off";
+// The default mode: no mode file, the normal settings.
+const FREE = "free";
+const FREE_COLOR = "text";
+// Theme colors a mode can use in the status line.
+const COLORS = ["text", "muted", "dim", "accent", "success", "warning", "error"] as const;
+type Color = (typeof COLORS)[number];
 const TRAILING_PERIOD = /\.$/;
 
 interface Mode {
   description: string;
+  order?: number;
+  color: Color;
   thinkingLevel?: ThinkingLevel;
   excludeTools: string[];
   // Mode to offer when a run ends with open tasks, and the prompt sent after switching.
@@ -53,6 +61,8 @@ interface Mode {
 // A type alias: parseFrontmatter needs the implicit index signature an interface lacks.
 type ModeFrontmatter = {
   description?: unknown;
+  order?: unknown;
+  color?: unknown;
   thinking?: unknown;
   "exclude-tools"?: unknown;
   next?: unknown;
@@ -70,6 +80,8 @@ function parseMode(content: string): Mode {
   const { frontmatter, body } = parseFrontmatter<ModeFrontmatter>(content);
   const {
     description,
+    order,
+    color = "text",
     thinking,
     "exclude-tools": exclude,
     next,
@@ -80,6 +92,10 @@ function parseMode(content: string): Mode {
   if (extra.length > 0) throw new Error(`unknown keys: ${extra.join(", ")}`);
   if (typeof description !== "string" || !description.trim())
     throw new Error("description is required");
+  if (order !== undefined && typeof order !== "number")
+    throw new Error("order must be a number");
+  if (!COLORS.includes(color as Color))
+    throw new Error(`color must be one of: ${COLORS.join(", ")}`);
   if (thinking !== undefined && !THINKING_LEVELS.includes(String(thinking)))
     throw new Error(`thinking must be one of: ${THINKING_LEVELS.join(", ")}`);
   // Accepts both YAML spellings: `exclude-tools: edit, write` and `[edit, write]`.
@@ -91,6 +107,8 @@ function parseMode(content: string): Mode {
   if (!body.trim()) throw new Error("the instructions (body) are empty");
   return {
     description: description.trim(),
+    order,
+    color: color as Color,
     thinkingLevel: thinking as ThinkingLevel | undefined,
     excludeTools: list.map((t) => t.trim()).filter(Boolean),
     next: optionalString(next, "next"),
@@ -109,23 +127,29 @@ function loadModes(): { modes: Map<string, Mode>; errors: string[] } {
   } catch {
     errors.push(`no modes directory at ${dir}`);
   }
-  for (const file of files.sort()) {
+  for (const file of files) {
     try {
       const name = basename(file, ".md");
-      if (name === OFF) throw new Error(`"${OFF}" is reserved for no mode`);
+      if (name === FREE) throw new Error(`"${FREE}" is the default mode`);
       modes.set(name, parseMode(readFileSync(join(dir, file), "utf8")));
     } catch (error) {
       errors.push(`${file}: ${(error as Error).message}`);
     }
   }
   for (const [name, mode] of modes) {
-    if (mode.next && mode.next !== OFF && !modes.has(mode.next)) {
+    if (mode.next && mode.next !== FREE && !modes.has(mode.next)) {
       errors.push(`${name}.md: next mode "${mode.next}" does not exist`);
       mode.next = undefined;
       mode.nextPrompt = undefined;
     }
   }
-  return { modes, errors };
+  // Cycle order: by `order`, then by name.
+  const sorted = [...modes].sort(
+    ([a, x], [b, y]) =>
+      (x.order ?? Number.POSITIVE_INFINITY) - (y.order ?? Number.POSITIVE_INFINITY) ||
+      a.localeCompare(b),
+  );
+  return { modes: new Map(sorted), errors };
 }
 
 interface Saved {
@@ -161,9 +185,12 @@ export default function (pi: ExtensionAPI) {
 
   function updateStatus(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
+    const theme = ctx.ui.theme;
+    const mode = state.name ? modes.get(state.name) : undefined;
+    // Pi orders statuses by key, so "mode" comes before the other status entries.
     ctx.ui.setStatus(
       ENTRY_TYPE,
-      state.name ? ctx.ui.theme.fg("accent", `mode:${state.name}`) : undefined,
+      theme.bold(theme.fg(mode?.color ?? FREE_COLOR, state.name ?? FREE)),
     );
   }
 
@@ -190,7 +217,7 @@ export default function (pi: ExtensionAPI) {
     };
     apply(ctx, name ? { name, saved } : {});
     pi.appendEntry(ENTRY_TYPE, state);
-    ctx.ui.notify(name ? `Mode: ${name}` : "Mode off", "info");
+    ctx.ui.notify(`Mode: ${name ?? FREE}`, "info");
   }
 
   function restore(ctx: ExtensionContext) {
@@ -200,9 +227,10 @@ export default function (pi: ExtensionAPI) {
         recorded = entry.data as ModeState;
       }
     }
-    // A mode removed since it was recorded counts as off.
+    // A mode removed since it was recorded counts as free.
     if (isModeName(recorded.name) && recorded.saved) apply(ctx, recorded);
     else if (state.name) apply(ctx, {});
+    else updateStatus(ctx);
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -216,13 +244,13 @@ export default function (pi: ExtensionAPI) {
     if (!(mode?.next && mode.nextPrompt) || event.aborted || !ctx.hasUI) return;
     if (!hasOpenTasks(ctx)) return;
     const { next, nextPrompt } = mode;
-    const accept = next === OFF ? `Yes, leave ${state.name} mode` : `Yes, switch to ${next}`;
+    const accept = next === FREE ? `Yes, leave ${state.name} mode` : `Yes, switch to ${next}`;
     const choice = await ctx.ui.select(nextPrompt.replace(TRAILING_PERIOD, "?"), [
       accept,
       `Keep ${state.name} mode`,
     ]);
     if (choice !== accept) return;
-    switchTo(ctx, next === OFF ? undefined : next);
+    switchTo(ctx, next === FREE ? undefined : next);
     pi.sendUserMessage(nextPrompt);
   });
 
@@ -233,20 +261,20 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("mode", {
-    description: "Switch mode: /mode, /mode <name>, /mode off",
+    description: `Switch mode: /mode, /mode <name>, /mode ${FREE}`,
     handler: async (args, ctx) => {
       const requested = args.trim();
-      if (requested === OFF) return switchTo(ctx, undefined);
+      if (requested === FREE) return switchTo(ctx, undefined);
       if (isModeName(requested)) return switchTo(ctx, requested);
       if (requested) {
-        const available = [OFF, ...modes.keys()].join(", ");
+        const available = [FREE, ...modes.keys()].join(", ");
         ctx.ui.notify(`Unknown mode "${requested}". Available: ${available}`, "error");
         return;
       }
       if (!ctx.hasUI) return;
 
       const labels = new Map<string, string | undefined>([
-        [`${OFF}: normal settings`, undefined],
+        [`${FREE}: normal settings`, undefined],
         ...[...modes].map(([name, mode]) => [`${name}: ${mode.description}`, name] as const),
       ]);
       const choice = await ctx.ui.select("Mode", [...labels.keys()]);
@@ -254,7 +282,8 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerShortcut(Key.ctrlShift("u"), {
+  // Pi's default thinking-level cycle uses Shift+Tab; keybindings.json moves it to Ctrl+T.
+  pi.registerShortcut(Key.shift("tab"), {
     description: "Cycle modes",
     handler: (ctx) => {
       const order: (string | undefined)[] = [undefined, ...modes.keys()];

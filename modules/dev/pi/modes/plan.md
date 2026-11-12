@@ -1,8 +1,10 @@
 ---
 description: Read-only exploration that ends in a plan
+order: 1
+color: muted
 thinking: high
 exclude-tools: edit, write
-next: off
+next: free
 next-prompt: Implement the plan.
 ---
 
