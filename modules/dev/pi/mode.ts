@@ -177,8 +177,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (event) => {
-    const mode = currentMode();
-    if (mode) event.systemPromptOptions.sections.mode = mode.instructions;
+    // Empty sections are omitted by Pi; leaving a mode must also remove its instructions.
+    event.systemPromptOptions.sections.mode = currentMode()?.instructions ?? "";
   });
 
   pi.registerCommand("mode", {
