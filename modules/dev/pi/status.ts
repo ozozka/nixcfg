@@ -223,15 +223,20 @@ function formatWindow(window: UsageWindow, now: number, theme: Theme): string {
 export default function (pi: ExtensionAPI) {
   let timer: ReturnType<typeof setInterval> | undefined;
   let context: ExtensionContext | undefined;
-  let activeMilliseconds = 0;
-  let activeStartedAt: number | undefined;
-  let lastPromptMilliseconds = 0;
-  let selectedProvider: string | undefined;
-  let requestProvider: string | undefined;
   let editor: StatusEditor | undefined;
   // Pi gives the git branch only to footers; see session_start.
   let footerData: ReadonlyFooterDataProvider | undefined;
-  const usage = new Map<number, UsageWindow>();
+  // Per-session state; stop() starts over with a fresh one.
+  const fresh = () => ({
+    activeMilliseconds: 0,
+    activeStartedAt: undefined as number | undefined,
+    lastPromptMilliseconds: 0,
+    selectedProvider: undefined as string | undefined,
+    // The provider of the request in flight, so quota headers are attributed correctly.
+    requestProvider: undefined as string | undefined,
+    usage: new Map<number, UsageWindow>(),
+  });
+  let session = fresh();
   // Segments from other extensions by key; kept across sessions, since they resend on change.
   const segments = new Map<string, (theme: Theme) => string>();
   // Spinner colors segments ask for, by key; the first by key wins.
@@ -239,18 +244,15 @@ export default function (pi: ExtensionAPI) {
 
   function updateStatus() {
     if (!context) return;
-    const elapsed = formatDuration(
-      activeMilliseconds +
-        (activeStartedAt === undefined ? 0 : performance.now() - activeStartedAt),
-    );
+    const { activeMilliseconds, activeStartedAt, lastPromptMilliseconds, usage } = session;
+    const running = activeStartedAt === undefined ? 0 : performance.now() - activeStartedAt;
+    const elapsed = formatDuration(activeMilliseconds + running);
     const promptElapsed = formatDuration(
-      activeStartedAt === undefined
-        ? lastPromptMilliseconds
-        : performance.now() - activeStartedAt,
+      activeStartedAt === undefined ? lastPromptMilliseconds : running,
     );
     const parts = [`${elapsed}-${promptElapsed}`];
     const theme = context.ui.theme;
-    if (selectedProvider === CODEX_PROVIDER && usage.size > 0) {
+    if (session.selectedProvider === CODEX_PROVIDER && usage.size > 0) {
       parts.push(
         [...usage.values()]
           .sort((a, b) => a.windowMinutes - b.windowMinutes)
@@ -297,26 +299,32 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  function saveWindows(windows: Array<UsageWindow | undefined>) {
-    const received = windows.filter((window) => window !== undefined);
+  // Codex reports the requests' quota as a primary and a secondary window, from response
+  // headers or stream events; `read` gets each by name.
+  function saveWindows(read: (name: string) => UsageWindow | undefined) {
+    const { usage } = session;
+    const received = ["primary", "secondary"]
+      .map(read)
+      .filter((window) => window !== undefined);
     for (const window of received) usage.set(window.windowMinutes, window);
     if (received.length > 0) saveUsage([...usage.values()]);
     updateStatus();
   }
 
+  // Quota applies only while the session uses Codex and the event comes from it.
+  const fromCodex = (provider: string | undefined) =>
+    context !== undefined &&
+    provider === CODEX_PROVIDER &&
+    session.selectedProvider === CODEX_PROVIDER;
+
   function stop() {
     if (timer !== undefined) clearInterval(timer);
     timer = undefined;
     context = undefined;
-    activeMilliseconds = 0;
-    activeStartedAt = undefined;
-    lastPromptMilliseconds = 0;
-    selectedProvider = undefined;
-    requestProvider = undefined;
     editor?.setStatus("", "", "");
-    footerData = undefined;
     editor = undefined;
-    usage.clear();
+    footerData = undefined;
+    session = fresh();
   }
 
   // Rebuilds the work clock from the session's messages, so a resumed, reloaded, or forked
@@ -327,8 +335,8 @@ export default function (pi: ExtensionAPI) {
     let runEnd = 0;
     const finishRun = () => {
       if (runStart === undefined) return;
-      lastPromptMilliseconds = runEnd - runStart;
-      activeMilliseconds += lastPromptMilliseconds;
+      session.lastPromptMilliseconds = runEnd - runStart;
+      session.activeMilliseconds += session.lastPromptMilliseconds;
     };
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type !== "message") continue;
@@ -355,8 +363,8 @@ export default function (pi: ExtensionAPI) {
     stop();
     if (ctx.mode !== "tui") return;
     context = ctx;
-    selectedProvider = ctx.model?.provider;
-    for (const window of loadUsage()) usage.set(window.windowMinutes, window);
+    session.selectedProvider = ctx.model?.provider;
+    for (const window of loadUsage()) session.usage.set(window.windowMinutes, window);
     // Pi restores its own editor between sessions, so each session sets this one again.
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       editor = new StatusEditor(tui, theme, keybindings, { embedWorkingStatus: true });
@@ -388,79 +396,73 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", () => {
-    if (!context || activeStartedAt !== undefined) return;
+    if (!context || session.activeStartedAt !== undefined) return;
     // Accumulate working time across prompts, including tools and retries.
-    activeStartedAt = performance.now();
+    session.activeStartedAt = performance.now();
     updateStatus();
   });
 
   pi.on("agent_settled", () => {
-    if (!context || activeStartedAt === undefined) return;
-    lastPromptMilliseconds = performance.now() - activeStartedAt;
-    activeMilliseconds += lastPromptMilliseconds;
-    activeStartedAt = undefined;
+    if (!context || session.activeStartedAt === undefined) return;
+    session.lastPromptMilliseconds = performance.now() - session.activeStartedAt;
+    session.activeMilliseconds += session.lastPromptMilliseconds;
+    session.activeStartedAt = undefined;
     updateStatus();
   });
 
   pi.on("context", (_event, ctx) => {
-    // Remember the request's provider so quota headers are attributed correctly.
-    if (!context) return;
-    requestProvider = ctx.model?.provider;
+    if (context) session.requestProvider = ctx.model?.provider;
   });
 
   pi.on("after_provider_response", (event) => {
-    if (!context || requestProvider !== CODEX_PROVIDER || selectedProvider !== CODEX_PROVIDER)
-      return;
+    if (!fromCodex(session.requestProvider)) return;
     const headers = Object.fromEntries(
       Object.entries(event.headers).map(([key, value]) => [key.toLowerCase(), value]),
     );
     const now = Date.now();
-    saveWindows(
-      ["primary", "secondary"].map((name) => {
-        const prefix = `x-codex-${name}-`;
-        const resetAt = readNumber(headers[`${prefix}reset-at`]);
-        const resetAfter = readNumber(headers[`${prefix}reset-after-seconds`]);
-        return readWindow(
-          headers[`${prefix}used-percent`],
-          headers[`${prefix}window-minutes`],
-          resetAt ??
-            (resetAfter !== undefined && resetAfter >= 0 ? now / 1000 + resetAfter : undefined),
-          now,
-        );
-      }),
-    );
+    saveWindows((name) => {
+      const prefix = `x-codex-${name}-`;
+      const resetAt = readNumber(headers[`${prefix}reset-at`]);
+      const resetAfter = readNumber(headers[`${prefix}reset-after-seconds`]);
+      return readWindow(
+        headers[`${prefix}used-percent`],
+        headers[`${prefix}window-minutes`],
+        resetAt ??
+          (resetAfter !== undefined && resetAfter >= 0 ? now / 1000 + resetAfter : undefined),
+        now,
+      );
+    });
   });
 
   pi.on("provider_stream_event", (event) => {
-    if (!context || event.provider !== CODEX_PROVIDER || selectedProvider !== CODEX_PROVIDER)
-      return;
+    if (!fromCodex(event.provider)) return;
     const data = record(event.data);
     if (data?.type !== "codex.rate_limits") return;
     const limits = record(data.rate_limits);
     if (!limits) return;
     const now = Date.now();
     // Only accept explicit quota snapshots, never infer quotas from token usage.
-    saveWindows(
-      ["primary", "secondary"].map((name) => {
-        const window = record(limits[name]);
-        if (!window) return undefined;
-        return readWindow(
+    saveWindows((name) => {
+      const window = record(limits[name]);
+      return (
+        window &&
+        readWindow(
           window.used_percent,
           window.window_minutes ?? window.limit_window_minutes,
           window.reset_at,
           now,
-        );
-      }),
-    );
+        )
+      );
+    });
   });
 
   pi.on("model_select", (event) => {
     if (!context) return;
-    if (selectedProvider !== event.model.provider) {
-      usage.clear();
-      requestProvider = undefined;
+    if (session.selectedProvider !== event.model.provider) {
+      session.usage.clear();
+      session.requestProvider = undefined;
     }
-    selectedProvider = event.model.provider;
+    session.selectedProvider = event.model.provider;
     updateStatus();
   });
 
@@ -471,7 +473,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_info_changed", () => updateStatus());
 
   pi.on("agent_end", () => {
-    requestProvider = undefined;
+    session.requestProvider = undefined;
   });
 
   pi.on("session_shutdown", stop);
