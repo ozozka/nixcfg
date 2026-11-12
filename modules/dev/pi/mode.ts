@@ -3,8 +3,8 @@
  *
  * Modes: each sets the thinking level, removes tools, and appends instructions to the system
  * prompt. The default mode, free, is the normal settings. Entering a mode saves the current
- * tools and thinking level; leaving restores them. The mode starts the status line in bold, in
- * its color; Shift+Tab cycles the modes by their order.
+ * tools and thinking level; leaving restores them. The mode starts the status line
+ * (status.ts) in bold, in its color; Shift+Tab cycles the modes by their order.
  *
  * Modes are Markdown files in modes/ under Pi's agent directory, loaded at startup: the file
  * name is the mode name, the frontmatter its settings (including `order` and the status
@@ -48,6 +48,8 @@ const THINKING_LEVELS: readonly string[] = [
 ];
 
 const MODE_ENTRY = "mode";
+// The status line (status.ts) takes the mode on this event bus channel.
+const STATUS_CHANNEL = "status";
 // The default mode: no mode file, the normal settings.
 const FREE = "free";
 const FREE_COLOR = "text";
@@ -733,6 +735,8 @@ export default function (pi: ExtensionAPI) {
       }
     }
     ctx.ui.setWidget(ROADMAP_TOOL, lines.length > 0 ? lines : undefined);
+    // Setting a widget moves it below the status line; resending the mode moves the line back.
+    updateStatus();
   }
 
   function setFocus(ctx: ExtensionContext, name: string | undefined) {
@@ -823,15 +827,15 @@ export default function (pi: ExtensionAPI) {
 
   // Modes
 
-  function updateStatus(ctx: ExtensionContext) {
-    if (!ctx.hasUI) return;
-    const theme = ctx.ui.theme;
+  // Sends the mode to status.ts, which starts its status line with it (segments sort by key).
+  function updateStatus() {
     const mode = state.name ? modes.get(state.name) : undefined;
-    // Pi orders statuses by key, so "mode" comes before the other status entries.
-    ctx.ui.setStatus(
-      MODE_ENTRY,
-      theme.bold(theme.fg(mode?.color ?? FREE_COLOR, state.name ?? FREE)),
-    );
+    const name = state.name ?? FREE;
+    const color = mode?.color ?? FREE_COLOR;
+    pi.events.emit(STATUS_CHANNEL, {
+      key: MODE_ENTRY,
+      render: (theme: Theme) => theme.bold(theme.fg(color, name)),
+    });
   }
 
   // Applies a target state: the mode's settings, or the saved ones when leaving a mode.
@@ -846,7 +850,7 @@ export default function (pi: ExtensionAPI) {
       pi.setThinkingLevel(state.saved.thinkingLevel);
     }
     state = mode ? next : {};
-    updateStatus(ctx);
+    updateStatus();
     updateWidget(ctx);
   }
 
@@ -872,7 +876,7 @@ export default function (pi: ExtensionAPI) {
     // A mode removed since it was recorded counts as free.
     if (isModeName(recorded.name) && recorded.saved) apply(ctx, recorded);
     else if (state.name) apply(ctx, {});
-    else updateStatus(ctx);
+    else updateStatus();
   }
 
   pi.on("session_start", (_event, ctx) => {

@@ -1,3 +1,13 @@
+/**
+ * The status line, shown just above the editor: segments other extensions send on the "status"
+ * event bus channel as { key, render? } (render: (theme) => string; none removes the segment),
+ * ordered by key, then the session's work clock, Codex quota, and tool calls.
+ *
+ * Pi renders widgets above the editor in the order they were last set, so the line is set
+ * again whenever a segment arrives; an extension that changes its own widget above the editor
+ * (the roadmap) sends its segment afterwards to keep the line closest to the editor.
+ */
+
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -7,7 +17,8 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 
-const STATUS_KEY = "session-metrics";
+const STATUS_KEY = "status";
+const STATUS_CHANNEL = "status";
 const CODEX_PROVIDER = "openai-codex";
 const STALE_AFTER_MS = 10 * 60 * 1000;
 // Codex quotas belong to the account, not the session, so the latest snapshot is kept here for
@@ -138,8 +149,11 @@ export default function (pi: ExtensionAPI) {
   let lastStatus: string | undefined;
   const usage = new Map<number, UsageWindow>();
   let toolCalls = 0;
+  // Segments from other extensions by key; kept across sessions, since they resend on change.
+  const segments = new Map<string, (theme: Theme) => string>();
 
-  function updateStatus() {
+  // `force` sets the line even when unchanged, moving it back below the other widgets.
+  function updateStatus(force = false) {
     if (!context) return;
     const elapsed = formatDuration(
       activeMilliseconds +
@@ -162,9 +176,14 @@ export default function (pi: ExtensionAPI) {
     }
     if (toolCalls > 0) parts.push(`${toolCalls} ${toolCalls === 1 ? "call" : "calls"}`);
     // Rebuild themed strings on every update so theme changes refresh colors.
-    const status = parts.join(theme.fg("muted", " * "));
-    if (status !== lastStatus) {
-      context.ui.setStatus(STATUS_KEY, status);
+    const status = [
+      ...[...segments.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, render]) => render(theme)),
+      parts.join(theme.fg("muted", " * ")),
+    ].join(" ");
+    if (force || status !== lastStatus) {
+      context.ui.setWidget(STATUS_KEY, [status]);
       lastStatus = status;
     }
   }
@@ -179,7 +198,7 @@ export default function (pi: ExtensionAPI) {
   function stop() {
     if (timer !== undefined) clearInterval(timer);
     timer = undefined;
-    context?.ui.setStatus(STATUS_KEY, undefined);
+    context?.ui.setWidget(STATUS_KEY, undefined);
     context = undefined;
     activeMilliseconds = 0;
     activeStartedAt = undefined;
@@ -216,6 +235,14 @@ export default function (pi: ExtensionAPI) {
     }
     finishRun();
   }
+
+  pi.events.on(STATUS_CHANNEL, (data) => {
+    const { key, render } = (data ?? {}) as { key?: unknown; render?: unknown };
+    if (typeof key !== "string") return;
+    if (typeof render === "function") segments.set(key, render as (theme: Theme) => string);
+    else segments.delete(key);
+    updateStatus(true);
+  });
 
   pi.on("tool_execution_start", () => {
     if (!context) return;
