@@ -5,6 +5,8 @@ color: accent
 thinking: high
 exclude-tools: edit, write
 roadmap: true
+next: exec
+next-prompt: Execute the plan.
 ---
 
 ## Spec mode
@@ -16,4 +18,4 @@ Spec mode is active: shape a plan for the user's request and write it to the pro
 - Write the plan with the roadmap tool's write action, in its plan format: Goal, then Findings, Decisions, and Specification when they have content, then Steps.
   - Steps are ordered, small, and focused; each becomes one commit, and includes the documentation changes its behavior needs.
   - Revise a plan by writing it again under the same name.
-- End with a short summary of the plan and the decisions it depends on.
+- End with a short summary of the plan and the decisions it depends on. The user is then asked whether to execute it.
