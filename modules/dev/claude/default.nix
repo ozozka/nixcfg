@@ -1,6 +1,11 @@
 self:
 
-{ config, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   agents = config.ozozka.mod.dev.agents;
@@ -73,9 +78,23 @@ in
     };
   };
 
-  # Commands have no managed location, so shared prompts are linked per user.
-  # The workflow command is Claude-only; Pi has the spec and exec modes instead.
-  ozozka.home.profiles.claude.files.".claude".commands = agents.prompts // {
-    "workflow.md" = ./workflow.md;
+  # Native user-selected styles share their instruction bodies with Pi modes.
+  ozozka.home.profiles.claude.files.".claude" = {
+    commands = agents.prompts;
+    "output-styles" = lib.mapAttrs' (
+      name: body:
+      lib.nameValuePair "${name}.md" (
+        pkgs.writeText "${name}.md" (
+          "---\n"
+          + builtins.toJSON {
+            inherit name;
+            description = lib.removePrefix "# " (lib.head (lib.splitString "\n" body));
+            keep-coding-instructions = true;
+          }
+          + "\n---\n\n"
+          + body
+        )
+      )
+    ) agents.modes;
   };
 }

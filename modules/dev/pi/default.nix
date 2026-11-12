@@ -11,6 +11,46 @@ let
   cfg = config.ozozka;
   agents = cfg.mod.dev.agents;
   settingsFormat = pkgs.formats.json { };
+  modeSettings = {
+    plan = {
+      order = 1;
+      color = "muted";
+      thinking = "medium";
+      exclude-tools = [
+        "edit"
+        "write"
+      ];
+    };
+    spec = {
+      order = 2;
+      color = "accent";
+      thinking = "medium";
+      exclude-tools = [
+        "edit"
+        "write"
+      ];
+    };
+    exec = {
+      order = 3;
+      color = "warning";
+    };
+  };
+  modes = lib.mapAttrs' (
+    name: body:
+    lib.nameValuePair "${name}.md" (
+      pkgs.writeText "${name}.md" (
+        "---\n"
+        + builtins.toJSON (
+          {
+            description = lib.removePrefix "# " (lib.head (lib.splitString "\n" body));
+          }
+          // (modeSettings.${name} or { })
+        )
+        + "\n---\n\n"
+        + body
+      )
+    )
+  ) agents.modes;
   # Keep code and Markdown in one store path, so adjacent reads and imports resolve
   # whether Pi follows the home-file links or not.
   extensions = lib.fileset.toSource {
@@ -32,7 +72,7 @@ in
       "AGENTS.md" = agents.instructions;
       inherit (agents) prompts skills;
       # Mode definitions for mode.ts.
-      "modes" = ./modes;
+      inherit modes;
       # Subagent definitions for subagent.ts.
       "agents" = ./agents;
 

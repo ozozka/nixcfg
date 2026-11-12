@@ -3,5 +3,5 @@ description: Implement
 argument-hint: "[additional instructions]"
 ---
 
-Proceed with implementation. make atomic commits and keep docs in sync across every commit.
+Implement the requested change following the repository's conventions and the current instructions.
 $ARGUMENTS

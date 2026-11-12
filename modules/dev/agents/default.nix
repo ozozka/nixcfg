@@ -19,6 +19,20 @@ in
       description = "Global instructions shared by every agent.";
     };
 
+    modes = mkOption {
+      type = types.attrsOf types.lines;
+      default =
+        let
+          roadmap = "\n" + builtins.readFile ./modes/roadmap.md;
+        in
+        {
+          plan = builtins.readFile ./modes/plan.md;
+          spec = builtins.readFile ./modes/spec.md + roadmap;
+          exec = builtins.readFile ./modes/exec.md + roadmap;
+        };
+      description = "Explicitly selected workflow instructions shared by modes and output styles.";
+    };
+
     prompts = mkOption {
       type = types.attrsOf types.path;
       default = entries ./prompts;
