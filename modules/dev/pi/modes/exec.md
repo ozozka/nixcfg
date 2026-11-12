@@ -3,6 +3,7 @@ description: Execute the roadmap plan, one commit per step
 order: 3
 color: warning
 roadmap: true
+auto-continue: true
 ---
 
 ## Exec mode

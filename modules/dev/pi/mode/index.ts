@@ -71,6 +71,9 @@ const FREE_COLOR = "text";
 const COLORS = ["text", "muted", "dim", "accent", "success", "warning", "error"] as const;
 type Color = (typeof COLORS)[number];
 const TRAILING_PERIOD = /\.$/;
+const BLOCKED = /^\s*Blocked:/;
+// Upper bound on automatic continuations per prompt.
+const AUTO_CONTINUE_LIMIT = 50;
 
 interface Mode {
   description: string;
@@ -83,6 +86,8 @@ interface Mode {
   nextPrompt?: string;
   // Enables the roadmap tool and tracks open work on the roadmap plan.
   roadmap: boolean;
+  // Continues the run while the roadmap plan makes progress (see agent_before_settle).
+  autoContinue: boolean;
   instructions: string;
 }
 
@@ -96,6 +101,7 @@ type ModeFrontmatter = {
   next?: unknown;
   "next-prompt"?: unknown;
   roadmap?: unknown;
+  "auto-continue"?: unknown;
 };
 
 function optionalString(value: unknown, key: string): string | undefined {
@@ -116,6 +122,7 @@ function parseMode(content: string): Mode {
     next,
     "next-prompt": nextPrompt,
     roadmap = false,
+    "auto-continue": autoContinue = false,
     ...unknown
   } = frontmatter;
   const extra = Object.keys(unknown);
@@ -133,6 +140,8 @@ function parseMode(content: string): Mode {
   if (!(Array.isArray(list) && list.every((t) => typeof t === "string")))
     throw new Error("exclude-tools must be a comma-separated string or a list");
   if (typeof roadmap !== "boolean") throw new Error("roadmap must be true or false");
+  if (typeof autoContinue !== "boolean") throw new Error("auto-continue must be true or false");
+  if (autoContinue && !roadmap) throw new Error("auto-continue needs roadmap: true");
   if ((next === undefined) !== (nextPrompt === undefined))
     throw new Error("next and next-prompt go together");
   if (!body.trim()) throw new Error("the instructions (body) are empty");
@@ -145,6 +154,7 @@ function parseMode(content: string): Mode {
     next: optionalString(next, "next"),
     nextPrompt: optionalString(nextPrompt, "next-prompt"),
     roadmap,
+    autoContinue,
     instructions: body.trim(),
   };
 }
@@ -449,14 +459,23 @@ export default function (pi: ExtensionAPI) {
   }
 
   // The summary replaces earlier todo calls in the model's context, so it would lose the list.
+  // In roadmap modes the current plan is re-sent too, read from the board.
   pi.on("session_compact", (_event, ctx) => {
-    if (!hasOpenTasks()) return;
+    const reminders: string[] = [];
+    if (roadmapMode()) {
+      try {
+        const board = findBoard(ctx.cwd);
+        const plan = board.created ? undefined : currentPlan(board);
+        if (plan?.steps.some((step) => !step.done))
+          reminders.push(`Roadmap plan from before compaction:\n${planText(board, plan)}`);
+      } catch {
+        // An unreadable board has nothing to re-send.
+      }
+    }
+    if (hasOpenTasks()) reminders.push(modelText("Task list from before compaction", items));
+    if (reminders.length === 0) return;
     pi.sendMessage(
-      {
-        customType: "todo-reminder",
-        content: modelText("Task list from before compaction", items),
-        display: false,
-      },
+      { customType: "todo-reminder", content: reminders.join("\n\n"), display: false },
       // Mid-run compaction reaches the next model call; manual /compact the next prompt.
       { deliverAs: ctx.isIdle() ? "nextTurn" : "steer" },
     );
@@ -649,8 +668,66 @@ export default function (pi: ExtensionAPI) {
     pi.sendUserMessage(nextPrompt);
   });
 
-  pi.on("before_agent_start", (event) => {
+  // Auto-continue: a prompt's run keeps going while each part of it ticks a step, so a model
+  // that stops early resumes the plan. It stops when a part ticks nothing, the model reports
+  // "Blocked:", the run fails or is aborted, or the limit is reached; with all steps ticked it
+  // asks once to finish the plan. Continuing before settling keeps notify.ts quiet between steps.
+  let baseline: { plan?: string; done: number } = { done: 0 };
+  let continuations = 0;
+  let finishRequested = false;
+
+  const snapshot = (cwd: string) => {
+    const plan = trackedPlan(cwd);
+    return { plan: plan?.name, done: plan?.steps.filter((step) => step.done).length ?? 0 };
+  };
+
+  pi.on("agent_before_settle", (event, ctx) => {
+    if (!currentMode()?.autoContinue || event.outcome !== "completed") return;
+    const previous = baseline;
+    baseline = snapshot(ctx.cwd);
+    const plan = trackedPlan(ctx.cwd);
+    if (!plan) return;
+    const stop = (reason: string) => ctx.ui.notify(`Exec stopped: ${reason}`, "info");
+
+    const last = event.context.llmMessages.filter((entry) => entry.role === "assistant").at(-1);
+    const text =
+      last?.role === "assistant"
+        ? last.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")
+        : "";
+    if (BLOCKED.test(text)) return stop("blocked");
+    if (continuations >= AUTO_CONTINUE_LIMIT)
+      return stop(`${AUTO_CONTINUE_LIMIT} continuations`);
+
+    let message: string;
+    if (plan.steps.some((step) => !step.done)) {
+      if (previous.plan !== plan.name || baseline.done <= previous.done)
+        return stop("no step was ticked");
+      message = "Continue with the next step.";
+    } else {
+      if (finishRequested) return;
+      finishRequested = true;
+      message = "All steps are ticked. Finish the plan.";
+    }
+    continuations++;
+    return {
+      entries: [
+        ...event.entries,
+        {
+          type: "custom_message",
+          customType: "exec-continue",
+          content: message,
+          display: true,
+        },
+      ],
+      continue: true,
+    };
+  });
+
+  pi.on("before_agent_start", (event, ctx) => {
     planWritten = false;
+    baseline = snapshot(ctx.cwd);
+    continuations = 0;
+    finishRequested = false;
     const mode = state.name ? modes.get(state.name) : undefined;
     if (!mode) return;
     return { systemPrompt: `${event.systemPrompt}\n\n${mode.instructions}` };
