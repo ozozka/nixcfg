@@ -1,10 +1,11 @@
 /**
- * Roadmap storage, pure board transformations, and Pi presentation.
- * Modes do not participate: a compatible project board is writable in any mode;
- * otherwise the board lives in branch-aware, non-model session state.
+ * Roadmap tool: plans on a Markdown board, the project's own when it has a compatible one,
+ * otherwise a private board in .git. Shows the focused plan's progress below the editor,
+ * sends notices for ticked steps and completed plans, and reminds the agent of the focused
+ * plan after compaction.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, join, relative, resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
@@ -163,8 +164,9 @@ export function parseBoard(path: string, lines: string[]): Board | undefined {
   return { path, lines, container: range, level, sections, plans };
 }
 
-export function emptyBoard(): Board {
-  return parseBoard("session", ROADMAP_TEMPLATE.split("\n")) as Board;
+// A new board file: the six sections under a Roadmap heading.
+export function newBoard(path: string): Board {
+  return parseBoard(path, ROADMAP_TEMPLATE.split("\n")) as Board;
 }
 
 function reparse(board: Board, lines: string[]): Board {
@@ -256,26 +258,6 @@ export function startPlan(board: Board, plan: Plan): Board {
   return reparse(removed, appendToSection(removed.lines, active, block));
 }
 
-// Copies a plan between stores, preserving its stage and rejecting migration conflicts.
-export function copyPlan(target: Board, source: Board, plan: Plan, replace = false): Board {
-  const existing = findPlan(target, plan.name);
-  const body = planText(source, plan).split("\n").slice(1).join("\n").trim();
-  if (existing && !replace) {
-    const previous = planText(target, existing).split("\n").slice(1).join("\n").trim();
-    if (previous !== body || existing.section !== plan.section)
-      throw new Error(
-        `plan "${plan.name}" already exists in the project board with different content`,
-      );
-    return target;
-  }
-  const next = writePlan(target, plan.name, body);
-  return plan.section === "Active" ? startPlan(next, findPlan(next, plan.name) as Plan) : next;
-}
-
-export function removePlan(board: Board, plan: Plan): Board {
-  return reparse(board, splice(board.lines, plan.start, plan.end, []));
-}
-
 // Ticks a step, starting the plan first when it is still in Plans.
 export function tickStep(board: Board, plan: Plan, number: number): Board {
   if (!plan.steps.some((s) => s.number === number))
@@ -324,19 +306,30 @@ export function planText(board: Board, plan: Plan): string {
   return board.lines.slice(plan.start, contentEnd(board.lines, plan)).join("\n");
 }
 
-// Persistence
-
-export interface State {
-  root: string;
-  lines?: string[];
-  focus?: string;
-  // Session plans not yet copied to the project. Other local plans are recovery copies.
-  pending: string[];
-}
+// Storage: the project's compatible board, otherwise a private board in the repository's
+// common git directory (shared by its worktrees, never tracked). Reads never create files.
 
 export interface Location {
-  storage: "project" | "session";
-  path?: string;
+  board: Board;
+  // How results name the board, e.g. docs/roadmap.md or .git/roadmap.md.
+  label: string;
+  // File content before the action; undefined when the file does not exist yet.
+  original?: string;
+}
+
+const GITDIR = /^gitdir:\s*(.+)$/m;
+
+// The git directory shared by all worktrees, or undefined outside a repository.
+function gitCommonDir(root: string): string | undefined {
+  const dotGit = join(root, ".git");
+  if (!existsSync(dotGit)) return undefined;
+  if (statSync(dotGit).isDirectory()) return dotGit;
+  // A worktree: .git names its own git directory, whose commondir file names the shared one.
+  const match = GITDIR.exec(readFileSync(dotGit, "utf8"));
+  if (!match) return undefined;
+  const gitDir = resolve(root, match[1].trim());
+  const common = join(gitDir, "commondir");
+  return existsSync(common) ? resolve(gitDir, readFileSync(common, "utf8").trim()) : gitDir;
 }
 
 export function projectBoard(root: string): Board | undefined {
@@ -349,101 +342,42 @@ export function projectBoard(root: string): Board | undefined {
   return undefined;
 }
 
-export function localBoard(state: State): Board {
-  return (state.lines && parseBoard("session", state.lines)) || emptyBoard();
+export function locate(root: string): Location {
+  const project = projectBoard(root);
+  if (project)
+    return {
+      board: project,
+      label: relative(root, project.path),
+      original: project.lines.join("\n"),
+    };
+  const gitDir = gitCommonDir(root);
+  if (!gitDir) return { board: newBoard(""), label: "no board (not a git repository)" };
+  const path = join(gitDir, "roadmap.md");
+  const label = relative(root, path);
+  if (!existsSync(path)) return { board: newBoard(path), label };
+  const original = readFileSync(path, "utf8");
+  const board = parseBoard(path, original.split("\n"));
+  // Never repair: a local board edited into an invalid shape must be fixed by hand.
+  if (!board) throw new Error(`${label} is not a valid roadmap board; fix it by hand`);
+  return { board, label, original };
 }
 
-const includes = (names: string[], name?: string) =>
-  !!name && names.some((item) => item.toLowerCase() === name.toLowerCase());
-
-export function view(state: State, requested?: string): { board: Board; location: Location } {
-  const project = projectBoard(state.root);
-  const local = localBoard(state);
-  const name = requested ?? state.focus;
-  const pendingFocus = includes(state.pending, name) && findPlan(local, name as string);
-  return project && !pendingFocus
-    ? {
-        board: project,
-        location: { storage: "project", path: relative(state.root, project.path) },
-      }
-    : { board: local, location: { storage: "session" } };
-}
-
-// Prepare a mutation without side effects. Transfer only on an explicit board-changing
-// action, never on discovery, focus, mode changes, compaction, or resume.
-export function prepare(
-  state: State,
-  requested?: string,
-): {
-  board: Board;
-  location: Location;
-  state: State;
-  original?: string;
-} {
-  const local = localBoard(state);
-  const project = projectBoard(state.root);
-  if (!project) return { board: local, location: { storage: "session" }, state };
-  let board = project;
-  const transferred = new Set<string>();
-  for (const name of new Set([state.focus, requested])) {
-    if (!includes(state.pending, name)) continue;
-    const plan = findPlan(local, name as string);
-    if (!plan) continue;
-    board = copyPlan(board, local, plan);
-    transferred.add(plan.name.toLowerCase());
-  }
-  return {
-    board,
-    location: { storage: "project", path: relative(state.root, project.path) },
-    state: {
-      ...state,
-      pending: state.pending.filter((name) => !transferred.has(name.toLowerCase())),
-    },
-    original: project.lines.join("\n"),
-  };
-}
-
-// Return the next session snapshot, mirroring focused project plans for recovery while
-// retaining unrelated pending plans. The caller appends it only after a successful action.
-export function snapshot(
-  state: State,
-  board: Board,
-  location: Location,
-  focus: string | undefined,
-  removed?: string,
-): State {
-  if (location.storage === "session") {
-    const pending = new Set(state.pending.filter((name) => findPlan(board, name)));
-    for (const plan of board.plans) pending.add(plan.name);
-    return { root: state.root, lines: board.lines, focus, pending: [...pending] };
-  }
-  let local = localBoard(state);
-  const previous = removed && findPlan(local, removed);
-  const current = focus && findPlan(board, focus);
-  if (current) local = copyPlan(local, board, current, true);
-  else if (previous && !includes(state.pending, previous.name))
-    local = removePlan(local, previous);
-  return {
-    ...state,
-    lines: local.lines,
-    focus,
-    pending: state.pending.filter((name) => name.toLowerCase() !== removed?.toLowerCase()),
-  };
-}
-
-export function saveProject(board: Board, original: string): void {
-  // Refuse to overwrite an externally changed board or resurrect an incompatible one.
-  if (readFileSync(board.path, "utf8") !== original)
-    throw new Error("the project board changed during this action; retry");
+export function save(location: Location, board: Board): void {
+  if (!board.path) throw new Error("not a git repository; there is nowhere to store a board");
+  // Refuse to overwrite a board changed or created by someone else during the action.
+  const current = existsSync(board.path) ? readFileSync(board.path, "utf8") : undefined;
+  if (current !== location.original)
+    throw new Error("the board changed during this action; retry");
   writeFileSync(board.path, board.lines.join("\n"));
 }
 
 // Pi adapter
 
-const ENTRY = "roadmap-state";
+// The session remembers only which plan it works on; the board file holds everything else.
+const ENTRY = "roadmap-focus";
 const DESCRIPTION = `Manage plans with show, backlog (idea), write (plan and content), focus (plan), tick (step), and complete (delivered summaries).
 
-Use an existing board with Status, Limitations, Backlog, Plans, Active, and Completed in docs/roadmap.md or README.md's Roadmap section; otherwise keep resumable session state. Never create or repair project files. Pending focused session plans transfer on the next board mutation when a compatible board appears; differing name collisions fail.
+Use an existing board with Status, Limitations, Backlog, Plans, Active, and Completed in docs/roadmap.md or README.md's Roadmap section; otherwise use the private .git/roadmap.md, created on the first change. Never create or repair project files.
 
 Plan content is bullets with a \`- **Steps**:\` group and consecutive checkbox steps: \`  - [ ] **1. Title**: details\`. Other bullet groups are optional. Ticking starts a plan; completing requires all steps ticked.`;
 const Params = Type.Object({
@@ -471,12 +405,18 @@ const Params = Type.Object({
 const progress = (plan: { steps: { done: boolean }[] }) =>
   `${plan.steps.filter((step) => step.done).length}/${plan.steps.length}`;
 
-function restore(ctx: ExtensionContext): State {
+interface Focus {
+  root: string;
+  focus?: string;
+}
+
+// The focus recorded on this branch for this project.
+function restore(ctx: ExtensionContext): Focus {
   const root = projectRoot(ctx.cwd);
-  let state: State = { root, pending: [] };
+  let state: Focus = { root };
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type !== "custom" || entry.customType !== ENTRY) continue;
-    const saved = entry.data as State | undefined;
+    const saved = entry.data as Focus | undefined;
     if (saved?.root === root) state = saved;
   }
   return state;
@@ -491,7 +431,6 @@ function act(
   board: Board;
   message: string;
   focus?: string;
-  removed?: string;
   notice?: { message: string; final?: boolean };
 } {
   const target = () => {
@@ -552,7 +491,6 @@ function act(
       return {
         board: completePlan(board, plan, params.delivered ?? []),
         focus: focus?.toLowerCase() === plan.name.toLowerCase() ? undefined : focus,
-        removed: plan.name,
         message,
         notice: { message, final: true },
       };
@@ -564,9 +502,8 @@ export default function (pi: ExtensionAPI) {
   function widget(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
     try {
-      const state = restore(ctx);
-      const { board } = view(state);
-      const plan = currentPlan(board, undefined, state.focus);
+      const { board } = locate(projectRoot(ctx.cwd));
+      const plan = currentPlan(board, undefined, restore(ctx).focus);
       const next = plan?.steps.find((step) => !step.done);
       const theme = ctx.ui.theme;
       ctx.ui.setWidget(
@@ -587,43 +524,23 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  function execute(params: Static<typeof Params>, ctx: ExtensionContext) {
+  function execute(params: Static<typeof Params>, location: Location, ctx: ExtensionContext) {
     const state = restore(ctx);
-    const mutates = params.action !== "show" && params.action !== "focus";
-    const selected = mutates
-      ? prepare(state, params.plan)
-      : { ...view(state, params.plan), state };
-    const result = act(selected.board, params, state.focus);
-    const nextState =
-      params.action === "show"
-        ? undefined
-        : snapshot(
-            selected.state,
-            result.board,
-            selected.location,
-            result.focus,
-            result.removed,
-          );
-    if (mutates && selected.location.storage === "project")
-      saveProject(result.board, (selected as ReturnType<typeof prepare>).original as string);
-    if (nextState) pi.appendEntry(ENTRY, nextState);
+    const result = act(location.board, params, state.focus);
+    if (result.board !== location.board) save(location, result.board);
+    if (result.focus !== state.focus)
+      pi.appendEntry(ENTRY, { root: state.root, focus: result.focus });
     if (result.notice) sendNotice(pi, result.notice);
     widget(ctx);
-    const location = selected.location;
-    const label =
-      location.storage === "project"
-        ? `Project board: ${location.path}`
-        : "Session-local board";
-    return reply(`${label}\n${result.message}`, { location });
+    return reply(`Board: ${location.label}\n${result.message}`, { board: location.label });
   }
 
   pi.on("session_start", (_event, ctx) => widget(ctx));
   pi.on("session_tree", (_event, ctx) => widget(ctx));
   pi.on("agent_settled", (_event, ctx) => widget(ctx));
   pi.on("session_compact", (_event, ctx) => {
-    const state = restore(ctx);
-    const { board } = view(state);
-    const plan = currentPlan(board, undefined, state.focus);
+    const { board } = locate(projectRoot(ctx.cwd));
+    const plan = currentPlan(board, undefined, restore(ctx).focus);
     if (!plan?.steps.some((step) => !step.done)) return;
     pi.sendMessage(
       {
@@ -643,8 +560,11 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params, _signal, _update, ctx) {
       try {
         const root = projectRoot(ctx.cwd);
-        const path = projectBoard(root)?.path ?? join(root, ".pi-roadmap-session");
-        return await withFileMutationQueue(path, () => Promise.resolve(execute(params, ctx)));
+        // Locate inside the queue, so concurrent actions see each other's writes.
+        const key = locate(root).board.path || root;
+        return await withFileMutationQueue(key, () =>
+          Promise.resolve(execute(params, locate(root), ctx)),
+        );
       } catch (error) {
         const message = (error as Error).message;
         return reply(`Error: ${message}. The board was not changed.`, { error: message }, true);
@@ -659,7 +579,7 @@ export default function (pi: ExtensionAPI) {
       );
     },
     renderResult(result, _options, theme) {
-      const details = result.details as { error?: string; location?: Location };
+      const details = result.details as { error?: string };
       const first = result.content[0];
       return new Text(
         theme.fg(details.error ? "error" : "muted", first?.type === "text" ? first.text : ""),
@@ -675,7 +595,7 @@ export default function (pi: ExtensionAPI) {
       let name = args.trim();
       if (!name) {
         if (!ctx.hasUI) return;
-        const { board } = view(restore(ctx));
+        const { board } = locate(projectRoot(ctx.cwd));
         name =
           (await ctx.ui.select(
             "Focus plan",
@@ -684,7 +604,7 @@ export default function (pi: ExtensionAPI) {
       }
       if (!name) return;
       try {
-        execute({ action: "focus", plan: name }, ctx);
+        execute({ action: "focus", plan: name }, locate(projectRoot(ctx.cwd)), ctx);
       } catch (error) {
         ctx.ui.notify(`Roadmap: ${String(error)}`, "error");
       }
