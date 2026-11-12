@@ -531,6 +531,13 @@ function planText(board: Board, plan: Plan): string {
 // Roadmap tool
 
 const ROADMAP_TOOL = "roadmap";
+// Desktop notifications go through notify.ts on this event bus channel; a final notice stays
+// on the card instead of the run's "Done".
+const NOTIFY_CHANNEL = "notify";
+interface Notice {
+  message: string;
+  final?: boolean;
+}
 // Session entries recording the focused plan.
 const FOCUS_ENTRY = "roadmap-focus";
 const ROADMAP_ACTIONS = ["show", "backlog", "write", "focus", "tick", "complete"] as const;
@@ -610,7 +617,13 @@ function roadmapAction(
   cwd: string,
   params: RoadmapInput,
   focus: string | undefined,
-): { text: string; board: Board; plan?: Plan; focus?: string | null } {
+): {
+  text: string;
+  board: Board;
+  plan?: Plan;
+  focus?: string | null;
+  notice?: Notice;
+} {
   let board = findBoard(cwd);
   // Changes complete the board's sections first.
   if (params.action !== "show") board = ensureSections(board);
@@ -660,7 +673,10 @@ function roadmapAction(
       const plan = currentPlan(board, params.plan, focus) as Plan;
       const next = plan.steps.find((step) => !step.done);
       const rest = next ? ` Next: ${next.number}. ${next.title}` : " All steps are done.";
-      return { text: `Step ${params.step} ticked (${progress(plan)}).${rest}`, board, plan };
+      const title = plan.steps.find((step) => step.number === params.step)?.title ?? "";
+      const text = `Step ${params.step} ticked (${progress(plan)}).${rest}`;
+      const notice = { message: `Step ${params.step}/${plan.steps.length} done: ${title}` };
+      return { text, board, plan, notice };
     }
     case "complete": {
       const plan = target();
@@ -668,7 +684,8 @@ function roadmapAction(
       saveBoard(board);
       const cleared = focus?.toLowerCase() === plan.name.toLowerCase();
       const text = `Plan "${plan.name}" completed in ${where}.`;
-      return { text, board, focus: cleared ? null : undefined };
+      const notice = { message: `Plan "${plan.name}" completed`, final: true };
+      return { text, board, focus: cleared ? null : undefined, notice };
     }
     default:
       throw new Error(`unknown action ${params.action}`);
@@ -765,6 +782,7 @@ export default function (pi: ExtensionAPI) {
       try {
         const result = roadmapAction(ctx.cwd, params as RoadmapInput, focus);
         if (result.focus !== undefined) setFocus(ctx, result.focus ?? undefined);
+        if (result.notice) pi.events.emit(NOTIFY_CHANNEL, result.notice);
         if (params.action === "write") planWritten = true;
         updateWidget(ctx);
         return {
