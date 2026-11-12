@@ -1,11 +1,22 @@
 self:
 
-{ config, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   cfg = config.ozozka;
   agents = cfg.mod.dev.agents;
   settingsFormat = pkgs.formats.json { };
+  # The extensions and lib/ in one store path, so imports of lib/ resolve next to the
+  # extension files whether Pi follows the links or not.
+  extensions = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.fileFilter (file: file.hasExt "ts") ./.;
+  };
 in
 {
   imports = with self.nixosModules; [
@@ -25,14 +36,14 @@ in
       # Subagent definitions for subagent.ts.
       "agents" = ./agents;
 
-      "extensions" = {
-        "docs.ts" = ./docs.ts;
-        "mode.ts" = ./mode.ts;
-        "notify.ts" = ./notify.ts;
-        "question.ts" = ./question.ts;
-        "status.ts" = ./status.ts;
-        "subagent.ts" = ./subagent.ts;
-      };
+      "extensions" =
+        lib.genAttrs [ "docs.ts" "mode.ts" "notify.ts" "question.ts" "status.ts" "subagent.ts" ] (
+          file: "${extensions}/${file}"
+        )
+        // {
+          # Shared code; Pi skips folders without an index file.
+          "lib" = "${extensions}/lib";
+        };
 
       "settings.json" = settingsFormat.generate "settings.json" {
         lastChangelogVersion = "1.5.0";

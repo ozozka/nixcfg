@@ -12,9 +12,9 @@
 
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { onNotice } from "./lib/shared.ts";
 
 const NOTIFICATION_ID = /^u (\d+)/;
-const NOTIFY_CHANNEL = "notify";
 // Longest summary shown after "Done: " or "Failed: ".
 const SUMMARY_LENGTH = 80;
 
@@ -108,10 +108,9 @@ export default function (pi: ExtensionAPI) {
     context = ctx;
   });
 
-  pi.events.on(NOTIFY_CHANNEL, (data) => {
-    const { message, final } = (data ?? {}) as { message?: unknown; final?: unknown };
-    if (typeof message !== "string" || !context) return;
-    if (final === true) kept = true;
+  onNotice(pi, ({ message, final }) => {
+    if (!context) return;
+    if (final) kept = true;
     notify(context, message);
   });
 

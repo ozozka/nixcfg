@@ -32,6 +32,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { type Notice, sendNotice, sendStatus } from "./lib/shared.ts";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
@@ -48,8 +49,6 @@ const THINKING_LEVELS: readonly string[] = [
 ];
 
 const MODE_ENTRY = "mode";
-// The status line (status.ts) takes the mode on this event bus channel.
-const STATUS_CHANNEL = "status";
 // The default mode: no mode file, the normal settings.
 const FREE = "free";
 const FREE_COLOR = "text";
@@ -533,13 +532,6 @@ function planText(board: Board, plan: Plan): string {
 // Roadmap tool
 
 const ROADMAP_TOOL = "roadmap";
-// Desktop notifications go through notify.ts on this event bus channel; a final notice stays
-// on the card instead of the run's "Done".
-const NOTIFY_CHANNEL = "notify";
-interface Notice {
-  message: string;
-  final?: boolean;
-}
 // Session entries recording the focused plan.
 const FOCUS_ENTRY = "roadmap-focus";
 const ROADMAP_ACTIONS = ["show", "backlog", "write", "focus", "tick", "complete"] as const;
@@ -787,7 +779,7 @@ export default function (pi: ExtensionAPI) {
       try {
         const result = roadmapAction(ctx.cwd, params as RoadmapInput, focus);
         if (result.focus !== undefined) setFocus(ctx, result.focus ?? undefined);
-        if (result.notice) pi.events.emit(NOTIFY_CHANNEL, result.notice);
+        if (result.notice) sendNotice(pi, result.notice);
         if (params.action === "write") planWritten = true;
         updateWidget(ctx);
         return {
@@ -833,7 +825,7 @@ export default function (pi: ExtensionAPI) {
     const mode = state.name ? modes.get(state.name) : undefined;
     const name = state.name ?? FREE;
     const color = mode?.color ?? FREE_COLOR;
-    pi.events.emit(STATUS_CHANNEL, {
+    sendStatus(pi, {
       key: MODE_ENTRY,
       render: (theme: Theme) => theme.bold(theme.fg(color, name)),
       // The working spinner takes the mode color too.
@@ -939,8 +931,7 @@ export default function (pi: ExtensionAPI) {
         : "";
     // A stop the user should see on the card; a run that ticks nothing usually asks something,
     // which notify.ts's "Done" summary already shows.
-    const alert = (notice: string) =>
-      pi.events.emit(NOTIFY_CHANNEL, { message: notice, final: true });
+    const alert = (notice: string) => sendNotice(pi, { message: notice, final: true });
     if (BLOCKED.test(text)) {
       alert(text.trim().split("\n")[0]);
       return stop("blocked");

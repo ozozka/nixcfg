@@ -30,12 +30,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { sendStatus } from "./lib/shared.ts";
 
 const CHILD_ENV = "PI_SUBAGENT";
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
-// The status line (status.ts) takes the running count on this event bus channel.
-const STATUS_CHANNEL = "status";
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const PREVIOUS = /\{previous\}/g;
@@ -496,7 +495,7 @@ export default function (pi: ExtensionAPI) {
   let runningChildren = 0;
   function sendRunning() {
     const count = runningChildren;
-    pi.events.emit(STATUS_CHANNEL, {
+    sendStatus(pi, {
       key: "subagents",
       render:
         count > 0

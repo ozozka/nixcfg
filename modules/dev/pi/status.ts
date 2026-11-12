@@ -23,8 +23,8 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { onStatus, type ThemeColor } from "./lib/shared.ts";
 
-const STATUS_CHANNEL = "status";
 // Without a segment's color, the working spinner uses this one.
 const SPINNER_COLOR = "accent";
 const CODEX_PROVIDER = "openai-codex";
@@ -36,8 +36,6 @@ const CONTEXT_ERROR = 90;
 // Codex quotas belong to the account, not the session, so the latest snapshot is kept here for
 // the next session; the stale rule above marks it until a response refreshes it.
 const USAGE_FILE = join(getAgentDir(), "codex-usage.json");
-
-type ThemeColor = Parameters<Theme["fg"]>[0];
 
 type UsageWindow = {
   usedPercent: number;
@@ -353,17 +351,10 @@ export default function (pi: ExtensionAPI) {
     finishRun();
   }
 
-  pi.events.on(STATUS_CHANNEL, (data) => {
-    const { key, render, spinner } = (data ?? {}) as {
-      key?: unknown;
-      render?: unknown;
-      spinner?: unknown;
-    };
-    if (typeof key !== "string") return;
-    if (typeof render === "function") segments.set(key, render as (theme: Theme) => string);
+  onStatus(pi, ({ key, render, spinner }) => {
+    if (render) segments.set(key, render);
     else segments.delete(key);
-    if (typeof render === "function" && typeof spinner === "string")
-      spinnerColors.set(key, spinner as ThemeColor);
+    if (render && spinner) spinnerColors.set(key, spinner);
     else spinnerColors.delete(key);
     updateStatus();
   });
