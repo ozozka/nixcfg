@@ -735,8 +735,6 @@ export default function (pi: ExtensionAPI) {
       }
     }
     ctx.ui.setWidget(ROADMAP_TOOL, lines.length > 0 ? lines : undefined);
-    // Setting a widget moves it below the status line; resending the mode moves the line back.
-    updateStatus();
   }
 
   function setFocus(ctx: ExtensionContext, name: string | undefined) {

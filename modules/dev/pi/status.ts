@@ -1,23 +1,24 @@
 /**
- * The status line, shown just above the editor: segments other extensions send on the "status"
- * event bus channel as { key, render? } (render: (theme) => string; none removes the segment),
- * ordered by key, then the session's work clock, Codex quota, and tool calls.
+ * The status line, drawn on the left of the editor's bottom border (Pi draws its working status
+ * in the top border): segments other extensions send on the "status" event bus channel as
+ * { key, render? } (render: (theme) => string; none removes the segment), ordered by key, then
+ * the session's work clock, Codex quota, and tool calls.
  *
- * Pi renders widgets above the editor in the order they were last set, so the line is set
- * again whenever a segment arrives; an extension that changes its own widget above the editor
- * (the roadmap) sends its segment afterwards to keep the line closest to the editor.
+ * The border needs Pi's editor replaced with a subclass (StatusEditor), set for each session;
+ * another extension that replaces the editor takes the line with it.
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
   getAgentDir,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-const STATUS_KEY = "status";
 const STATUS_CHANNEL = "status";
 const CODEX_PROVIDER = "openai-codex";
 const STALE_AFTER_MS = 10 * 60 * 1000;
@@ -109,6 +110,28 @@ function saveUsage(windows: UsageWindow[]) {
   }
 }
 
+// Pi's editor with the status line on the left of its bottom border, ahead of the scroll
+// marker; the line is cut to fit, and a border too narrow for it stays plain.
+class StatusEditor extends CustomEditor {
+  status = "";
+
+  protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
+    const marker = hiddenLineCount > 0 ? ` ↓ ${hiddenLineCount} more ──` : "─";
+    // "── " before the status, " " and at least one "─" or the marker after it.
+    const room = width - 4 - visibleWidth(marker);
+    if (this.status === "" || room < 1) return super.renderBottomBorder(width, hiddenLineCount);
+    const status = truncateToWidth(this.status, room);
+    const fill = "─".repeat(room - visibleWidth(status));
+    return this.borderColor("── ") + status + this.borderColor(` ${fill}${marker}`);
+  }
+
+  setStatus(status: string) {
+    if (status === this.status) return;
+    this.status = status;
+    this.tui.requestRender();
+  }
+}
+
 function formatWindowLabel(windowMinutes: number): string {
   if (windowMinutes === 300) return "5h";
   if (windowMinutes === 10_080) return "w";
@@ -146,14 +169,13 @@ export default function (pi: ExtensionAPI) {
   let lastPromptMilliseconds = 0;
   let selectedProvider: string | undefined;
   let requestProvider: string | undefined;
-  let lastStatus: string | undefined;
+  let editor: StatusEditor | undefined;
   const usage = new Map<number, UsageWindow>();
   let toolCalls = 0;
   // Segments from other extensions by key; kept across sessions, since they resend on change.
   const segments = new Map<string, (theme: Theme) => string>();
 
-  // `force` sets the line even when unchanged, moving it back below the other widgets.
-  function updateStatus(force = false) {
+  function updateStatus() {
     if (!context) return;
     const elapsed = formatDuration(
       activeMilliseconds +
@@ -182,10 +204,7 @@ export default function (pi: ExtensionAPI) {
         .map(([, render]) => render(theme)),
       parts.join(theme.fg("muted", " * ")),
     ].join(" ");
-    if (force || status !== lastStatus) {
-      context.ui.setWidget(STATUS_KEY, [status]);
-      lastStatus = status;
-    }
+    editor?.setStatus(status);
   }
 
   function saveWindows(windows: Array<UsageWindow | undefined>) {
@@ -198,14 +217,14 @@ export default function (pi: ExtensionAPI) {
   function stop() {
     if (timer !== undefined) clearInterval(timer);
     timer = undefined;
-    context?.ui.setWidget(STATUS_KEY, undefined);
     context = undefined;
     activeMilliseconds = 0;
     activeStartedAt = undefined;
     lastPromptMilliseconds = 0;
     selectedProvider = undefined;
     requestProvider = undefined;
-    lastStatus = undefined;
+    editor?.setStatus("");
+    editor = undefined;
     usage.clear();
     toolCalls = 0;
   }
@@ -241,7 +260,7 @@ export default function (pi: ExtensionAPI) {
     if (typeof key !== "string") return;
     if (typeof render === "function") segments.set(key, render as (theme: Theme) => string);
     else segments.delete(key);
-    updateStatus(true);
+    updateStatus();
   });
 
   pi.on("tool_execution_start", () => {
@@ -256,6 +275,11 @@ export default function (pi: ExtensionAPI) {
     context = ctx;
     selectedProvider = ctx.model?.provider;
     for (const window of loadUsage()) usage.set(window.windowMinutes, window);
+    // Pi restores its own editor between sessions, so each session sets this one again.
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+      editor = new StatusEditor(tui, theme, keybindings, { embedWorkingStatus: true });
+      return editor;
+    });
     restoreMetrics(ctx);
     updateStatus();
     // Local display updates only: no quota queries or other network requests.
