@@ -753,6 +753,7 @@ export default function (pi: ExtensionAPI) {
       const plan = (entry.data as { plan?: unknown } | undefined)?.plan;
       focus = typeof plan === "string" ? plan : undefined;
     }
+    updateWidget(ctx);
   }
 
   // The summary replaces earlier roadmap calls in the model's context, so the focused plan is
