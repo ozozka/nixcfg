@@ -16,7 +16,7 @@
  *
  * Roadmap: the only place for task organization, in every mode. The `roadmap` tool writes plans
  * to the project's roadmap board and ticks their steps (see Roadmap board below). Each session
- * focuses one plan (`/roadmap`), which the widget above the editor shows while it has open
+ * focuses one plan (`/roadmap`), which the widget below the editor shows while it has open
  * steps and compaction re-sends to the model. Derived from the Pi todo example.
  */
 
@@ -734,7 +734,9 @@ export default function (pi: ExtensionAPI) {
         lines.push(`${checkbox(status, theme)} ${theme.bold(`${step.number}. ${step.title}`)}`);
       }
     }
-    ctx.ui.setWidget(ROADMAP_TOOL, lines.length > 0 ? lines : undefined);
+    ctx.ui.setWidget(ROADMAP_TOOL, lines.length > 0 ? lines : undefined, {
+      placement: "belowEditor",
+    });
   }
 
   function setFocus(ctx: ExtensionContext, name: string | undefined) {
