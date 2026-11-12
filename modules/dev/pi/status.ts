@@ -2,7 +2,7 @@
  * The status line, drawn on the left of the editor's bottom border (Pi draws its working status
  * in the top border): segments other extensions send on the "status" event bus channel as
  * { key, render? } (render: (theme) => string; none removes the segment), ordered by key, then
- * the session's work clock, Codex quota, and tool calls.
+ * the session's work clock and Codex quota.
  * Context use and the model with its thinking level are on the right of the same border, and
  * the folder, git branch, and session name on the right of the top border, after Pi's working
  * status; Pi's footer, which showed these, is replaced with an empty one.
@@ -231,7 +231,6 @@ export default function (pi: ExtensionAPI) {
   // Pi gives the git branch only to footers; see session_start.
   let footerData: ReadonlyFooterDataProvider | undefined;
   const usage = new Map<number, UsageWindow>();
-  let toolCalls = 0;
   // Segments from other extensions by key; kept across sessions, since they resend on change.
   const segments = new Map<string, (theme: Theme) => string>();
 
@@ -256,7 +255,6 @@ export default function (pi: ExtensionAPI) {
           .join(" - "),
       );
     }
-    if (toolCalls > 0) parts.push(`${toolCalls} ${toolCalls === 1 ? "call" : "calls"}`);
     // Rebuild themed strings on every update so theme changes refresh colors.
     const status = [
       ...[...segments.entries()]
@@ -316,13 +314,12 @@ export default function (pi: ExtensionAPI) {
     footerData = undefined;
     editor = undefined;
     usage.clear();
-    toolCalls = 0;
   }
 
-  // Rebuilds the work clock and tool calls from the session's messages, so a resumed, reloaded,
-  // or forked session continues its counts and a new one starts at zero. A run lasts from its
+  // Rebuilds the work clock from the session's messages, so a resumed, reloaded, or forked
+  // session continues its time and a new one starts at zero. A run lasts from its
   // user message to the last message before the next one, which approximates the live clock.
-  function restoreMetrics(ctx: ExtensionContext) {
+  function restoreClock(ctx: ExtensionContext) {
     let runStart: number | undefined;
     let runEnd = 0;
     const finishRun = () => {
@@ -337,8 +334,6 @@ export default function (pi: ExtensionAPI) {
       if (entry.message.role === "user") {
         finishRun();
         runStart = time;
-      } else if (entry.message.role === "toolResult") {
-        toolCalls++;
       }
       runEnd = time;
     }
@@ -350,12 +345,6 @@ export default function (pi: ExtensionAPI) {
     if (typeof key !== "string") return;
     if (typeof render === "function") segments.set(key, render as (theme: Theme) => string);
     else segments.delete(key);
-    updateStatus();
-  });
-
-  pi.on("tool_execution_start", () => {
-    if (!context) return;
-    toolCalls++;
     updateStatus();
   });
 
@@ -383,7 +372,7 @@ export default function (pi: ExtensionAPI) {
         dispose: unsubscribe,
       };
     });
-    restoreMetrics(ctx);
+    restoreClock(ctx);
     updateStatus();
     // Local display updates only: no quota queries or other network requests.
     // While idle the work clock stays frozen; reset countdowns can still change.
