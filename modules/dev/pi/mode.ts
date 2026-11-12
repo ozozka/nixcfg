@@ -493,13 +493,13 @@ function findPlan(board: Board, name: string): Plan | undefined {
   return board.plans.find((plan) => plan.name.toLowerCase() === wanted);
 }
 
-// The plan to work on: the named one, else the first active one, else the only planned one.
-function currentPlan(board: Board, name?: string): Plan | undefined {
+// The plan to work on: the named one, else the session's focus, else the only active one.
+function currentPlan(board: Board, name?: string, focus?: string): Plan | undefined {
   if (name) return findPlan(board, name);
-  const active = board.plans.find((plan) => plan.section === "Active");
-  if (active) return active;
-  const planned = board.plans.filter((plan) => plan.section === "Plans");
-  return planned.length === 1 ? planned[0] : undefined;
+  const focused = focus ? findPlan(board, focus) : undefined;
+  if (focused) return focused;
+  const active = board.plans.filter((plan) => plan.section === "Active");
+  return active.length === 1 ? active[0] : undefined;
 }
 
 // Plan content: a leading heading is dropped; it needs a Steps group with steps numbered from 1.
@@ -584,14 +584,16 @@ function planText(board: Board, plan: Plan): string {
 // Roadmap tool
 
 const ROADMAP_TOOL = "roadmap";
-const ROADMAP_ACTIONS = ["show", "write", "tick", "complete"] as const;
+// Session entries recording the focused plan.
+const FOCUS_ENTRY = "roadmap-focus";
+const ROADMAP_ACTIONS = ["show", "write", "focus", "tick", "complete"] as const;
 
 const RoadmapParams = Type.Object({
   action: StringEnum(ROADMAP_ACTIONS),
   plan: Type.Optional(
     Type.String({
       description:
-        "Plan name; write needs it, the others default to the active plan (or the only one in Plans)",
+        "Plan name; write and focus need it, the others default to the focused plan (or the only active one)",
     }),
   ),
   content: Type.Optional(
@@ -609,8 +611,9 @@ const RoadmapParams = Type.Object({
 
 const ROADMAP_DESCRIPTION = `Manage plans on the project's roadmap board: docs/roadmap.md or README.md's Roadmap section when they have one, otherwise a root roadmap.md (created on the first change). The board has six sections: Status and Limitations (free text, edited like other documentation), Backlog, Plans, Active, and Completed.
 Actions:
-- show: the board's plans and the current plan's text.
-- write: add a plan to Plans, or replace an existing plan's body where it is.
+- show: the board's plans and the focused plan's text.
+- write: add a plan to Plans, or replace an existing plan's body where it is; focuses it.
+- focus: make a plan the one this session works on.
 - tick: mark a step done; the plan moves from Plans to Active on its first tick.
 - complete: when all steps are ticked, replace the plan with Completed lines.
 Plan format (the body, without the heading): bullets only; bold groups \`- **Goal**:\`, \`- **Findings**:\`, \`- **Decisions**:\`, \`- **Specification**:\`, and \`- **Steps**:\`, leaving out empty ones; each step under Steps is \`  - [ ] **1. Title**: details\`, numbered from 1, one commit each.`;
@@ -651,27 +654,29 @@ interface RoadmapInput {
   delivered?: string[];
 }
 
-// Runs a roadmap action and returns the message for the model and the plan it concerns.
+// Runs a roadmap action and returns the message for the model, the plan it concerns, and the
+// session's focus afterwards (null clears it).
 function roadmapAction(
   cwd: string,
   params: RoadmapInput,
-): { text: string; board: Board; plan?: Plan } {
+  focus: string | undefined,
+): { text: string; board: Board; plan?: Plan; focus?: string | null } {
   let board = findBoard(cwd);
   // Changes complete the board's sections first.
   if (params.action !== "show") board = ensureSections(board);
   const where = board.path.slice(projectRoot(cwd).length + 1);
   const target = () => {
-    const plan = currentPlan(board, params.plan);
+    const plan = currentPlan(board, params.plan, focus);
     if (!plan)
       throw new Error(
-        params.plan ? `no plan named "${params.plan}"` : "no active plan; name the plan",
+        params.plan ? `no plan named "${params.plan}"` : "no focused plan; name the plan",
       );
     return plan;
   };
   switch (params.action) {
     case "show": {
-      const plan = currentPlan(board, params.plan);
-      const text = plan ? `\n\n${planText(board, plan)}` : "";
+      const plan = currentPlan(board, params.plan, focus);
+      const text = plan ? `\n\nFocused plan:\n${planText(board, plan)}` : "";
       return { text: `Board in ${where}:\n${boardOverview(board)}${text}`, board, plan };
     }
     case "write": {
@@ -680,16 +685,23 @@ function roadmapAction(
       saveBoard(board);
       const plan = currentPlan(board, params.plan) as Plan;
       return {
-        text: `Plan "${plan.name}" written to ${plan.section} in ${where}.`,
+        text: `Plan "${plan.name}" written to ${plan.section} in ${where}, and focused.`,
         board,
         plan,
+        focus: plan.name,
       };
+    }
+    case "focus": {
+      if (!params.plan) throw new Error("focus needs plan");
+      const plan = target();
+      const text = `Focused plan "${plan.name}" (${progress(plan)} steps done).`;
+      return { text, board, plan, focus: plan.name };
     }
     case "tick": {
       if (params.step === undefined) throw new Error("tick needs step");
       board = tickStep(board, target(), params.step);
       saveBoard(board);
-      const plan = currentPlan(board, params.plan) as Plan;
+      const plan = currentPlan(board, params.plan, focus) as Plan;
       const next = plan.steps.find((step) => !step.done);
       const rest = next ? ` Next: ${next.number}. ${next.title}` : " All steps are done.";
       return { text: `Step ${params.step} ticked (${progress(plan)}).${rest}`, board, plan };
@@ -698,7 +710,9 @@ function roadmapAction(
       const plan = target();
       board = completePlan(board, plan, params.delivered ?? []);
       saveBoard(board);
-      return { text: `Plan "${plan.name}" completed in ${where}.`, board };
+      const cleared = focus?.toLowerCase() === plan.name.toLowerCase();
+      const text = `Plan "${plan.name}" completed in ${where}.`;
+      return { text, board, focus: cleared ? null : undefined };
     }
     default:
       throw new Error(`unknown action ${params.action}`);
@@ -706,10 +720,10 @@ function roadmapAction(
 }
 
 // The plan the widget and the mode checks follow, or undefined without a readable board.
-function trackedPlan(cwd: string): Plan | undefined {
+function trackedPlan(cwd: string, focus: string | undefined): Plan | undefined {
   try {
     const board = findBoard(cwd);
-    return board.created ? undefined : currentPlan(board);
+    return board.created ? undefined : currentPlan(board, undefined, focus);
   } catch {
     return undefined;
   }
@@ -722,6 +736,8 @@ export default function (pi: ExtensionAPI) {
   let items: TodoItem[] = [];
   // A plan was written in the current run; roadmap modes offer `next` only then.
   let planWritten = false;
+  // The roadmap plan this session works on, recorded in the session (see setFocus).
+  let focus: string | undefined;
 
   const isModeName = (value: unknown): value is string =>
     typeof value === "string" && modes.has(value);
@@ -729,7 +745,7 @@ export default function (pi: ExtensionAPI) {
   const currentMode = () => (state.name ? modes.get(state.name) : undefined);
   const roadmapMode = () => currentMode()?.roadmap === true;
   const hasOpenSteps = (ctx: ExtensionContext) =>
-    trackedPlan(ctx.cwd)?.steps.some((step) => !step.done) === true;
+    trackedPlan(ctx.cwd, focus)?.steps.some((step) => !step.done) === true;
 
   // Task list
 
@@ -738,7 +754,7 @@ export default function (pi: ExtensionAPI) {
     if (!ctx.hasUI) return;
     const theme = ctx.ui.theme;
     const lines: string[] = [];
-    const plan = roadmapMode() ? trackedPlan(ctx.cwd) : undefined;
+    const plan = roadmapMode() ? trackedPlan(ctx.cwd, focus) : undefined;
     if (plan?.steps.some((step) => !step.done)) {
       const next = plan.steps.find((step) => !step.done);
       const done = plan.steps.filter((step) => step.done).length;
@@ -754,6 +770,22 @@ export default function (pi: ExtensionAPI) {
       lines.push(...items.map((item) => formatItem(item, theme)));
     }
     ctx.ui.setWidget("todo", lines.length > 0 ? lines : undefined);
+  }
+
+  function setFocus(ctx: ExtensionContext, name: string | undefined) {
+    if (name === focus) return;
+    focus = name;
+    pi.appendEntry(FOCUS_ENTRY, { plan: name ?? null });
+    updateWidget(ctx);
+  }
+
+  function restoreFocus(ctx: ExtensionContext) {
+    focus = undefined;
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "custom" || entry.customType !== FOCUS_ENTRY) continue;
+      const plan = (entry.data as { plan?: unknown } | undefined)?.plan;
+      focus = typeof plan === "string" ? plan : undefined;
+    }
   }
 
   function restoreTasks(ctx: ExtensionContext) {
@@ -774,7 +806,7 @@ export default function (pi: ExtensionAPI) {
     if (roadmapMode()) {
       try {
         const board = findBoard(ctx.cwd);
-        const plan = board.created ? undefined : currentPlan(board);
+        const plan = board.created ? undefined : currentPlan(board, undefined, focus);
         if (plan?.steps.some((step) => !step.done))
           reminders.push(`Roadmap plan from before compaction:\n${planText(board, plan)}`);
       } catch {
@@ -854,7 +886,8 @@ export default function (pi: ExtensionAPI) {
     // biome-ignore lint/suspicious/useAwait: Pi's tool API requires a Promise.
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
-        const result = roadmapAction(ctx.cwd, params as RoadmapInput);
+        const result = roadmapAction(ctx.cwd, params as RoadmapInput, focus);
+        if (result.focus !== undefined) setFocus(ctx, result.focus ?? undefined);
         if (params.action === "write") planWritten = true;
         updateWidget(ctx);
         return {
@@ -953,10 +986,12 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (errors.length > 0) ctx.ui.notify(`Modes: ${errors.join("; ")}`, "warning");
+    restoreFocus(ctx);
     restoreMode(ctx);
     restoreTasks(ctx);
   });
   pi.on("session_tree", (_event, ctx) => {
+    restoreFocus(ctx);
     restoreMode(ctx);
     restoreTasks(ctx);
   });
@@ -986,7 +1021,7 @@ export default function (pi: ExtensionAPI) {
   let finishRequested = false;
 
   const snapshot = (cwd: string) => {
-    const plan = trackedPlan(cwd);
+    const plan = trackedPlan(cwd, focus);
     return { plan: plan?.name, done: plan?.steps.filter((step) => step.done).length ?? 0 };
   };
 
@@ -994,7 +1029,7 @@ export default function (pi: ExtensionAPI) {
     if (!currentMode()?.autoContinue || event.outcome !== "completed") return;
     const previous = baseline;
     baseline = snapshot(ctx.cwd);
-    const plan = trackedPlan(ctx.cwd);
+    const plan = trackedPlan(ctx.cwd, focus);
     if (!plan) return;
     const stop = (reason: string) => ctx.ui.notify(`Exec stopped: ${reason}`, "info");
 
@@ -1040,6 +1075,44 @@ export default function (pi: ExtensionAPI) {
     const mode = state.name ? modes.get(state.name) : undefined;
     if (!mode) return;
     return { systemPrompt: `${event.systemPrompt}\n\n${mode.instructions}` };
+  });
+
+  pi.registerCommand("roadmap", {
+    description: "Focus a roadmap plan for this session: /roadmap, /roadmap <name>",
+    handler: async (args, ctx) => {
+      let board: Board;
+      try {
+        board = findBoard(ctx.cwd);
+      } catch (error) {
+        ctx.ui.notify(`Roadmap: ${(error as Error).message}`, "error");
+        return;
+      }
+      const requested = args.trim();
+      let name: string | undefined;
+      if (requested) {
+        name = findPlan(board, requested)?.name;
+        if (!name) {
+          ctx.ui.notify(`No plan named "${requested}"`, "error");
+          return;
+        }
+      } else {
+        if (!ctx.hasUI) return;
+        if (board.plans.length === 0) {
+          ctx.ui.notify("No plans on the board", "info");
+          return;
+        }
+        const labels = new Map<string, string>(
+          board.plans.map(
+            (plan) => [`${plan.name} (${plan.section}, ${progress(plan)})`, plan.name] as const,
+          ),
+        );
+        const choice = await ctx.ui.select("Focus plan", [...labels.keys()]);
+        if (choice === undefined) return;
+        name = labels.get(choice);
+      }
+      setFocus(ctx, name);
+      ctx.ui.notify(`Focus: ${name}`, "info");
+    },
   });
 
   pi.registerCommand("mode", {
