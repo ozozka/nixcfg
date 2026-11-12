@@ -3,19 +3,22 @@
  * in the top border): segments other extensions send on the "status" event bus channel as
  * { key, render? } (render: (theme) => string; none removes the segment), ordered by key, then
  * the session's work clock, Codex quota, and tool calls.
- * Context use and the model with its thinking level are on the right of the same border.
+ * Context use and the model with its thinking level are on the right of the same border, and
+ * the folder, git branch, and session name on the right of the top border, after Pi's working
+ * status; Pi's footer, which showed these, is replaced with an empty one.
  *
  * The border needs Pi's editor replaced with a subclass (StatusEditor), set for each session;
  * another extension that replaces the editor takes the line with it.
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
   getAgentDir,
+  type ReadonlyFooterDataProvider,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -136,11 +139,29 @@ function borderLine(
   return start + border("─".repeat(Math.max(1, fill)) + markerText) + end;
 }
 
-// Pi's editor with the status line on the left of its bottom border and the session's details
-// (context use, model) on the right, around the scroll marker.
+type WorkingIndicator = Parameters<CustomEditor["setWorkingStatusIndicator"]>[0];
+
+// Pi's editor with the session's place (folder, branch, name) on the right of its top border,
+// after Pi's working status, and with the status line on the left of its bottom border and the
+// session's details (context use, model) on the right, each around its scroll marker.
 class StatusEditor extends CustomEditor {
   status = "";
   details = "";
+  place = "";
+  // Pi's working status, which the base class keeps private.
+  working: WorkingIndicator;
+
+  override setWorkingStatusIndicator(indicator: WorkingIndicator) {
+    this.working = indicator;
+    super.setWorkingStatusIndicator(indicator);
+  }
+
+  protected override renderTopBorder(width: number, hiddenLineCount: number): string {
+    const marker = hiddenLineCount > 0 ? `↑ ${hiddenLineCount} more` : "";
+    if (width < 8) return super.renderTopBorder(width, hiddenLineCount);
+    const working = this.working?.renderInBorder(width) ?? "";
+    return borderLine(width, this.borderColor, working, marker, this.place);
+  }
 
   protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
     const marker = hiddenLineCount > 0 ? `↓ ${hiddenLineCount} more` : "";
@@ -148,10 +169,11 @@ class StatusEditor extends CustomEditor {
     return borderLine(width, this.borderColor, this.status, marker, this.details);
   }
 
-  setStatus(status: string, details: string) {
-    if (status === this.status && details === this.details) return;
+  setStatus(status: string, details: string, place: string) {
+    if (status === this.status && details === this.details && place === this.place) return;
     this.status = status;
     this.details = details;
+    this.place = place;
     this.tui.requestRender();
   }
 }
@@ -201,6 +223,8 @@ export default function (pi: ExtensionAPI) {
   let selectedProvider: string | undefined;
   let requestProvider: string | undefined;
   let editor: StatusEditor | undefined;
+  // Pi gives the git branch only to footers; see session_start.
+  let footerData: ReadonlyFooterDataProvider | undefined;
   const usage = new Map<number, UsageWindow>();
   let toolCalls = 0;
   // Segments from other extensions by key; kept across sessions, since they resend on change.
@@ -235,7 +259,7 @@ export default function (pi: ExtensionAPI) {
         .map(([, render]) => render(theme)),
       ...parts,
     ].join(theme.fg("muted", " * "));
-    editor?.setStatus(status, details(context, theme));
+    editor?.setStatus(status, details(context, theme), place(context));
   }
 
   // Context use and the model with its thinking level, for the right of the bottom border.
@@ -257,6 +281,13 @@ export default function (pi: ExtensionAPI) {
     return parts.join(theme.fg("muted", " * "));
   }
 
+  // The folder, git branch, and session name, for the right of the top border.
+  function place(ctx: ExtensionContext): string {
+    const branch = footerData?.getGitBranch();
+    const name = pi.getSessionName();
+    return `${basename(ctx.cwd) || ctx.cwd}${branch ? ` (${branch})` : ""}${name ? ` • ${name}` : ""}`;
+  }
+
   function saveWindows(windows: Array<UsageWindow | undefined>) {
     const received = windows.filter((window) => window !== undefined);
     for (const window of received) usage.set(window.windowMinutes, window);
@@ -273,7 +304,8 @@ export default function (pi: ExtensionAPI) {
     lastPromptMilliseconds = 0;
     selectedProvider = undefined;
     requestProvider = undefined;
-    editor?.setStatus("", "");
+    editor?.setStatus("", "", "");
+    footerData = undefined;
     editor = undefined;
     usage.clear();
     toolCalls = 0;
@@ -329,6 +361,19 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       editor = new StatusEditor(tui, theme, keybindings, { embedWorkingStatus: true });
       return editor;
+    });
+    // The borders show what Pi's footer did, so the footer draws nothing; it stays to receive
+    // the git branch and its changes.
+    ctx.ui.setFooter((_tui, _theme, data) => {
+      footerData = data;
+      const unsubscribe = data.onBranchChange(() => updateStatus());
+      return {
+        render: () => [],
+        invalidate() {
+          // Nothing is cached.
+        },
+        dispose: unsubscribe,
+      };
     });
     restoreMetrics(ctx);
     updateStatus();
@@ -419,6 +464,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", () => updateStatus());
   pi.on("session_compact", () => updateStatus());
   pi.on("thinking_level_select", () => updateStatus());
+  pi.on("session_info_changed", () => updateStatus());
 
   pi.on("agent_end", () => {
     requestProvider = undefined;
