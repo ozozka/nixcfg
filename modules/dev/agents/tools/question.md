@@ -10,4 +10,4 @@ allowOther: "Allow 'Type something' option (default: true)"
 questions: Questions to ask the user
 ---
 
-Ask the user one or more questions. Use for clarifying requirements, getting preferences, or confirming decisions. For single questions, shows a simple option list. For multiple questions, shows a tab-based interface.
+Ask one or more questions with selectable answers and optional custom input. One question uses a list; multiple questions use tabs.

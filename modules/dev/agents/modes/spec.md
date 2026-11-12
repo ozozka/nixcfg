@@ -1,7 +1,7 @@
 # Spec: write an executable plan
 
-Shape an executable plan without implementing it or changing project code or documentation. Read
-the relevant sources and resolve user-owned decisions before finalizing it.
+Shape an executable plan without changing project code or documentation. Resolve user-owned
+decisions before finalizing it.
 
 Record the plan with the available planning tools. Use nested bullets under Goal, then Findings,
 Decisions, and Specification where useful, followed by Steps. Number checkbox steps from 1, for

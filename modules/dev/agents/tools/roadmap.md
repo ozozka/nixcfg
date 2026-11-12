@@ -9,12 +9,8 @@ reminder: |
   {plan}
 ---
 
-Manage plans in a complete six-section board in docs/roadmap.md or README.md's Roadmap section; otherwise use resumable session state. Sections: Status, Limitations, Backlog, Plans, Active, Completed. Never create or repair a project board. Results identify project or session storage. Pending focused session plans transfer on the next board mutation when a compatible project board becomes available; conflicts are errors.
-Actions:
-- show: the board's plans and the focused plan's text.
-- backlog: add an idea to Backlog as one line.
-- write: add a plan to Plans, or replace an existing plan's body where it is; focuses it.
-- focus: make a plan the one this session works on.
-- tick: mark a step done; the plan moves from Plans to Active on its first tick.
-- complete: when all steps are ticked, replace the plan with Completed lines.
-Plan format (the body, without the heading): bullets only; bold groups `- **Goal**:`, `- **Findings**:`, `- **Decisions**:`, `- **Specification**:`, and `- **Steps**:`, leaving out empty ones; each step under Steps is `  - [ ] **1. Title**: details`, numbered from 1.
+Manage plans with show, backlog (idea), write (plan and content), focus (plan), tick (step), and complete (delivered summaries).
+
+Use an existing board with Status, Limitations, Backlog, Plans, Active, and Completed in docs/roadmap.md or README.md's Roadmap section; otherwise keep resumable session state. Never create or repair project files. Pending focused session plans transfer on the next board mutation when a compatible board appears; differing name collisions fail.
+
+Plan content is bullets with a `- **Steps**:` group and consecutive checkbox steps: `  - [ ] **1. Title**: details`. Other bullet groups are optional. Ticking starts a plan; completing requires all steps ticked.
