@@ -139,6 +139,7 @@ pkgs.treefmt.withConfig {
           "modules/dev/agents/skills/**"
           "modules/dev/claude/workflow.md"
           "modules/dev/pi/agents/**"
+          "modules/dev/pi/modes/**"
         ];
         options = [
           "check"
