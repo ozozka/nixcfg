@@ -1,31 +1,41 @@
 /**
- * Named modes: each sets the thinking level, removes tools, and appends instructions to the
- * system prompt. The default mode, free, is the normal settings. Entering a mode saves the
- * current tools and thinking level; leaving restores them. The mode starts the status line in
- * bold, in its color; Shift+Tab cycles the modes by their order.
+ * Named modes and the task list.
+ *
+ * Modes: each sets the thinking level, removes tools, and appends instructions to the system
+ * prompt. The default mode, free, is the normal settings. Entering a mode saves the current
+ * tools and thinking level; leaving restores them. The mode starts the status line in bold, in
+ * its color; Shift+Tab cycles the modes by their order.
  *
  * Modes are Markdown files in modes/ under Pi's agent directory, loaded at startup: the file
  * name is the mode name, the frontmatter its settings (including `order` and the status
- * `color`), and the body its instructions. A mode
- * with `next` asks, when a run ends with open tasks, whether to switch to that mode and send
- * `next-prompt`.
+ * `color`), and the body its instructions. A mode with `next` asks, when a run ends with open
+ * tasks, whether to switch to that mode and send `next-prompt`. The mode state is recorded in
+ * the session on every switch and restored from the current branch, so resuming or navigating
+ * with /tree brings back the matching mode. Derived from the Pi preset example.
  *
- * The state is recorded in the session on every switch and restored from the current branch,
- * so resuming or navigating with /tree brings back the matching mode. Derived from the Pi
- * preset example.
+ * Task list: the `todo` tool, shaped like Claude's TodoWrite and Codex's update_plan: the model
+ * sends the whole list with a status per item on every update. State is stored in tool result
+ * details, so branching keeps the list correct for that point in history. A widget above the
+ * editor shows the list while items are open, and compaction re-sends open items to the model.
+ * Derived from the Pi todo example.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
   getAgentDir,
   parseFrontmatter,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Key } from "@earendil-works/pi-tui";
+import { Key, Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+
+// Modes
 
 const THINKING_LEVELS: readonly string[] = [
   "off",
@@ -37,7 +47,7 @@ const THINKING_LEVELS: readonly string[] = [
   "max",
 ];
 
-const ENTRY_TYPE = "mode";
+const MODE_ENTRY = "mode";
 // The default mode: no mode file, the normal settings.
 const FREE = "free";
 const FREE_COLOR = "text";
@@ -163,25 +173,172 @@ interface ModeState {
   saved?: Saved;
 }
 
-// Whether the latest todo tool result on the branch (see todo.ts) has unfinished items.
-function hasOpenTasks(ctx: ExtensionContext): boolean {
-  let items: { status?: string }[] = [];
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type !== "message") continue;
-    const msg = entry.message;
-    if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
-    const details = msg.details as { items?: unknown; error?: string } | undefined;
-    if (Array.isArray(details?.items) && !details.error) items = details.items;
-  }
-  return items.some((item) => item.status !== "completed");
+// Task list
+
+const STATUSES = ["pending", "in_progress", "completed"] as const;
+type Status = (typeof STATUSES)[number];
+
+interface TodoItem {
+  text: string;
+  status: Status;
+}
+
+interface TodoDetails {
+  items: TodoItem[];
+  error?: string;
+}
+
+const TodoParams = Type.Object({
+  items: Type.Array(
+    Type.Object({
+      text: Type.String({ description: "Task, phrased as an action" }),
+      status: StringEnum(STATUSES),
+    }),
+    { description: "The complete list; it replaces the previous one. Empty clears it." },
+  ),
+});
+
+const TODO_DESCRIPTION = `Track multi-step work in a task list the user can follow.
+Send the whole list on every update; it replaces the previous one.
+- Use it for work with three or more steps, or when the user lists several tasks; skip it for trivial requests.
+- Keep exactly one item in_progress while working, and mark items completed as soon as they are done.
+- Add newly discovered steps, and remove steps that no longer apply.`;
+
+function isTodoDetails(value: unknown): value is TodoDetails {
+  return (
+    typeof value === "object" && value !== null && Array.isArray((value as TodoDetails).items)
+  );
+}
+
+function icon(item: TodoItem, theme: Theme): string {
+  if (item.status === "completed") return theme.fg("success", "✓");
+  if (item.status === "in_progress") return theme.fg("accent", "▸");
+  return theme.fg("dim", "○");
+}
+
+function formatItem(item: TodoItem, theme: Theme): string {
+  const text = item.status === "completed" ? theme.fg("dim", item.text) : item.text;
+  return `${icon(item, theme)} ${text}`;
+}
+
+function summary(items: TodoItem[]): string {
+  const done = items.filter((item) => item.status === "completed").length;
+  return `${done}/${items.length} completed`;
+}
+
+// Plain text for the model: one line per item with its status.
+function modelText(heading: string, items: TodoItem[]): string {
+  if (items.length === 0) return "Task list cleared.";
+  const lines = items.map((item) => `[${item.status}] ${item.text}`);
+  return `${heading} (${summary(items)}):\n${lines.join("\n")}`;
 }
 
 export default function (pi: ExtensionAPI) {
   const { modes, errors } = loadModes();
   let state: ModeState = {};
+  // In-memory task list, reconstructed from the session branch.
+  let items: TodoItem[] = [];
 
   const isModeName = (value: unknown): value is string =>
     typeof value === "string" && modes.has(value);
+  const hasOpenTasks = () => items.some((item) => item.status !== "completed");
+
+  // Task list
+
+  // Shown while work is open; a finished or empty list leaves the editor area clean.
+  function updateWidget(ctx: ExtensionContext) {
+    if (!ctx.hasUI) return;
+    const theme = ctx.ui.theme;
+    ctx.ui.setWidget(
+      "todo",
+      hasOpenTasks()
+        ? [
+            theme.fg("muted", `Todos ${summary(items)}`),
+            ...items.map((item) => formatItem(item, theme)),
+          ]
+        : undefined,
+    );
+  }
+
+  function restoreTasks(ctx: ExtensionContext) {
+    items = [];
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "message") continue;
+      const msg = entry.message;
+      if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
+      if (isTodoDetails(msg.details) && !msg.details.error) items = msg.details.items;
+    }
+    updateWidget(ctx);
+  }
+
+  // The summary replaces earlier todo calls in the model's context, so it would lose the list.
+  pi.on("session_compact", (_event, ctx) => {
+    if (!hasOpenTasks()) return;
+    pi.sendMessage(
+      {
+        customType: "todo-reminder",
+        content: modelText("Task list from before compaction", items),
+        display: false,
+      },
+      // Mid-run compaction reaches the next model call; manual /compact the next prompt.
+      { deliverAs: ctx.isIdle() ? "nextTurn" : "steer" },
+    );
+  });
+
+  pi.registerTool({
+    name: "todo",
+    label: "Todo",
+    description: TODO_DESCRIPTION,
+    parameters: TodoParams,
+
+    // biome-ignore lint/suspicious/useAwait: Pi's tool API requires a Promise.
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const next = params.items.map((item) => ({
+        text: item.text.trim(),
+        status: item.status,
+      }));
+      const active = next.filter((item) => item.status === "in_progress").length;
+      if (active > 1) {
+        const error = `${active} items are in_progress; keep at most one.`;
+        return {
+          content: [{ type: "text", text: `Error: ${error} The list was not changed.` }],
+          details: { items, error } satisfies TodoDetails,
+        };
+      }
+      items = next;
+      updateWidget(ctx);
+      return {
+        content: [{ type: "text", text: modelText("Task list updated", items) }],
+        details: { items } satisfies TodoDetails,
+      };
+    },
+
+    renderCall(args, theme, _context) {
+      const count = Array.isArray(args.items) ? args.items.length : 0;
+      const text =
+        theme.fg("toolTitle", theme.bold("todo ")) +
+        theme.fg("muted", count === 0 ? "clear" : `${count} items`);
+      return new Text(text, 0, 0);
+    },
+
+    renderResult(result, _options, theme, _context) {
+      const details = result.details;
+      if (!isTodoDetails(details)) {
+        const text = result.content[0];
+        return new Text(text?.type === "text" ? text.text : "", 0, 0);
+      }
+      if (details.error) return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+      if (details.items.length === 0)
+        return new Text(theme.fg("dim", "Task list cleared"), 0, 0);
+      const lines = [
+        theme.fg("muted", summary(details.items)),
+        ...details.items.map((item) => formatItem(item, theme)),
+      ];
+      return new Text(lines.join("\n"), 0, 0);
+    },
+  });
+
+  // Modes
 
   function updateStatus(ctx: ExtensionContext) {
     if (!ctx.hasUI) return;
@@ -189,7 +346,7 @@ export default function (pi: ExtensionAPI) {
     const mode = state.name ? modes.get(state.name) : undefined;
     // Pi orders statuses by key, so "mode" comes before the other status entries.
     ctx.ui.setStatus(
-      ENTRY_TYPE,
+      MODE_ENTRY,
       theme.bold(theme.fg(mode?.color ?? FREE_COLOR, state.name ?? FREE)),
     );
   }
@@ -216,14 +373,14 @@ export default function (pi: ExtensionAPI) {
       thinkingLevel: pi.getThinkingLevel(),
     };
     apply(ctx, name ? { name, saved } : {});
-    pi.appendEntry(ENTRY_TYPE, state);
+    pi.appendEntry(MODE_ENTRY, state);
     ctx.ui.notify(`Mode: ${name ?? FREE}`, "info");
   }
 
-  function restore(ctx: ExtensionContext) {
+  function restoreMode(ctx: ExtensionContext) {
     let recorded: ModeState = {};
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
+      if (entry.type === "custom" && entry.customType === MODE_ENTRY) {
         recorded = entry.data as ModeState;
       }
     }
@@ -235,14 +392,18 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (errors.length > 0) ctx.ui.notify(`Modes: ${errors.join("; ")}`, "warning");
-    restore(ctx);
+    restoreMode(ctx);
+    restoreTasks(ctx);
   });
-  pi.on("session_tree", (_event, ctx) => restore(ctx));
+  pi.on("session_tree", (_event, ctx) => {
+    restoreMode(ctx);
+    restoreTasks(ctx);
+  });
 
   pi.on("agent_settled", async (event, ctx) => {
     const mode = state.name ? modes.get(state.name) : undefined;
     if (!(mode?.next && mode.nextPrompt) || event.aborted || !ctx.hasUI) return;
-    if (!hasOpenTasks(ctx)) return;
+    if (!hasOpenTasks()) return;
     const { next, nextPrompt } = mode;
     const accept = next === FREE ? `Yes, leave ${state.name} mode` : `Yes, switch to ${next}`;
     const choice = await ctx.ui.select(nextPrompt.replace(TRAILING_PERIOD, "?"), [

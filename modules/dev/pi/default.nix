@@ -30,7 +30,6 @@ in
         "mode.ts" = ./mode.ts;
         "notify.ts" = ./notify.ts;
         "question.ts" = ./question.ts;
-        "todo.ts" = ./todo.ts;
         "status.ts" = ./status.ts;
         "subagent.ts" = ./subagent.ts;
       };
