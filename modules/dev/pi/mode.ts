@@ -230,15 +230,25 @@ function isTodoDetails(value: unknown): value is TodoDetails {
   );
 }
 
-function icon(item: TodoItem, theme: Theme): string {
-  if (item.status === "completed") return theme.fg("success", "✓");
-  if (item.status === "in_progress") return theme.fg("accent", "▸");
-  return theme.fg("dim", "○");
+// Checkboxes as markdown-ts-mode shows them in Emacs (my-modes.el, my-theme.el): a bold ✔ in
+// the primary color (success) and a bold ⬦ in the secondary color (warning); ◆, the filled ⬦,
+// marks the item in progress. The text keeps the normal foreground.
+function checkbox(status: Status, theme: Theme): string {
+  if (status === "completed") return theme.bold(theme.fg("success", "✔"));
+  return theme.bold(theme.fg("warning", status === "in_progress" ? "◆" : "⬦"));
 }
 
 function formatItem(item: TodoItem, theme: Theme): string {
-  const text = item.status === "completed" ? theme.fg("dim", item.text) : item.text;
-  return `${icon(item, theme)} ${text}`;
+  return `${checkbox(item.status, theme)} ${item.text}`;
+}
+
+// A list header like a Markdown heading: the title bold, its progress muted.
+function header(title: string, done: number, total: number, theme: Theme): string {
+  return `${theme.bold(title)} ${theme.fg("muted", `${done}/${total}`)}`;
+}
+
+function doneCount(items: TodoItem[]): number {
+  return items.filter((item) => item.status === "completed").length;
 }
 
 function summary(items: TodoItem[]): string {
@@ -697,19 +707,16 @@ export default function (pi: ExtensionAPI) {
     const plan = roadmapMode() ? trackedPlan(ctx.cwd) : undefined;
     if (plan?.steps.some((step) => !step.done)) {
       const next = plan.steps.find((step) => !step.done);
-      lines.push(theme.fg("muted", `Plan ${plan.name} ${progress(plan)}`));
+      const done = plan.steps.filter((step) => step.done).length;
+      lines.push(header(plan.name, done, plan.steps.length, theme));
       for (const step of plan.steps) {
-        const mark = step.done
-          ? theme.fg("success", "✓")
-          : step === next
-            ? theme.fg("accent", "▸")
-            : theme.fg("dim", "○");
-        const title = `${step.number}. ${step.title}`;
-        lines.push(`${mark} ${step.done ? theme.fg("dim", title) : title}`);
+        const status = step.done ? "completed" : step === next ? "in_progress" : "pending";
+        // Bold like the step's `**1. Title**` in the roadmap file.
+        lines.push(`${checkbox(status, theme)} ${theme.bold(`${step.number}. ${step.title}`)}`);
       }
     }
     if (hasOpenTasks()) {
-      lines.push(theme.fg("muted", `Todos ${summary(items)}`));
+      lines.push(header("Todos", doneCount(items), items.length, theme));
       lines.push(...items.map((item) => formatItem(item, theme)));
     }
     ctx.ui.setWidget("todo", lines.length > 0 ? lines : undefined);
@@ -795,7 +802,7 @@ export default function (pi: ExtensionAPI) {
       if (details.items.length === 0)
         return new Text(theme.fg("dim", "Task list cleared"), 0, 0);
       const lines = [
-        theme.fg("muted", summary(details.items)),
+        header("Todos", doneCount(details.items), details.items.length, theme),
         ...details.items.map((item) => formatItem(item, theme)),
       ];
       return new Text(lines.join("\n"), 0, 0);
