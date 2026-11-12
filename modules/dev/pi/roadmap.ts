@@ -9,6 +9,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
+  getAgentDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -441,7 +442,7 @@ export function saveProject(board: Board, original: string): void {
 // Pi adapter
 
 const ENTRY = "roadmap-state";
-const text = loadMarkdown(new URL("./roadmap.md", import.meta.url), [
+const text = loadMarkdown(join(getAgentDir(), "tools", "roadmap.md"), [
   "plan",
   "content",
   "idea",

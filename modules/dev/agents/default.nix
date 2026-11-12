@@ -33,6 +33,18 @@ in
       description = "Explicitly selected workflow instructions shared by modes and output styles.";
     };
 
+    tools = mkOption {
+      type = types.attrsOf types.path;
+      default = entries ./tools;
+      description = "Tool-help Markdown by file name, loaded only by its consumer.";
+    };
+
+    subagents = mkOption {
+      type = types.attrsOf types.path;
+      default = entries ./subagents;
+      description = "Delegated role definitions; consumers choose which roles to expose.";
+    };
+
     prompts = mkOption {
       type = types.attrsOf types.path;
       default = entries ./prompts;

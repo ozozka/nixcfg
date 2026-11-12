@@ -135,10 +135,10 @@ export function loadDefinitions<T>(
   return { definitions, errors };
 }
 
-// Adjacent Markdown owns static tool text and prompt bodies. Requiring the frontmatter
+// Configured Markdown owns static tool text and prompt bodies. Requiring the frontmatter
 // keys at load time catches missing help and misspellings before a tool is registered.
 export function loadMarkdown<K extends string>(
-  path: URL,
+  path: string | URL,
   keys: readonly K[],
 ): { body: string; fields: Record<K, string> } {
   try {
@@ -157,7 +157,10 @@ export function loadMarkdown<K extends string>(
     );
     return { body: requiredText(body, "the body"), fields };
   } catch (error) {
-    throw new Error(`${path.pathname}: ${(error as Error).message}`, { cause: error });
+    throw new Error(
+      `${typeof path === "string" ? path : path.pathname}: ${(error as Error).message}`,
+      { cause: error },
+    );
   }
 }
 
@@ -169,12 +172,6 @@ export function rejectUnknown(rest: object) {
 
 export function requiredText(value: unknown, key: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${key} is required`);
-  return value.trim();
-}
-
-export function optionalText(value: unknown, key: string): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be a string`);
   return value.trim();
 }
 

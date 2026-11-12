@@ -4,7 +4,8 @@
  * ("Type something."). Vendored from the Pi questionnaire example.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { type ExtensionAPI, getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   Editor,
   type EditorTheme,
@@ -17,7 +18,7 @@ import {
 import { type Static, Type } from "typebox";
 import { loadMarkdown, reply } from "./lib/shared.ts";
 
-const questionText = loadMarkdown(new URL("./question.md", import.meta.url), [
+const questionText = loadMarkdown(join(getAgentDir(), "tools", "question.md"), [
   "option-value",
   "option-label",
   "option-description",

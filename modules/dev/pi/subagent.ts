@@ -15,10 +15,12 @@
 
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   formatReadLineRange,
+  getAgentDir,
   getMarkdownTheme,
   parseFrontmatter,
   type Theme,
@@ -31,7 +33,6 @@ import {
   loadDefinitions,
   loadMarkdown,
   optionalList,
-  optionalText,
   optionalThinking,
   rejectUnknown,
   reply,
@@ -63,6 +64,12 @@ type AgentFrontmatter = {
   thinking?: unknown;
   tools?: unknown;
 };
+
+function optionalText(value: unknown, key: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be a string`);
+  return value.trim();
+}
 
 // Validates one agent file.
 function parseAgent(content: string): Agent {
@@ -378,7 +385,7 @@ async function runAgent(
   return result;
 }
 
-const subagentText = loadMarkdown(new URL("./subagent.md", import.meta.url), [
+const subagentText = loadMarkdown(join(getAgentDir(), "tools", "subagent.md"), [
   "agent",
   "task",
   "tasks",

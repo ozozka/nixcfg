@@ -51,11 +51,10 @@ let
       )
     )
   ) agents.modes;
-  # Keep code and Markdown in one store path, so adjacent reads and imports resolve
-  # whether Pi follows the home-file links or not.
+  # Shared code stays beside its consumers whether Pi follows the home-file links or not.
   extensions = lib.fileset.toSource {
     root = ./.;
-    fileset = lib.fileset.fileFilter (file: file.hasExt "ts" || file.hasExt "md") ./.;
+    fileset = lib.fileset.fileFilter (file: file.hasExt "ts") ./.;
   };
 in
 {
@@ -70,11 +69,11 @@ in
     ".pi/agent" = {
       # Shared agent assets: a global context file, prompt templates, and skills.
       "AGENTS.md" = agents.instructions;
-      inherit (agents) prompts skills;
+      inherit (agents) prompts skills tools;
       # Mode definitions for mode.ts.
       inherit modes;
       # Subagent definitions for subagent.ts.
-      "agents" = ./agents;
+      "agents" = agents.subagents;
 
       "extensions" =
         lib.genAttrs [
@@ -85,9 +84,6 @@ in
           "question.ts"
           "status.ts"
           "subagent.ts"
-          "question.md"
-          "roadmap.md"
-          "subagent.md"
         ] (file: "${extensions}/${file}")
         // {
           # Shared code; Pi skips folders without an index file.
