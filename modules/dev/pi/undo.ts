@@ -5,8 +5,10 @@
  *
  * Before each prompt, the working tree (tracked and untracked files, minus ignored ones) is
  * saved as a commit through a temporary index, so the user's index, HEAD, and branches stay
- * untouched. Commits are kept under refs/pi/checkpoints/ and recorded in the session. Undo
- * restores files only; commits made since stay.
+ * untouched. Commits are recorded in the session and kept alive by the refs/pi/checkpoint
+ * reflog, so git gc expires them after 30 days (gc.reflogExpireUnreachable) with no manual
+ * cleanup; older prompts can no longer be undone. Undo restores files only; commits made since
+ * stay.
  */
 
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
@@ -19,7 +21,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "checkpoint";
-const REF_PREFIX = "refs/pi/checkpoints/";
+const REF = "refs/pi/checkpoint";
 
 interface Checkpoint {
   commit: string;
@@ -68,7 +70,7 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // Saves the working tree as a commit and keeps it reachable under refs/pi/checkpoints/.
+  // Saves the working tree as a commit and records it in the checkpoint reflog.
   function snapshot(root: string): Promise<string> {
     return withTempIndex(root, async (index) => {
       await git(root, ["add", "--all", "."], index);
@@ -78,7 +80,7 @@ export default function (pi: ExtensionAPI) {
       );
       const parents = head ? ["-p", head] : [];
       const commit = await git(root, ["commit-tree", tree, ...parents, "-m", "pi checkpoint"]);
-      await git(root, ["update-ref", `${REF_PREFIX}${commit}`, commit]);
+      await git(root, ["update-ref", "--create-reflog", "-m", "pi checkpoint", REF, commit]);
       return commit;
     });
   }
@@ -128,6 +130,17 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     const { checkpoint, parentId, prompt } = found;
+    const exists = await git(root, ["cat-file", "-e", `${checkpoint.commit}^{commit}`]).then(
+      () => true,
+      () => false,
+    );
+    if (!exists) {
+      ctx.ui.notify(
+        "The checkpoint for this prompt has expired; nothing was changed",
+        "warning",
+      );
+      return;
+    }
 
     // Compare against a snapshot of the current files, which also keeps them recoverable.
     const current = await snapshot(root);
@@ -156,7 +169,7 @@ export default function (pi: ExtensionAPI) {
     if (ctx.hasUI) {
       const confirmed = await ctx.ui.confirm(
         "Undo the latest prompt?",
-        `${prompt ? `Prompt: ${prompt.slice(0, 200)}\n\n` : ""}${summary}\n\nCommits made since stay. Current files are kept as ${REF_PREFIX}${current}.`,
+        `${prompt ? `Prompt: ${prompt.slice(0, 200)}\n\n` : ""}${summary}\n\nCommits made since stay. Current files are kept as ${current.slice(0, 12)} in the ${REF} reflog.`,
       );
       if (!confirmed) return;
     }
