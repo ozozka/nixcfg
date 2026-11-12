@@ -6,6 +6,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Longest summary shown after "Done: " or "Failed: ", as in Pi's notify.ts.
+SUMMARY_LENGTH = 80
+
+
+def first_line(text):
+    """Return the first non-empty line of a text, shortened to fit a notification."""
+    line = next((line.strip() for line in str(text or "").splitlines() if line.strip()), "")
+    return line if len(line) <= SUMMARY_LENGTH else line[: SUMMARY_LENGTH - 1] + "…"
+
+
+def summarized(label, text):
+    """Return the label, followed by the text's first line when there is one."""
+    summary = first_line(text)
+    return f"{label}: {summary}" if summary else label
+
 
 def notify(event, cwd, busctl):
     # Match Pi's desktop presentation: application name, project title, short body.
@@ -16,9 +31,9 @@ def notify(event, cwd, busctl):
         return
     name = event.get("hook_event_name")
     if name == "Stop":
-        message = "Done"
+        message = summarized("Done", event.get("last_assistant_message"))
     elif name == "StopFailure":
-        message = "Failed"
+        message = summarized("Failed", event.get("error_details") or event.get("error"))
     elif name == "Notification":
         kind = event.get("notification_type")
         if kind == "permission_prompt":
