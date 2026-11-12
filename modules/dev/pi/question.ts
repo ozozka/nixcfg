@@ -1,5 +1,5 @@
 /**
- * Questionnaire Tool - Unified tool for asking single or multiple questions
+ * Question tool - Unified tool for asking single or multiple questions
  *
  * Single question: simple options list
  * Multiple questions: tab bar navigation between questions
@@ -42,7 +42,7 @@ interface Answer {
   index?: number;
 }
 
-interface QuestionnaireResult {
+interface QuestionResult {
   questions: Question[];
   answers: Answer[];
   cancelled: boolean;
@@ -74,27 +74,27 @@ const QuestionSchema = Type.Object({
   ),
 });
 
-const QuestionnaireParams = Type.Object({
+const QuestionParams = Type.Object({
   questions: Type.Array(QuestionSchema, { description: "Questions to ask the user" }),
 });
 
 function errorResult(
   message: string,
   questions: Question[] = [],
-): { content: { type: "text"; text: string }[]; details: QuestionnaireResult } {
+): { content: { type: "text"; text: string }[]; details: QuestionResult } {
   return {
     content: [{ type: "text", text: message }],
     details: { questions, answers: [], cancelled: true },
   };
 }
 
-export default function questionnaire(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
   pi.registerTool({
-    name: "questionnaire",
-    label: "Questionnaire",
+    name: "question",
+    label: "Question",
     description:
       "Ask the user one or more questions. Use for clarifying requirements, getting preferences, or confirming decisions. For single questions, shows a simple option list. For multiple questions, shows a tab-based interface.",
-    parameters: QuestionnaireParams,
+    parameters: QuestionParams,
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (ctx.mode !== "tui") {
@@ -114,7 +114,7 @@ export default function questionnaire(pi: ExtensionAPI) {
       const isMulti = questions.length > 1;
       const totalTabs = questions.length + 1; // questions + Submit
 
-      const result = await ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
+      const result = await ctx.ui.custom<QuestionResult>((tui, theme, _kb, done) => {
         // State
         let currentTab = 0;
         let optionIndex = 0;
@@ -410,7 +410,7 @@ export default function questionnaire(pi: ExtensionAPI) {
 
       if (result.cancelled) {
         return {
-          content: [{ type: "text", text: "User cancelled the questionnaire" }],
+          content: [{ type: "text", text: "User cancelled the questions" }],
           details: result,
         };
       }
@@ -433,7 +433,7 @@ export default function questionnaire(pi: ExtensionAPI) {
       const qs = (args.questions as Question[]) || [];
       const count = qs.length;
       const labels = qs.map((q) => q.label || q.id).join(", ");
-      let text = theme.fg("toolTitle", theme.bold("questionnaire "));
+      let text = theme.fg("toolTitle", theme.bold("question "));
       text += theme.fg("muted", `${count} question${count !== 1 ? "s" : ""}`);
       if (labels) {
         text += theme.fg("dim", ` (${labels})`);
@@ -442,7 +442,7 @@ export default function questionnaire(pi: ExtensionAPI) {
     },
 
     renderResult(result, _options, theme, _context) {
-      const details = result.details as QuestionnaireResult | undefined;
+      const details = result.details as QuestionResult | undefined;
       if (!details) {
         const text = result.content[0];
         return new Text(text?.type === "text" ? text.text : "", 0, 0);
