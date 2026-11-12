@@ -1,5 +1,7 @@
 ---
 description: General-purpose agent with full tools, for delegated work in an isolated context
+model: minimax/MiniMax-M3.1-Flash
+thinking: medium
 ---
 
 You are a worker with full capabilities, handling a delegated task in an isolated context. Work autonomously to complete it.
