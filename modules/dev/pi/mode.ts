@@ -563,18 +563,28 @@ function completePlan(board: Board, plan: Plan, delivered: string[]): Board {
   if (open.length > 0) throw new Error(`steps not ticked yet: ${open.join(", ")}`);
   const entries = delivered.map((line) => line.trim().replace(BULLET, "")).filter(Boolean);
   if (entries.length === 0) throw new Error("name at least one delivered capability");
-  const block = entries.map((entry) => `- ${entry}`);
   const removed = reparse(board, splice(board.lines, plan.start, plan.end, []));
-  const completed = removed.sections.get("Completed") as Range;
-  const end = contentEnd(removed.lines, completed);
-  const items = removed.lines
-    .slice(completed.start + 1, end)
+  return appendItems(removed, "Completed", entries);
+}
+
+// Appends one-line bullets to a list section such as Backlog or Completed.
+function appendItems(board: Board, section: SectionName, entries: string[]): Board {
+  const block = entries.map((entry) => `- ${entry}`);
+  const range = board.sections.get(section) as Range;
+  const end = contentEnd(board.lines, range);
+  const items = board.lines
+    .slice(range.start + 1, end)
     .filter((line) => line.startsWith("- ") && !PLACEHOLDER.test(line));
-  if (items.length === 0)
-    return reparse(removed, appendToSection(removed.lines, completed, block));
-  // Completed entries form one list: append directly after the last one.
-  const lines = [...removed.lines.slice(0, end), ...block, ...removed.lines.slice(end)];
-  return reparse(removed, lines);
+  if (items.length === 0) return reparse(board, appendToSection(board.lines, range, block));
+  // The entries form one list: append directly after the last one.
+  return reparse(board, [...board.lines.slice(0, end), ...block, ...board.lines.slice(end)]);
+}
+
+// Adds an idea to Backlog as one line.
+function addBacklog(board: Board, idea: string): Board {
+  const entry = idea.trim().replace(BULLET, "");
+  if (!entry || entry.includes("\n")) throw new Error("the idea needs one line of text");
+  return appendItems(board, "Backlog", [entry]);
 }
 
 function planText(board: Board, plan: Plan): string {
@@ -586,7 +596,7 @@ function planText(board: Board, plan: Plan): string {
 const ROADMAP_TOOL = "roadmap";
 // Session entries recording the focused plan.
 const FOCUS_ENTRY = "roadmap-focus";
-const ROADMAP_ACTIONS = ["show", "write", "focus", "tick", "complete"] as const;
+const ROADMAP_ACTIONS = ["show", "backlog", "write", "focus", "tick", "complete"] as const;
 
 const RoadmapParams = Type.Object({
   action: StringEnum(ROADMAP_ACTIONS),
@@ -601,6 +611,7 @@ const RoadmapParams = Type.Object({
       description: "write: the plan body in the plan format, without its heading",
     }),
   ),
+  idea: Type.Optional(Type.String({ description: "backlog: the idea, one line" })),
   step: Type.Optional(Type.Number({ description: "tick: the step number" })),
   delivered: Type.Optional(
     Type.Array(Type.String(), {
@@ -612,6 +623,7 @@ const RoadmapParams = Type.Object({
 const ROADMAP_DESCRIPTION = `Manage plans on the project's roadmap board: docs/roadmap.md or README.md's Roadmap section when they have one, otherwise a root roadmap.md (created on the first change). The board has six sections: Status and Limitations (free text, edited like other documentation), Backlog, Plans, Active, and Completed.
 Actions:
 - show: the board's plans and the focused plan's text.
+- backlog: add an idea to Backlog as one line.
 - write: add a plan to Plans, or replace an existing plan's body where it is; focuses it.
 - focus: make a plan the one this session works on.
 - tick: mark a step done; the plan moves from Plans to Active on its first tick.
@@ -650,6 +662,7 @@ interface RoadmapInput {
   action: string;
   plan?: string;
   content?: string;
+  idea?: string;
   step?: number;
   delivered?: string[];
 }
@@ -678,6 +691,12 @@ function roadmapAction(
       const plan = currentPlan(board, params.plan, focus);
       const text = plan ? `\n\nFocused plan:\n${planText(board, plan)}` : "";
       return { text: `Board in ${where}:\n${boardOverview(board)}${text}`, board, plan };
+    }
+    case "backlog": {
+      if (!params.idea) throw new Error("backlog needs idea");
+      board = addBacklog(board, params.idea);
+      saveBoard(board);
+      return { text: `Added to Backlog in ${where}.`, board };
     }
     case "write": {
       if (!(params.plan && params.content)) throw new Error("write needs plan and content");
