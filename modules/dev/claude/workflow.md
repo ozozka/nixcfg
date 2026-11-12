@@ -1,5 +1,5 @@
 ---
-description: Workflow - spec a plan into the roadmap, or exec its active plan
+description: Workflow - spec a plan into the roadmap, or exec a plan from it
 argument-hint: "spec <idea> | exec [instructions]"
 ---
 
@@ -13,16 +13,19 @@ lasting knowledge, so any session can continue from them.
 
 ## Roadmap board
 
-- The board is the first of these with `Plans`, `Active`, and `Completed` sections:
-  `docs/roadmap.md`, the `## Roadmap` section of `README.md`, or a root `todo.md`.
-- Without a board, create `todo.md` with `# Todo` and the sections below. If `todo.md` exists
-  without a board, ask the user before changing it.
-- Sections are headings one level below the roadmap's own heading:
-  - **Backlog**: ideas not specified yet, one line each (optional section).
+- The roadmap is the only place for plans and task lists.
+- The board is `docs/roadmap.md` or the `## Roadmap` section of `README.md` when it already has
+  `Plans`, `Active`, and `Completed` sections; otherwise a root `roadmap.md`, created with
+  `# Roadmap` and the sections below. Never add a board to a roadmap that is only an overview.
+- Six sections, headings one level below the roadmap's own heading, in this order; add missing
+  ones in place:
+  - **Status**: the general overview, free text.
+  - **Limitations**: limitations worth noting, free text.
+  - **Backlog**: ideas not specified yet, one line each.
   - **Plans**: specified plans ready to start.
   - **Active**: plans in progress; their step checkboxes show what is done.
   - **Completed**: one line per delivered capability.
-- Work moves Backlog → Plans → Active → Completed. Text outside these sections stays as it is.
+- Work moves Backlog → Plans → Active → Completed. Other text stays as it is.
 
 ## Plan format
 
@@ -60,25 +63,32 @@ Shape a plan for the idea in the input, without changing the project.
   guessing.
 - Write the plan into the board's Plans section in the plan format; replace an existing plan
   with the same name instead of adding a second one.
+- Write it for exec, which works through the steps without stopping and stops when a finding
+  contradicts a decision:
+  - Each step is ordered, self-contained, verifiable on its own, and small enough for one
+    commit; it names the files or functions it changes and the checks that prove it.
+  - Each step includes the documentation changes its behavior needs.
+  - Decisions are explicit, since exec checks its findings against them.
 - End with a short summary of the plan and its decisions, then ask whether to start executing.
   On yes, continue with exec.
 
 ## exec
 
-Carry out the active plan; the input can name the plan or add instructions.
+Carry out a plan; the input can name the plan or add instructions.
 
-- Pick the plan: the one in Active, otherwise the one named in the input or the only one in
-  Plans. Move a plan from Plans to Active when its first step starts. Ask if it is ambiguous.
+- Pick the plan: the one named in the input or just written in spec, otherwise the only one in
+  Active. Ask if it is ambiguous. Move a plan from Plans to Active when its first step starts.
 - Work through the unticked steps in order, without stopping for approval between them:
-  1. Implement the step; track its tasks with the todo list.
+  1. Implement the step.
   2. Move lasting content (behavior, contracts, decisions) into the documentation section that
      owns it.
   3. Run the project's checks for the change.
-  4. Tick the step in the roadmap and commit the step, its documentation, and the tick together.
+  4. Tick the step in the roadmap, then make one focused commit with exactly the step's changes,
+     its documentation, and the tick, and nothing else.
 - Stop and report when a step is blocked, a check keeps failing, or a finding contradicts a
   decision of the plan; never tick a step whose checks fail.
 - When all steps are ticked, finish:
   1. Have a subagent review the plan's changes against the plan and the documentation
-     placement; fix what it finds.
+     placement; fix and commit what it finds.
   2. Check that the plan's lasting content is in the documentation.
   3. Replace the plan with one line per delivered capability in Completed, and commit.
