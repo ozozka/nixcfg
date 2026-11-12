@@ -138,7 +138,8 @@ pkgs.treefmt.withConfig {
           "modules/dev/agents/prompts/**"
           "modules/dev/agents/skills/**"
           "modules/dev/agents/tools/**"
-          "modules/dev/agents/subagents/**"
+          "modules/dev/pi/agents/**"
+          "modules/dev/pi/modes/**"
         ];
         options = [
           "check"

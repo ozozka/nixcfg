@@ -11,32 +11,6 @@ let
   cfg = config.ozozka;
   agents = cfg.mod.dev.agents;
   settingsFormat = pkgs.formats.json { };
-  modeSettings = {
-    plan = {
-      color = "accent";
-      thinking = "medium";
-      exclude-tools = [
-        "edit"
-        "write"
-      ];
-    };
-  };
-  modes = lib.mapAttrs' (
-    name: body:
-    lib.nameValuePair "${name}.md" (
-      pkgs.writeText "${name}.md" (
-        "---\n"
-        + builtins.toJSON (
-          {
-            description = lib.removePrefix "# " (lib.head (lib.splitString "\n" body));
-          }
-          // (modeSettings.${name} or { })
-        )
-        + "\n---\n\n"
-        + body
-      )
-    )
-  ) agents.modes;
   # Shared code stays beside its consumers whether Pi follows the home-file links or not.
   extensions = lib.fileset.toSource {
     root = ./.;
@@ -61,9 +35,9 @@ in
       "AGENTS.md" = agents.instructions;
       inherit (agents) prompts skills tools;
       # Mode definitions for mode.ts.
-      inherit modes;
+      modes = ./modes;
       # Subagent definitions for subagent.ts.
-      "agents" = agents.subagents;
+      "agents" = ./agents;
 
       "extensions" =
         lib.genAttrs [
