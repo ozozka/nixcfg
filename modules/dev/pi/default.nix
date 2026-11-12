@@ -27,10 +27,7 @@ in
 
       "extensions" = {
         "docs.ts" = ./docs.ts;
-        "mode" = {
-          "index.ts" = ./mode/index.ts;
-          "roadmap.ts" = ./mode/roadmap.ts;
-        };
+        "mode.ts" = ./mode.ts;
         "notify.ts" = ./notify.ts;
         "question.ts" = ./question.ts;
         "status.ts" = ./status.ts;
