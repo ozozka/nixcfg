@@ -1,8 +1,7 @@
 /**
- * Question tool - Unified tool for asking single or multiple questions
- *
- * Single question: simple options list
- * Multiple questions: tab bar navigation between questions
+ * Question tool: asks the user one or more questions with options. One question shows a simple
+ * option list; several show a tab bar with a Submit tab. Every question can allow a typed answer
+ * ("Type something."). Vendored from the Pi questionnaire example.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -15,41 +14,9 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { reply } from "./lib/shared.ts";
 
-// Types
-interface QuestionOption {
-  value: string;
-  label: string;
-  description?: string;
-}
-
-type RenderOption = QuestionOption & { isOther?: boolean };
-
-interface Question {
-  id: string;
-  label: string;
-  prompt: string;
-  options: QuestionOption[];
-  allowOther: boolean;
-}
-
-interface Answer {
-  id: string;
-  value: string;
-  label: string;
-  wasCustom: boolean;
-  index?: number;
-}
-
-interface QuestionResult {
-  questions: Question[];
-  answers: Answer[];
-  cancelled: boolean;
-}
-
-// Schema
 const QuestionOptionSchema = Type.Object({
   value: Type.String({ description: "The value returned when selected" }),
   label: Type.String({ description: "Display label for the option" }),
@@ -79,9 +46,28 @@ const QuestionParams = Type.Object({
   questions: Type.Array(QuestionSchema, { description: "Questions to ask the user" }),
 });
 
-function errorResult(message: string) {
-  return reply<QuestionResult>(message, { questions: [], answers: [], cancelled: true });
+type RenderOption = Static<typeof QuestionOptionSchema> & { isOther?: boolean };
+// A question with its defaults filled in.
+type Question = Static<typeof QuestionSchema> & { label: string; allowOther: boolean };
+
+interface Answer {
+  id: string;
+  value: string;
+  label: string;
+  wasCustom: boolean;
+  index?: number;
 }
+
+interface QuestionResult {
+  questions: Question[];
+  answers: Answer[];
+  cancelled: boolean;
+}
+
+const OTHER: RenderOption = { value: "__other__", label: "Type something.", isOther: true };
+
+const errorResult = (message: string) =>
+  reply<QuestionResult>(message, { questions: [], answers: [], cancelled: true });
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -99,26 +85,23 @@ export default function (pi: ExtensionAPI) {
         return errorResult("Error: No questions provided");
       }
 
-      // Normalize questions with defaults
       const questions: Question[] = params.questions.map((q, i) => ({
         ...q,
         label: q.label || `Q${i + 1}`,
         allowOther: q.allowOther !== false,
       }));
-
       const isMulti = questions.length > 1;
-      const totalTabs = questions.length + 1; // questions + Submit
+      // The tab after the questions is Submit.
+      const submitTab = questions.length;
 
       const result = await ctx.ui.custom<QuestionResult>((tui, theme, _kb, done) => {
-        // State
         let currentTab = 0;
         let optionIndex = 0;
-        let inputMode = false;
-        let inputQuestionId: string | null = null;
+        // The question whose typed answer the editor is taking, if any.
+        let typing: Question | undefined;
         let cachedLines: string[] | undefined;
         const answers = new Map<string, Answer>();
 
-        // Editor for "Type something" option
         const editorTheme: EditorTheme = {
           borderColor: (s) => theme.fg("accent", s),
           selectList: {
@@ -131,144 +114,92 @@ export default function (pi: ExtensionAPI) {
         };
         const editor = new Editor(tui, editorTheme);
 
-        // Helpers
         function refresh() {
           cachedLines = undefined;
           tui.requestRender();
         }
 
         function submit(cancelled: boolean) {
-          done({ questions, answers: Array.from(answers.values()), cancelled });
-        }
-
-        function currentQuestion(): Question | undefined {
-          return questions[currentTab];
+          done({ questions, answers: [...answers.values()], cancelled });
         }
 
         function currentOptions(): RenderOption[] {
-          const q = currentQuestion();
+          const q = questions[currentTab];
           if (!q) return [];
-          const opts: RenderOption[] = [...q.options];
-          if (q.allowOther) {
-            opts.push({ value: "__other__", label: "Type something.", isOther: true });
-          }
-          return opts;
+          return q.allowOther ? [...q.options, OTHER] : q.options;
         }
 
-        function allAnswered(): boolean {
-          return questions.every((q) => answers.has(q.id));
-        }
+        const allAnswered = () => questions.every((q) => answers.has(q.id));
 
-        function advanceAfterAnswer() {
-          if (!isMulti) {
-            submit(false);
-            return;
-          }
-          if (currentTab < questions.length - 1) {
-            currentTab++;
-          } else {
-            currentTab = questions.length; // Submit tab
-          }
+        function moveTab(delta: number) {
+          currentTab = (currentTab + delta + submitTab + 1) % (submitTab + 1);
           optionIndex = 0;
           refresh();
         }
 
-        function saveAnswer(
-          questionId: string,
-          value: string,
-          label: string,
-          wasCustom: boolean,
-          index?: number,
-        ) {
-          answers.set(questionId, { id: questionId, value, label, wasCustom, index });
+        // One question submits at once; several move to the next tab (Submit after the last).
+        function answer(value: Answer) {
+          answers.set(value.id, value);
+          if (isMulti) moveTab(1);
+          else submit(false);
         }
 
-        // Editor submit callback
-        editor.onSubmit = (value) => {
-          if (!inputQuestionId) return;
-          const trimmed = value.trim() || "(no response)";
-          saveAnswer(inputQuestionId, trimmed, trimmed, true);
-          inputMode = false;
-          inputQuestionId = null;
+        function stopTyping() {
+          typing = undefined;
           editor.setText("");
-          advanceAfterAnswer();
+        }
+
+        editor.onSubmit = (value) => {
+          if (!typing) return;
+          const text = value.trim() || "(no response)";
+          const id = typing.id;
+          stopTyping();
+          answer({ id, value: text, label: text, wasCustom: true });
         };
 
         function handleInput(data: string) {
-          // Input mode: route to editor
-          if (inputMode) {
-            if (matchesKey(data, Key.escape)) {
-              inputMode = false;
-              inputQuestionId = null;
-              editor.setText("");
-              refresh();
-              return;
-            }
-            editor.handleInput(data);
+          if (typing) {
+            if (matchesKey(data, Key.escape)) stopTyping();
+            else editor.handleInput(data);
             refresh();
             return;
           }
 
-          const q = currentQuestion();
-          const opts = currentOptions();
-
-          // Tab navigation (multi-question only)
           if (isMulti) {
-            if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
-              currentTab = (currentTab + 1) % totalTabs;
-              optionIndex = 0;
-              refresh();
-              return;
-            }
-            if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
-              currentTab = (currentTab - 1 + totalTabs) % totalTabs;
-              optionIndex = 0;
-              refresh();
-              return;
-            }
+            if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) return moveTab(1);
+            if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left))
+              return moveTab(-1);
           }
 
-          // Submit tab
-          if (currentTab === questions.length) {
-            if (matchesKey(data, Key.enter) && allAnswered()) {
-              submit(false);
-            } else if (matchesKey(data, Key.escape)) {
-              submit(true);
-            }
+          if (currentTab === submitTab) {
+            if (matchesKey(data, Key.enter) && allAnswered()) submit(false);
+            else if (matchesKey(data, Key.escape)) submit(true);
             return;
           }
 
-          // Option navigation
-          if (matchesKey(data, Key.up)) {
-            optionIndex = Math.max(0, optionIndex - 1);
-            refresh();
-            return;
-          }
-          if (matchesKey(data, Key.down)) {
-            optionIndex = Math.min(opts.length - 1, optionIndex + 1);
+          const options = currentOptions();
+          if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+            const delta = matchesKey(data, Key.up) ? -1 : 1;
+            optionIndex = Math.max(0, Math.min(options.length - 1, optionIndex + delta));
             refresh();
             return;
           }
 
-          // Select option
+          const q = questions[currentTab];
           if (matchesKey(data, Key.enter) && q) {
-            const opt = opts[optionIndex];
-            if (opt.isOther) {
-              inputMode = true;
-              inputQuestionId = q.id;
+            const option = options[optionIndex];
+            if (option.isOther) {
+              typing = q;
               editor.setText("");
               refresh();
               return;
             }
-            saveAnswer(q.id, opt.value, opt.label, false, optionIndex + 1);
-            advanceAfterAnswer();
+            const { value, label } = option;
+            answer({ id: q.id, value, label, wasCustom: false, index: optionIndex + 1 });
             return;
           }
 
-          // Cancel
-          if (matchesKey(data, Key.escape)) {
-            submit(true);
-          }
+          if (matchesKey(data, Key.escape)) submit(true);
         }
 
         function render(width: number): string[] {
@@ -276,119 +207,98 @@ export default function (pi: ExtensionAPI) {
 
           const lines: string[] = [];
           const renderWidth = Math.max(1, width);
-          const q = currentQuestion();
-          const opts = currentOptions();
+          const q = questions[currentTab];
+          const rule = theme.fg("accent", "─".repeat(renderWidth));
 
-          function addWrapped(text: string) {
-            lines.push(...wrapTextWithAnsi(text, renderWidth));
-          }
-
-          function addWrappedWithPrefix(prefix: string, text: string) {
+          // Wraps text after a prefix, indenting continuation lines to the prefix's width.
+          function addWrapped(prefix: string, text: string) {
             const prefixWidth = visibleWidth(prefix);
             if (prefixWidth >= renderWidth) {
-              addWrapped(prefix + text);
+              lines.push(...wrapTextWithAnsi(prefix + text, renderWidth));
               return;
             }
-            const wrapped = wrapTextWithAnsi(text, renderWidth - prefixWidth);
-            const continuationPrefix = " ".repeat(prefixWidth);
-            for (let i = 0; i < wrapped.length; i++) {
-              lines.push(`${i === 0 ? prefix : continuationPrefix}${wrapped[i]}`);
-            }
+            const indent = " ".repeat(prefixWidth);
+            for (const [i, line] of wrapTextWithAnsi(text, renderWidth - prefixWidth).entries())
+              lines.push(`${i === 0 ? prefix : indent}${line}`);
           }
+          const line = (text: string) => addWrapped(" ", text);
 
-          lines.push(theme.fg("accent", "─".repeat(renderWidth)));
+          lines.push(rule);
 
-          // Tab bar (multi-question only)
           if (isMulti) {
-            const tabs: string[] = ["← "];
-            for (let i = 0; i < questions.length; i++) {
-              const isActive = i === currentTab;
-              const isAnswered = answers.has(questions[i].id);
-              const lbl = questions[i].label;
-              const box = isAnswered ? "■" : "□";
-              const color = isAnswered ? "success" : "muted";
-              const text = ` ${box} ${lbl} `;
-              const styled = isActive
-                ? theme.bg("selectedBg", theme.fg("text", text))
-                : theme.fg(color, text);
-              tabs.push(`${styled} `);
-            }
-            const canSubmit = allAnswered();
-            const isSubmitTab = currentTab === questions.length;
-            const submitText = " ✓ Submit ";
-            const submitStyled = isSubmitTab
-              ? theme.bg("selectedBg", theme.fg("text", submitText))
-              : theme.fg(canSubmit ? "success" : "dim", submitText);
-            tabs.push(`${submitStyled} →`);
-            addWrappedWithPrefix(" ", tabs.join(""));
+            const tab = (text: string, active: boolean, color: "success" | "muted" | "dim") =>
+              active ? theme.bg("selectedBg", theme.fg("text", text)) : theme.fg(color, text);
+            const tabs = questions.map((question, i) => {
+              const answered = answers.has(question.id);
+              const text = ` ${answered ? "■" : "□"} ${question.label} `;
+              return `${tab(text, i === currentTab, answered ? "success" : "muted")} `;
+            });
+            const submitText = tab(
+              " ✓ Submit ",
+              currentTab === submitTab,
+              allAnswered() ? "success" : "dim",
+            );
+            line(`← ${tabs.join("")}${submitText} →`);
             lines.push("");
           }
 
-          // Helper to render options list
           function renderOptions() {
-            for (let i = 0; i < opts.length; i++) {
-              const opt = opts[i];
+            for (const [i, option] of currentOptions().entries()) {
               const selected = i === optionIndex;
-              const isOther = opt.isOther === true;
+              const editing = option.isOther === true && typing !== undefined;
               const prefix = selected ? theme.fg("accent", "> ") : "  ";
-              const label = `${i + 1}. ${opt.label}${isOther && inputMode ? " ✎" : ""}`;
-              const color = selected || (isOther && inputMode) ? "accent" : "text";
-
-              addWrappedWithPrefix(prefix, theme.fg(color, label));
-              if (opt.description) {
-                addWrappedWithPrefix("     ", theme.fg("muted", opt.description));
-              }
+              const label = `${i + 1}. ${option.label}${editing ? " ✎" : ""}`;
+              addWrapped(prefix, theme.fg(selected || editing ? "accent" : "text", label));
+              if (option.description)
+                addWrapped("     ", theme.fg("muted", option.description));
             }
           }
 
-          // Content
-          if (inputMode && q) {
-            addWrappedWithPrefix(" ", theme.fg("text", q.prompt));
+          if (typing && q) {
+            line(theme.fg("text", q.prompt));
             lines.push("");
-            // Show options for reference
             renderOptions();
             lines.push("");
-            addWrappedWithPrefix(" ", theme.fg("muted", "Your answer:"));
-            for (const line of editor.render(Math.max(1, renderWidth - 2))) {
-              lines.push(` ${line}`);
-            }
+            line(theme.fg("muted", "Your answer:"));
+            for (const editorLine of editor.render(Math.max(1, renderWidth - 2)))
+              lines.push(` ${editorLine}`);
             lines.push("");
-            addWrappedWithPrefix(" ", theme.fg("dim", "Enter to submit • Esc to cancel"));
-          } else if (currentTab === questions.length) {
-            addWrappedWithPrefix(" ", theme.fg("accent", theme.bold("Ready to submit")));
+            line(theme.fg("dim", "Enter to submit • Esc to cancel"));
+          } else if (currentTab === submitTab) {
+            line(theme.fg("accent", theme.bold("Ready to submit")));
             lines.push("");
             for (const question of questions) {
-              const answer = answers.get(question.id);
-              if (answer) {
-                const prefix = answer.wasCustom ? "(wrote) " : "";
-                const summary = `${theme.fg("muted", `${question.label}: `)}${theme.fg("text", prefix + answer.label)}`;
-                addWrappedWithPrefix(" ", summary);
-              }
+              const given = answers.get(question.id);
+              if (!given) continue;
+              const prefix = given.wasCustom ? "(wrote) " : "";
+              line(
+                `${theme.fg("muted", `${question.label}: `)}${theme.fg("text", prefix + given.label)}`,
+              );
             }
             lines.push("");
             if (allAnswered()) {
-              addWrappedWithPrefix(" ", theme.fg("success", "Press Enter to submit"));
+              line(theme.fg("success", "Press Enter to submit"));
             } else {
               const missing = questions
                 .filter((question) => !answers.has(question.id))
                 .map((question) => question.label)
                 .join(", ");
-              addWrappedWithPrefix(" ", theme.fg("warning", `Unanswered: ${missing}`));
+              line(theme.fg("warning", `Unanswered: ${missing}`));
             }
           } else if (q) {
-            addWrappedWithPrefix(" ", theme.fg("text", q.prompt));
+            line(theme.fg("text", q.prompt));
             lines.push("");
             renderOptions();
           }
 
           lines.push("");
-          if (!inputMode) {
+          if (!typing) {
             const help = isMulti
               ? "Tab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel"
               : "↑↓ navigate • Enter select • Esc cancel";
-            addWrappedWithPrefix(" ", theme.fg("dim", help));
+            line(theme.fg("dim", help));
           }
-          lines.push(theme.fg("accent", "─".repeat(renderWidth)));
+          lines.push(rule);
 
           cachedLines = lines;
           return lines;
@@ -403,30 +313,24 @@ export default function (pi: ExtensionAPI) {
         };
       });
 
-      if (result.cancelled) {
-        return reply("User cancelled the questions", result);
-      }
+      if (result.cancelled) return reply("User cancelled the questions", result);
 
       const answerLines = result.answers.map((a) => {
-        const qLabel = questions.find((q) => q.id === a.id)?.label || a.id;
-        if (a.wasCustom) {
-          return `${qLabel}: user wrote: ${a.label}`;
-        }
-        return `${qLabel}: user selected: ${a.index}. ${a.label}`;
+        const label = questions.find((q) => q.id === a.id)?.label || a.id;
+        return a.wasCustom
+          ? `${label}: user wrote: ${a.label}`
+          : `${label}: user selected: ${a.index}. ${a.label}`;
       });
-
       return reply(answerLines.join("\n"), result);
     },
 
     renderCall(args, theme, _context) {
-      const qs = (args.questions as Question[]) || [];
-      const count = qs.length;
-      const labels = qs.map((q) => q.label || q.id).join(", ");
+      const questions = args.questions ?? [];
+      const count = questions.length;
+      const labels = questions.map((q) => q.label || q.id).join(", ");
       let text = theme.fg("toolTitle", theme.bold("question "));
       text += theme.fg("muted", `${count} question${count !== 1 ? "s" : ""}`);
-      if (labels) {
-        text += theme.fg("dim", ` (${labels})`);
-      }
+      if (labels) text += theme.fg("dim", ` (${labels})`);
       return new Text(text, 0, 0);
     },
 
@@ -436,15 +340,14 @@ export default function (pi: ExtensionAPI) {
         const text = result.content[0];
         return new Text(text?.type === "text" ? text.text : "", 0, 0);
       }
-      if (details.cancelled) {
-        return new Text(theme.fg("warning", "Cancelled"), 0, 0);
-      }
+      if (details.cancelled) return new Text(theme.fg("warning", "Cancelled"), 0, 0);
       const lines = details.answers.map((a) => {
-        if (a.wasCustom) {
-          return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${theme.fg("muted", "(wrote) ")}${a.label}`;
-        }
-        const display = a.index ? `${a.index}. ${a.label}` : a.label;
-        return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${display}`;
+        const shown = a.wasCustom
+          ? `${theme.fg("muted", "(wrote) ")}${a.label}`
+          : a.index
+            ? `${a.index}. ${a.label}`
+            : a.label;
+        return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${shown}`;
       });
       return new Text(lines.join("\n"), 0, 0);
     },
