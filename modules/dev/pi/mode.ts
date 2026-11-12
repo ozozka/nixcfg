@@ -35,6 +35,7 @@ import {
   assistantText,
   lastEntry,
   loadDefinitions,
+  loadMarkdown,
   type Notice,
   optionalList,
   optionalText,
@@ -476,37 +477,33 @@ const ROADMAP_TOOL = "roadmap";
 const FOCUS_ENTRY = "roadmap-focus";
 const ROADMAP_ACTIONS = ["show", "backlog", "write", "focus", "tick", "complete"] as const;
 
+const roadmapText = loadMarkdown(new URL("./roadmap.md", import.meta.url), [
+  "plan",
+  "content",
+  "idea",
+  "step",
+  "delivered",
+  "reminder",
+]);
+const help = roadmapText.fields;
+
+// These zero-argument templates are also native /commands. Reading their bodies here
+// keeps rendering independent of delivery: continuation must not start a new user turn.
+const continuePrompt = loadMarkdown(new URL("./prompts/continue-plan.md", import.meta.url), [
+  "description",
+]).body;
+const finishPrompt = loadMarkdown(new URL("./prompts/finish-plan.md", import.meta.url), [
+  "description",
+]).body;
+
 const RoadmapParams = Type.Object({
   action: StringEnum(ROADMAP_ACTIONS),
-  plan: Type.Optional(
-    Type.String({
-      description:
-        "Plan name; write and focus need it, the others default to the focused plan (or the only active one)",
-    }),
-  ),
-  content: Type.Optional(
-    Type.String({
-      description: "write: the plan body in the plan format, without its heading",
-    }),
-  ),
-  idea: Type.Optional(Type.String({ description: "backlog: the idea, one line" })),
-  step: Type.Optional(Type.Number({ description: "tick: the step number" })),
-  delivered: Type.Optional(
-    Type.Array(Type.String(), {
-      description: "complete: one Completed line per delivered capability",
-    }),
-  ),
+  plan: Type.Optional(Type.String({ description: help.plan })),
+  content: Type.Optional(Type.String({ description: help.content })),
+  idea: Type.Optional(Type.String({ description: help.idea })),
+  step: Type.Optional(Type.Number({ description: help.step })),
+  delivered: Type.Optional(Type.Array(Type.String(), { description: help.delivered })),
 });
-
-const ROADMAP_DESCRIPTION = `Manage plans on the project's roadmap board: docs/roadmap.md or README.md's Roadmap section when they have one, otherwise a root roadmap.md (created on the first change). The board has six sections: Status and Limitations (free text, edited like other documentation), Backlog, Plans, Active, and Completed.
-Actions:
-- show: the board's plans and the focused plan's text.
-- backlog: add an idea to Backlog as one line.
-- write: add a plan to Plans, or replace an existing plan's body where it is; focuses it.
-- focus: make a plan the one this session works on.
-- tick: mark a step done; the plan moves from Plans to Active on its first tick.
-- complete: when all steps are ticked, replace the plan with Completed lines.
-Plan format (the body, without the heading): bullets only; bold groups \`- **Goal**:\`, \`- **Findings**:\`, \`- **Decisions**:\`, \`- **Specification**:\`, and \`- **Steps**:\`, leaving out empty ones; each step under Steps is \`  - [ ] **1. Title**: details\`, numbered from 1, one commit each.`;
 
 interface RoadmapDetails {
   error?: string;
@@ -683,7 +680,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_compact", (_event, ctx) => {
     const tracked = trackedPlan(ctx.cwd, focus);
     if (!tracked?.plan.steps.some((step) => !step.done)) return;
-    const reminder = `Roadmap plan from before compaction:\n${planText(tracked.board, tracked.plan)}`;
+    const reminder = help.reminder.replaceAll("{plan}", planText(tracked.board, tracked.plan));
     pi.sendMessage(
       { customType: "roadmap-reminder", content: reminder, display: false },
       // Mid-run compaction reaches the next model call; manual /compact the next prompt.
@@ -694,7 +691,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: ROADMAP_TOOL,
     label: "Roadmap",
-    description: ROADMAP_DESCRIPTION,
+    description: roadmapText.body,
     parameters: RoadmapParams,
 
     // biome-ignore lint/suspicious/useAwait: Pi's tool API requires a Promise.
@@ -854,11 +851,11 @@ export default function (pi: ExtensionAPI) {
     if (plan.steps.some((step) => !step.done)) {
       if (previous.plan !== plan.name || baseline.done <= previous.done)
         return stop("no step was ticked");
-      message = "Continue with the next step.";
+      message = continuePrompt;
     } else {
       if (finishRequested) return;
       finishRequested = true;
-      message = "All steps are ticked. Finish the plan.";
+      message = finishPrompt;
     }
     continuations++;
     return {

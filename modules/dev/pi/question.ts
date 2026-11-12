@@ -15,35 +15,37 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import { reply } from "./lib/shared.ts";
+import { loadMarkdown, reply } from "./lib/shared.ts";
+
+const questionText = loadMarkdown(new URL("./question.md", import.meta.url), [
+  "option-value",
+  "option-label",
+  "option-description",
+  "id",
+  "label",
+  "prompt",
+  "options",
+  "allowOther",
+  "questions",
+]);
+const parameterHelp = questionText.fields;
 
 const QuestionOptionSchema = Type.Object({
-  value: Type.String({ description: "The value returned when selected" }),
-  label: Type.String({ description: "Display label for the option" }),
-  description: Type.Optional(
-    Type.String({ description: "Optional description shown below label" }),
-  ),
+  value: Type.String({ description: parameterHelp["option-value"] }),
+  label: Type.String({ description: parameterHelp["option-label"] }),
+  description: Type.Optional(Type.String({ description: parameterHelp["option-description"] })),
 });
 
 const QuestionSchema = Type.Object({
-  id: Type.String({ description: "Unique identifier for this question" }),
-  label: Type.Optional(
-    Type.String({
-      description:
-        "Short contextual label for tab bar, e.g. 'Scope', 'Priority' (defaults to Q1, Q2)",
-    }),
-  ),
-  prompt: Type.String({ description: "The full question text to display" }),
-  options: Type.Array(QuestionOptionSchema, {
-    description: "Available options to choose from",
-  }),
-  allowOther: Type.Optional(
-    Type.Boolean({ description: "Allow 'Type something' option (default: true)" }),
-  ),
+  id: Type.String({ description: parameterHelp.id }),
+  label: Type.Optional(Type.String({ description: parameterHelp.label })),
+  prompt: Type.String({ description: parameterHelp.prompt }),
+  options: Type.Array(QuestionOptionSchema, { description: parameterHelp.options }),
+  allowOther: Type.Optional(Type.Boolean({ description: parameterHelp.allowOther })),
 });
 
 const QuestionParams = Type.Object({
-  questions: Type.Array(QuestionSchema, { description: "Questions to ask the user" }),
+  questions: Type.Array(QuestionSchema, { description: parameterHelp.questions }),
 });
 
 type RenderOption = Static<typeof QuestionOptionSchema> & { isOther?: boolean };
@@ -73,8 +75,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "question",
     label: "Question",
-    description:
-      "Ask the user one or more questions. Use for clarifying requirements, getting preferences, or confirming decisions. For single questions, shows a simple option list. For multiple questions, shows a tab-based interface.",
+    description: questionText.body,
     parameters: QuestionParams,
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

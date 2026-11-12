@@ -29,6 +29,7 @@ import {
   assistantText,
   formatTokens,
   loadDefinitions,
+  loadMarkdown,
   optionalList,
   optionalText,
   optionalThinking,
@@ -377,27 +378,36 @@ async function runAgent(
   return result;
 }
 
+const subagentText = loadMarkdown(new URL("./subagent.md", import.meta.url), [
+  "agent",
+  "task",
+  "tasks",
+  "chain",
+  "item-agent",
+  "item-task",
+  "chain-task",
+]);
+const help = subagentText.fields;
+
 const TaskItem = Type.Object({
-  agent: Type.String({ description: "Name of the agent to invoke" }),
-  task: Type.String({ description: "Task to delegate to the agent" }),
+  agent: Type.String({ description: help["item-agent"] }),
+  task: Type.String({ description: help["item-task"] }),
 });
 
 const ChainItem = Type.Object({
-  agent: Type.String({ description: "Name of the agent to invoke" }),
-  task: Type.String({
-    description: "Task with an optional {previous} placeholder for the prior step's output",
-  }),
+  agent: Type.String({ description: help["item-agent"] }),
+  task: Type.String({ description: help["chain-task"] }),
 });
 
 const SubagentParams = Type.Object({
-  agent: Type.Optional(Type.String({ description: "Agent to invoke (single mode)" })),
-  task: Type.Optional(Type.String({ description: "Task to delegate (single mode)" })),
+  agent: Type.Optional(Type.String({ description: help.agent })),
+  task: Type.Optional(Type.String({ description: help.task })),
   tasks: Type.Optional(
     Type.Array(TaskItem, {
-      description: `Tasks to run in parallel (at most ${MAX_PARALLEL_TASKS})`,
+      description: help.tasks.replaceAll("{maxParallelTasks}", String(MAX_PARALLEL_TASKS)),
     }),
   ),
-  chain: Type.Optional(Type.Array(ChainItem, { description: "Steps to run in sequence" })),
+  chain: Type.Optional(Type.Array(ChainItem, { description: help.chain })),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -423,12 +433,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: [
-      "Run tasks in subagents with isolated contexts. Each subagent receives its task, not the parent conversation.",
-      "Modes: single (agent + task), parallel (tasks array), chain (sequential, with {previous} replaced by the prior step's output).",
-      "Agents:",
-      ...[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`),
-    ].join("\n"),
+    description: subagentText.body.replaceAll(
+      "{agents}",
+      [...agents].map(([name, agent]) => `- ${name}: ${agent.description}`).join("\n"),
+    ),
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {

@@ -140,6 +140,10 @@ pkgs.treefmt.withConfig {
           "modules/dev/claude/workflow.md"
           "modules/dev/pi/agents/**"
           "modules/dev/pi/modes/**"
+          "modules/dev/pi/prompts/**"
+          "modules/dev/pi/question.md"
+          "modules/dev/pi/roadmap.md"
+          "modules/dev/pi/subagent.md"
         ];
         options = [
           "check"

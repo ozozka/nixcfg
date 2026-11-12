@@ -11,12 +11,13 @@ let
   cfg = config.ozozka;
   agents = cfg.mod.dev.agents;
   settingsFormat = pkgs.formats.json { };
-  # The extensions and lib/ in one store path, so imports of lib/ resolve next to the
-  # extension files whether Pi follows the links or not.
+  # Keep code and Markdown in one store path, so adjacent reads and imports resolve
+  # whether Pi follows the home-file links or not.
   extensions = lib.fileset.toSource {
     root = ./.;
-    fileset = lib.fileset.fileFilter (file: file.hasExt "ts") ./.;
+    fileset = lib.fileset.fileFilter (file: file.hasExt "ts" || file.hasExt "md") ./.;
   };
+  prompts = lib.mapAttrs (name: _: ./prompts + "/${name}") (builtins.readDir ./prompts);
 in
 {
   imports = with self.nixosModules; [
@@ -30,19 +31,33 @@ in
     ".pi/agent" = {
       # Shared agent assets: a global context file, prompt templates, and skills.
       "AGENTS.md" = agents.instructions;
-      inherit (agents) prompts skills;
+      inherit (agents) skills;
+      "prompts" =
+        assert lib.assertMsg (
+          lib.intersectAttrs agents.prompts prompts == { }
+        ) "Pi-specific prompt names must not conflict with shared prompts.";
+        agents.prompts // prompts;
       # Mode definitions for mode.ts.
       "modes" = ./modes;
       # Subagent definitions for subagent.ts.
       "agents" = ./agents;
 
       "extensions" =
-        lib.genAttrs [ "docs.ts" "mode.ts" "notify.ts" "question.ts" "status.ts" "subagent.ts" ] (
-          file: "${extensions}/${file}"
-        )
+        lib.genAttrs [
+          "docs.ts"
+          "mode.ts"
+          "notify.ts"
+          "question.ts"
+          "status.ts"
+          "subagent.ts"
+          "question.md"
+          "roadmap.md"
+          "subagent.md"
+        ] (file: "${extensions}/${file}")
         // {
           # Shared code; Pi skips folders without an index file.
           "lib" = "${extensions}/lib";
+          "prompts" = "${extensions}/prompts";
         };
 
       "settings.json" = settingsFormat.generate "settings.json" {
