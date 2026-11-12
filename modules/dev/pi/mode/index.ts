@@ -398,6 +398,8 @@ export default function (pi: ExtensionAPI) {
   let state: ModeState = {};
   // In-memory task list, reconstructed from the session branch.
   let items: TodoItem[] = [];
+  // A plan was written in the current run; roadmap modes offer `next` only then.
+  let planWritten = false;
 
   const isModeName = (value: unknown): value is string =>
     typeof value === "string" && modes.has(value);
@@ -525,6 +527,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
         const result = roadmapAction(ctx.cwd, params as RoadmapInput);
+        if (params.action === "write") planWritten = true;
         updateWidget(ctx);
         return {
           content: [{ type: "text", text: result.text }],
@@ -634,7 +637,7 @@ export default function (pi: ExtensionAPI) {
     const mode = state.name ? modes.get(state.name) : undefined;
     updateWidget(ctx);
     if (!(mode?.next && mode.nextPrompt) || event.aborted || !ctx.hasUI) return;
-    if (!(mode.roadmap ? hasOpenSteps(ctx) : hasOpenTasks())) return;
+    if (!(mode.roadmap ? planWritten && hasOpenSteps(ctx) : hasOpenTasks())) return;
     const { next, nextPrompt } = mode;
     const accept = next === FREE ? `Yes, leave ${state.name} mode` : `Yes, switch to ${next}`;
     const choice = await ctx.ui.select(nextPrompt.replace(TRAILING_PERIOD, "?"), [
@@ -647,6 +650,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (event) => {
+    planWritten = false;
     const mode = state.name ? modes.get(state.name) : undefined;
     if (!mode) return;
     return { systemPrompt: `${event.systemPrompt}\n\n${mode.instructions}` };
