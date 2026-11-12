@@ -1,28 +1,34 @@
 /**
- * Subagent tool: delegates tasks to the agents in agents.ts, each in its own `pi` process with
- * an isolated context window. Modes: single ({ agent, task }), parallel ({ tasks }), and chain
- * ({ chain }, where {previous} is replaced by the prior step's output). /review runs the
- * reviewer through the main agent.
+ * Subagent tool: delegates tasks to agents, each in its own `pi` process with an isolated
+ * context window. Modes: single ({ agent, task }), parallel ({ tasks }), and chain ({ chain },
+ * where {previous} is replaced by the prior step's output). /review runs the reviewer through
+ * the main agent.
+ *
+ * Agents are Markdown files in agents/ under Pi's agent directory, loaded at startup: the
+ * file name is the agent name, the frontmatter its settings, and the body is appended to its
+ * system prompt. Without a model, an agent inherits the session's model and thinking level;
+ * without tools, it gets the default tools. Project-local agents are not loaded.
  *
  * Children run with PI_SUBAGENT set and do not get this tool, so delegation stays one level
- * deep. Vendored from the Pi subagent example, with agents defined in agents.ts instead of
- * discovered from user and project directories.
+ * deep. Vendored from the Pi subagent example.
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   formatReadLineRange,
+  getAgentDir,
   getMarkdownTheme,
+  parseFrontmatter,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { AGENTS, type Agent, isAgentName } from "./agents.ts";
 
 const CHILD_ENV = "PI_SUBAGENT";
 const MAX_PARALLEL_TASKS = 8;
@@ -34,6 +40,78 @@ const RUNTIME = /^(node|bun)(\.exe)?$/i;
 
 type ThemeColor = Parameters<Theme["fg"]>[0];
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+
+const THINKING_LEVELS: readonly string[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+interface Agent {
+  description: string;
+  model?: string;
+  thinkingLevel?: ThinkingLevel;
+  tools?: string[];
+  prompt: string;
+}
+
+// A type alias: parseFrontmatter needs the implicit index signature an interface lacks.
+type AgentFrontmatter = {
+  description?: unknown;
+  model?: unknown;
+  thinking?: unknown;
+  tools?: unknown;
+};
+
+// Validates one agent file; unknown keys are errors, so typos do not pass silently.
+function parseAgent(content: string): Agent {
+  const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(content);
+  const { description, model, thinking, tools, ...unknown } = frontmatter;
+  const extra = Object.keys(unknown);
+  if (extra.length > 0) throw new Error(`unknown keys: ${extra.join(", ")}`);
+  if (typeof description !== "string" || !description.trim())
+    throw new Error("description is required");
+  if (model !== undefined && typeof model !== "string")
+    throw new Error("model must be a string");
+  if (thinking !== undefined && !THINKING_LEVELS.includes(String(thinking)))
+    throw new Error(`thinking must be one of: ${THINKING_LEVELS.join(", ")}`);
+  // Accepts both YAML spellings: `tools: read, bash` and `tools: [read, bash]`.
+  const list = typeof tools === "string" ? tools.split(",") : tools;
+  if (list !== undefined && !(Array.isArray(list) && list.every((t) => typeof t === "string")))
+    throw new Error("tools must be a comma-separated string or a list");
+  if (!body.trim()) throw new Error("the prompt (body) is empty");
+  return {
+    description: description.trim(),
+    model,
+    thinkingLevel: thinking as ThinkingLevel | undefined,
+    tools: list?.map((t) => t.trim()).filter(Boolean),
+    prompt: body.trim(),
+  };
+}
+
+function loadAgents(): { agents: Map<string, Agent>; errors: string[] } {
+  const dir = join(getAgentDir(), "agents");
+  const agents = new Map<string, Agent>();
+  const errors: string[] = [];
+  let files: string[] = [];
+  try {
+    files = readdirSync(dir).filter((file) => file.endsWith(".md"));
+  } catch {
+    errors.push(`no agents directory at ${dir}`);
+  }
+  for (const file of files.sort()) {
+    try {
+      agents.set(basename(file, ".md"), parseAgent(readFileSync(join(dir, file), "utf8")));
+    } catch (error) {
+      errors.push(`${file}: ${(error as Error).message}`);
+    }
+  }
+  return { agents, errors };
+}
 
 interface UsageStats {
   input: number;
@@ -263,7 +341,8 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 function piArgs(agent: Agent, defaults: DispatchDefaults, task: string): string[] {
   const args = ["--mode", "json", "-p", "--no-session"];
   const model = agent.model ?? defaults.model;
-  const thinkingLevel = agent.model ? agent.thinkingLevel : defaults.thinkingLevel;
+  const thinkingLevel =
+    agent.thinkingLevel ?? (agent.model ? undefined : defaults.thinkingLevel);
   if (model) args.push("--model", model);
   if (thinkingLevel) args.push("--thinking", thinkingLevel);
   if (agent.tools) args.push("--tools", agent.tools.join(","));
@@ -274,6 +353,7 @@ function piArgs(agent: Agent, defaults: DispatchDefaults, task: string): string[
 async function runSingleAgent(
   cwd: string,
   defaults: DispatchDefaults,
+  agents: Map<string, Agent>,
   agentName: string,
   task: string,
   step: number | undefined,
@@ -290,12 +370,12 @@ async function runSingleAgent(
     usage: emptyUsage(),
     step,
   };
-  if (!isAgentName(agentName)) {
+  const agent = agents.get(agentName);
+  if (!agent) {
     result.exitCode = 1;
-    result.stderr = `Unknown agent "${agentName}". Available: ${Object.keys(AGENTS).join(", ")}.`;
+    result.stderr = `Unknown agent "${agentName}". Available: ${[...agents.keys()].join(", ")}.`;
     return result;
   }
-  const agent: Agent = AGENTS[agentName];
   result.model = agent.model ?? defaults.model;
 
   const emitUpdate = () =>
@@ -400,17 +480,15 @@ const SubagentParams = Type.Object({
   chain: Type.Optional(Type.Array(ChainItem, { description: "Steps to run in sequence" })),
 });
 
-const DESCRIPTION = [
-  "Delegate tasks to specialized subagents, each with an isolated context. The subagent sees only the task, so include the context it needs.",
-  "Modes: single (agent + task), parallel (tasks array), chain (sequential, with {previous} replaced by the prior step's output).",
-  "Agents:",
-  ...Object.entries(AGENTS).map(([name, agent]) => `- ${name}: ${agent.description}`),
-].join("\n");
-
 const REVIEW_PROMPT = `Use the subagent tool to have the reviewer agent review the current uncommitted changes. Report its findings, and do not fix anything until I ask.`;
 
 export default function (pi: ExtensionAPI) {
   if (process.env[CHILD_ENV]) return;
+
+  const { agents, errors } = loadAgents();
+  pi.on("session_start", (_event, ctx) => {
+    if (errors.length > 0) ctx.ui.notify(`Subagents: ${errors.join("; ")}`, "warning");
+  });
 
   pi.registerCommand("review", {
     description: "Review the current changes with the reviewer subagent: /review [focus]",
@@ -424,7 +502,12 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: DESCRIPTION,
+    description: [
+      "Delegate tasks to specialized subagents, each with an isolated context. The subagent sees only the task, so include the context it needs.",
+      "Modes: single (agent + task), parallel (tasks array), chain (sequential, with {previous} replaced by the prior step's output).",
+      "Agents:",
+      ...[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`),
+    ].join("\n"),
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -442,7 +525,17 @@ export default function (pi: ExtensionAPI) {
         update: OnUpdate | undefined,
         mode: SubagentDetails["mode"],
       ) =>
-        runSingleAgent(ctx.cwd, defaults, agent, task, step, signal, update, makeDetails(mode));
+        runSingleAgent(
+          ctx.cwd,
+          defaults,
+          agents,
+          agent,
+          task,
+          step,
+          signal,
+          update,
+          makeDetails(mode),
+        );
 
       const hasChain = (params.chain?.length ?? 0) > 0;
       const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -452,7 +545,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `Invalid parameters: provide exactly one mode.\nAgents: ${Object.keys(AGENTS).join(", ")}`,
+              text: `Invalid parameters: provide exactly one mode.\nAgents: ${[...agents.keys()].join(", ")}`,
             },
           ],
           details: makeDetails("single")([]),

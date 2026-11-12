@@ -20,6 +20,8 @@ in
       # Shared agent assets: a global context file, prompt templates, and skills.
       "AGENTS.md" = agents.instructions;
       inherit (agents) prompts skills;
+      # Subagent definitions for subagent.ts.
+      "agents" = ./agents;
 
       "extensions" = {
         "docs.ts" = ./docs.ts;
@@ -29,10 +31,7 @@ in
         "todo.ts" = ./todo.ts;
         "undo.ts" = ./undo.ts;
         "status.ts" = ./status.ts;
-        "subagent" = {
-          "agents.ts" = ./subagent/agents.ts;
-          "index.ts" = ./subagent/index.ts;
-        };
+        "subagent.ts" = ./subagent.ts;
       };
 
       "settings.json" = settingsFormat.generate "settings.json" {
