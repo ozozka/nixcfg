@@ -84,6 +84,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("before_agent_start", async (_event, ctx) => {
+    // One-shot runs without a UI, such as subagents, have no prompt to undo.
+    if (!ctx.hasUI) return;
     const root = await repositoryRoot(ctx.cwd);
     if (!root) return;
     try {
