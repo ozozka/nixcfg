@@ -27,7 +27,7 @@ in
         "docs.ts" = ./docs.ts;
         "mode.ts" = ./mode.ts;
         "notify.ts" = ./notify.ts;
-        "questionnaire.ts" = ./questionnaire.ts;
+        "question.ts" = ./question.ts;
         "todo.ts" = ./todo.ts;
         "status.ts" = ./status.ts;
         "subagent.ts" = ./subagent.ts;
