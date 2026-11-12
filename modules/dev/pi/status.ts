@@ -191,6 +191,32 @@ export default function (pi: ExtensionAPI) {
     toolCalls = 0;
   }
 
+  // Rebuilds the work clock and tool calls from the session's messages, so a resumed, reloaded,
+  // or forked session continues its counts and a new one starts at zero. A run lasts from its
+  // user message to the last message before the next one, which approximates the live clock.
+  function restoreMetrics(ctx: ExtensionContext) {
+    let runStart: number | undefined;
+    let runEnd = 0;
+    const finishRun = () => {
+      if (runStart === undefined) return;
+      lastPromptMilliseconds = runEnd - runStart;
+      activeMilliseconds += lastPromptMilliseconds;
+    };
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "message") continue;
+      const time = Date.parse(entry.timestamp);
+      if (!Number.isFinite(time)) continue;
+      if (entry.message.role === "user") {
+        finishRun();
+        runStart = time;
+      } else if (entry.message.role === "toolResult") {
+        toolCalls++;
+      }
+      runEnd = time;
+    }
+    finishRun();
+  }
+
   pi.on("tool_execution_start", () => {
     if (!context) return;
     toolCalls++;
@@ -203,6 +229,7 @@ export default function (pi: ExtensionAPI) {
     context = ctx;
     selectedProvider = ctx.model?.provider;
     for (const window of loadUsage()) usage.set(window.windowMinutes, window);
+    restoreMetrics(ctx);
     updateStatus();
     // Local display updates only: no quota queries or other network requests.
     // While idle the work clock stays frozen; reset countdowns can still change.
