@@ -9,10 +9,10 @@
  * Modes are Markdown files in modes/ under Pi's agent directory, loaded at startup: the file
  * name is the mode name, the frontmatter its settings (including `order` and the status
  * `color`), and the body its instructions. A mode with `next` asks, when a run wrote a plan
- * that still has open steps, whether to switch to that mode and send `next-prompt`. The mode
- * state is recorded in the session on every switch and restored from the current branch, so
- * resuming or navigating with /tree brings back the matching mode. Derived from the Pi preset
- * example.
+ * that still has open steps, whether to switch to that mode and send `next-prompt`, where
+ * `{plan}` stands for the plan's name. The mode state is recorded in the session on every
+ * switch and restored from the current branch, so resuming or navigating with /tree brings
+ * back the matching mode. Derived from the Pi preset example.
  *
  * Roadmap: the only place for task organization, in every mode. The `roadmap` tool writes plans
  * to the project's roadmap board and ticks their steps (see Roadmap board below). Each session
@@ -55,6 +55,7 @@ const FREE_COLOR = "text";
 const COLORS = ["text", "muted", "dim", "accent", "success", "warning", "error"] as const;
 type Color = (typeof COLORS)[number];
 const TRAILING_PERIOD = /\.$/;
+const PLAN_PLACEHOLDER = "{plan}";
 const BLOCKED = /^\s*Blocked:/;
 // Upper bound on automatic continuations per prompt.
 const AUTO_CONTINUE_LIMIT = 50;
@@ -695,8 +696,6 @@ export default function (pi: ExtensionAPI) {
   const isModeName = (value: unknown): value is string =>
     typeof value === "string" && modes.has(value);
   const currentMode = () => (state.name ? modes.get(state.name) : undefined);
-  const hasOpenSteps = (ctx: ExtensionContext) =>
-    trackedPlan(ctx.cwd, focus)?.steps.some((step) => !step.done) === true;
 
   // Roadmap
 
@@ -872,8 +871,11 @@ export default function (pi: ExtensionAPI) {
     const mode = state.name ? modes.get(state.name) : undefined;
     updateWidget(ctx);
     if (!(mode?.next && mode.nextPrompt) || event.aborted || !ctx.hasUI) return;
-    if (!(planWritten && hasOpenSteps(ctx))) return;
-    const { next, nextPrompt } = mode;
+    const plan = planWritten ? trackedPlan(ctx.cwd, focus) : undefined;
+    if (!plan?.steps.some((step) => !step.done)) return;
+    const { next } = mode;
+    // `{plan}` in next-prompt names the plan, so the message and the focus agree.
+    const nextPrompt = mode.nextPrompt.replaceAll(PLAN_PLACEHOLDER, plan.name);
     const accept = next === FREE ? `Yes, leave ${state.name} mode` : `Yes, switch to ${next}`;
     const choice = await ctx.ui.select(nextPrompt.replace(TRAILING_PERIOD, "?"), [
       accept,
