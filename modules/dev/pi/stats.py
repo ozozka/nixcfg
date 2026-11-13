@@ -339,7 +339,7 @@ def collect(since, project, windows):
 
 # Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
 
-TABS = {"overview": "Overview", "tools": "Tools"}
+TABS = {"overview": "Overview", "startup": "Startup", "tools": "Tools"}
 # Chart groups and their theme colors, in stacking order; parts map to them by prefix.
 CHART_GROUPS = {
     "tool results": "s",
@@ -354,6 +354,12 @@ CHART_GROUP = {
     "conversation": "conversation",
     "call": "tool calls",
     "result": "tool results",
+}
+# Startup groups: the parts of a call before any conversation, and their theme colors.
+STARTUP_GROUPS = {
+    "context": ("context files", "s"),
+    "tool": ("tool definitions", "p"),
+    "system": ("system prompt", "m"),
 }
 BAR_WIDTH = 0.72
 TICK_COUNT = 8
@@ -404,8 +410,11 @@ def group_of(part):
 
 
 def square(part, theme):
-    color = theme["colors"][CHART_GROUPS[group_of(part)]]
-    return f'<span class="square" style="color:#{color}">■</span>'
+    return swatch(CHART_GROUPS[group_of(part)], theme)
+
+
+def swatch(color_key, theme):
+    return Markup(f'<span class="square" style="color:#{theme["colors"][color_key]}">■</span>')
 
 
 def kpis(items):
@@ -533,12 +542,13 @@ def x_labels(axes, labels):
     axes.set_xlim(-BAR_WIDTH / 2, len(labels) - 1 + BAR_WIDTH / 2)
 
 
-def combo_chart(theme, labels, bars, lines, xlabel="", points=False):
+def combo_chart(theme, labels, bars, lines, xlabel="", points=False, shared=False):
     """Overlay-colored columns on the left axis and lines over them.
 
     bars: (label, values); lines: (label, values, color key, axis label or None). Each line
     has its own zero-based axis: the first labeled one on the right, the others hidden.
-    points draws unconnected markers instead, for categories rather than a sequence.
+    points draws unconnected markers instead, for categories rather than a sequence; shared
+    draws the lines on the columns' axis, for series in the same unit.
     """
     colors = theme["colors"]
 
@@ -558,11 +568,13 @@ def combo_chart(theme, labels, bars, lines, xlabel="", points=False):
         compact_ticks(base)
         shown = False
         for label, values, color, axis_label in lines:
-            axes = base.twinx()
+            axes = base if shared else base.twinx()
             line = {"linestyle": "none", "marker": "D"} if points else {}
             handles += axes.plot(
                 range(len(values)), values, color=f"#{colors[color]}", label=label, **line
             )
+            if shared:
+                continue
             axes.set_ylim(0, (max(values, default=0) or 1) * 1.05)
             if axis_label and not shown:
                 shown = True
@@ -584,8 +596,9 @@ def combo_chart(theme, labels, bars, lines, xlabel="", points=False):
     return render(theme, draw)
 
 
-def composition_chart(theme, columns):
-    # 100% stacked areas of the chart groups per column, without axes; tables carry the legend.
+def composition_chart(theme, columns, groups=CHART_GROUPS):
+    # 100% stacked areas of the groups per column, without axes; tables carry the legend.
+    # groups: group name -> theme color key, in stacking order.
     colors = theme["colors"]
 
     def draw(figure):
@@ -598,9 +611,9 @@ def composition_chart(theme, columns):
                     100 * column.get(group, 0) / total
                     for column, total in zip(columns, totals, strict=True)
                 ]
-                for group in CHART_GROUPS
+                for group in groups
             ],
-            colors=[f"#{colors[key]}" for key in CHART_GROUPS.values()],
+            colors=[f"#{colors[key]}" for key in groups.values()],
             step="mid",
         )
         axes.set_ylim(0, 100)
@@ -764,10 +777,180 @@ def tools_tab(sessions, calls, results, theme):
     return tools + chart + agents + "<h2>Largest tool results</h2>" + largest
 
 
+def startup_of(session):
+    # The first call's parts before any conversation, and the user's first message.
+    parts = session["calls"][0]["parts"]
+    fixed = {
+        name: tokens for name, tokens in parts.items() if name.split(":")[0] in STARTUP_GROUPS
+    }
+    return fixed, parts.get("conversation:user", 0)
+
+
+def startup_kpis(totals, user, window):
+    by_group = defaultdict(float)
+    for name, tokens in totals.items():
+        by_group[name.split(":")[0]] += tokens
+    total = sum(totals.values())
+    return kpis(
+        [
+            ("startup", num(total)),
+            *[(label, num(by_group[key])) for key, (label, _) in STARTUP_GROUPS.items()],
+            ("first message", num(user)),
+            ("of window", pct(total / window) if window else "-"),
+        ]
+    )
+
+
+def startup_table(theme, values, extra=None):
+    # values: part -> tokens; extra: part -> one more cell (sessions seen), when given.
+    total = sum(values.values()) or 1
+    rows = []
+    for key, (label, color) in STARTUP_GROUPS.items():
+        items = sorted(
+            ((name, tokens) for name, tokens in values.items() if name.split(":")[0] == key),
+            key=lambda item: -item[1],
+        )
+        if not items:
+            continue
+        subtotal = sum(tokens for _, tokens in items)
+        cells = [
+            Markup(swatch(color, theme) + esc(label)),
+            num(subtotal),
+            pct(subtotal / total),
+        ]
+        rows.append(([*cells, ""] if extra else cells, "group"))
+        shown, rest = items[:TOP_PARTS], items[TOP_PARTS:]
+        for name, tokens in shown:
+            cells = [name.split(":", 1)[1], num(tokens), pct(tokens / total)]
+            rows.append(([*cells, extra[name]] if extra else cells, "part"))
+        if rest:
+            tokens = sum(t for _, t in rest)
+            cells = [f"other ({len(rest)})", num(tokens), pct(tokens / total)]
+            rows.append(([*cells, ""] if extra else cells, "part"))
+    headers = ["Part", "Tokens", "Share"] + (["Sessions"] if extra else [])
+    return table(headers, rows)
+
+
+def startup_bar(theme, values):
+    # One horizontal bar split into every part, colored by group.
+    colors = theme["colors"]
+
+    def draw(figure):
+        axes = figure.subplots()
+        left = 0
+        for key, (_, color) in STARTUP_GROUPS.items():
+            items = sorted(
+                (t for n, t in values.items() if n.split(":")[0] == key), reverse=True
+            )
+            for tokens in items:
+                axes.barh(
+                    0,
+                    tokens,
+                    left=left,
+                    color=f"#{colors[color]}",
+                    edgecolor=f"#{colors['b']}",
+                    linewidth=1,
+                )
+                left += tokens
+        axes.set_xlim(0, left or 1)
+        axes.set_yticks([])
+        compact_ticks(axes)
+        axes.xaxis.set_major_formatter(axes.yaxis.get_major_formatter())
+        axes.set_xlabel("Tokens")
+
+    return render(theme, draw, size=(16, 1.6))
+
+
+def startup_tab(sessions, theme):
+    by_agent = defaultdict(list)
+    for session in sorted(sessions, key=lambda s: s["time"]):
+        by_agent[session["agent"]].append(session)
+    agents = sorted(by_agent, key=lambda a: (a != "main", a))
+
+    # Average: every session start of each agent.
+    panels = []
+    for agent in agents:
+        items = by_agent[agent]
+        starts = [startup_of(s) for s in items]
+        totals, seen = defaultdict(float), defaultdict(int)
+        for fixed, _ in starts:
+            for name, tokens in fixed.items():
+                totals[name] += tokens / len(starts)
+                seen[name] += 1
+        user = statistics.mean(u for _, u in starts)
+        windows = [s["calls"][0]["window"] for s in items if s["calls"][0]["window"]]
+        columns = [
+            {
+                key: sum(t for n, t in fixed.items() if n.split(":")[0] == key)
+                for key in STARTUP_GROUPS
+            }
+            for fixed, _ in starts
+        ]
+        groups = {key: color for key, (_, color) in STARTUP_GROUPS.items()}
+        labels = [s["time"][:10] for s in items]
+        history = combo_chart(
+            theme,
+            labels,
+            ("Startup tokens", [sum(f.values()) for f, _ in starts]),
+            [
+                (label, [c[key] for c in columns], color, None)
+                for key, (label, color) in STARTUP_GROUPS.items()
+            ],
+            "Session",
+            shared=True,
+        )
+        panels.append(
+            (
+                f"average-{agent}",
+                f"{agent} · {len(items)} sessions",
+                startup_kpis(totals, user, statistics.mean(windows) if windows else None)
+                + '<div class="split">'
+                + startup_table(theme, totals, seen)
+                + composition_chart(theme, columns, groups)
+                + "</div>"
+                + history,
+            )
+        )
+    average = selector(panels)
+
+    # Selected: the latest session start of each project and agent.
+    latest = {}
+    for session in sorted(sessions, key=lambda s: s["time"]):
+        latest[(Path(session["cwd"]).name, session["agent"])] = session
+    panels = []
+    for (project, agent), session in sorted(
+        latest.items(), key=lambda kv: kv[1]["time"], reverse=True
+    ):
+        fixed, user = startup_of(session)
+        panels.append(
+            (
+                f"start-{session['id']}",
+                f"{project} · {agent} · {session['time'][:10]}",
+                startup_kpis(fixed, user, session["calls"][0]["window"])
+                + startup_bar(theme, fixed)
+                + startup_table(theme, fixed),
+            )
+        )
+    return "<h2>Average</h2>" + average + "<h2>Selected</h2>" + selector(panels)
+
+
+def selector(panels):
+    # A select over panels (id, label, content); the first is shown.
+    options = "".join(
+        f'<option value="{esc(i)}">{esc(label)}</option>' for i, label, _ in panels
+    )
+    shown = "".join(
+        f'<div class="panel" id="{esc(i)}"{" hidden" if n else ""}>{content}</div>'
+        for n, (i, _, content) in enumerate(panels)
+    )
+    return f"<div><select data-panels>{options}</select>{shown}</div>"
+
+
 def report(sessions, results, skipped, theme, title):
     calls = [call for session in sessions for call in session["calls"]]
     tabs = {
         "overview": overview_tab(sessions, calls, skipped, theme),
+        "startup": startup_tab(sessions, theme),
         "tools": tools_tab(sessions, calls, results, theme),
     }
     links = "".join(f'<a href="#{key}">{esc(TABS[key])}</a>' for key in tabs)
