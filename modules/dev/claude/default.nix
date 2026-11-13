@@ -11,6 +11,21 @@ let
     command = "${python} ${./notify.py} ${pkgs.systemd}/bin/busctl";
     timeout = 6;
   };
+  # Project docs as context, only for wclaude; Claude adds these hooks to the managed ones.
+  docsSettings = settingsFormat.generate "claude-docs-settings.json" {
+    hooks.SessionStart = [
+      {
+        matcher = "^(startup|clear|compact)$"; # Resumed sessions already carry the documentation in their transcript.
+        hooks = [
+          {
+            type = "command";
+            command = "${python} ${./docs.py}";
+            timeout = 10;
+          }
+        ];
+      }
+    ];
+  };
   managedSettings = settingsFormat.generate "claude-managed-settings.json" {
     theme = if config.ozozka.col.isDark then "dark-ansi" else "light-ansi";
     tui = "default";
@@ -31,18 +46,6 @@ let
       refreshInterval = 30;
     };
     hooks = {
-      SessionStart = [
-        {
-          matcher = "^(startup|clear|compact)$"; # Resumed sessions already carry the documentation in their transcript.
-          hooks = [
-            {
-              type = "command";
-              command = "${python} ${./docs.py}";
-              timeout = 10;
-            }
-          ];
-        }
-      ];
       Stop = [ { hooks = [ notification ]; } ];
       StopFailure = [ { hooks = [ notification ]; } ];
       Notification = [
@@ -65,8 +68,8 @@ in
   environment = {
     systemPackages = [
       pkgs.claude-code
-      # Claude Code with the personal workflow appended to its system prompt.
-      (pkgs.writeShellScriptBin "wclaude" ''exec ${pkgs.claude-code}/bin/claude --append-system-prompt "$(< ${agents.workflow})" "$@"'')
+      # Claude Code with the personal workflow appended to its system prompt and the project docs loaded.
+      (pkgs.writeShellScriptBin "wclaude" ''exec ${pkgs.claude-code}/bin/claude --append-system-prompt "$(< ${agents.workflow})" --settings ${docsSettings} "$@"'')
     ];
 
     # Shared agent instructions and skills use Claude Code's managed (system-wide) locations.
