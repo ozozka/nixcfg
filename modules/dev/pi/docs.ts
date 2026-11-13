@@ -1,8 +1,8 @@
 /**
  * Project documentation as context: README.md and the Markdown files under docs/ (skipping _
  * entries and links) join the context files of every run. The --docs flag is the only switch,
- * so plain `pi` loads nothing and `wpi` passes it. /docs lists the context files of the
- * current run.
+ * so plain `pi` loads nothing and `wpi` passes it; subagent.ts forwards it to children. /docs
+ * lists the context files of the current run.
  */
 
 import { lstat, readdir, readFile } from "node:fs/promises";

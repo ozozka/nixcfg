@@ -9,8 +9,10 @@
  *
  * Children run with PI_SUBAGENT set to their agent name and do not get this tool, so delegation
  * stays one level deep. Each child keeps its session in subagent-sessions/ under Pi's agent
- * directory; the result details record its session ID, linking it to the parent's tool call. While children run, their count is shown in the status line (status.ts). Vendored
- * from the Pi subagent example.
+ * directory; the result details record its session ID, linking it to the parent's tool call.
+ * Children inherit the parent's FORWARDED_FLAGS, so a `wpi` child loads the project docs too.
+ * While children run, their count is shown in the status line (status.ts). Vendored from the
+ * Pi subagent example.
  */
 
 import { spawn } from "node:child_process";
@@ -44,6 +46,8 @@ import {
 
 const CHILD_ENV = "PI_SUBAGENT";
 const SESSION_DIR = join(getAgentDir(), "subagent-sessions");
+// Flags owned by other extensions that children take from the parent's command line.
+const FORWARDED_FLAGS = ["--docs"];
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
@@ -298,6 +302,7 @@ function piArgs(
     SESSION_DIR,
     "--session-id",
     sessionId,
+    ...FORWARDED_FLAGS.filter((flag) => process.argv.includes(flag)),
   ];
   const model = agent.model ?? defaults.model;
   const thinkingLevel =
