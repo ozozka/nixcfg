@@ -11,6 +11,14 @@ let
   cfg = config.ozozka;
   agents = cfg.mod.dev.agents;
   settingsFormat = pkgs.formats.json { };
+  statsTheme = settingsFormat.generate "pi-stats-theme.json" {
+    colors = lib.mapAttrs (_: color: color.hex) (lib.removeAttrs cfg.col [ "isDark" ]);
+    fonts = {
+      sans = cfg.font.sans.name;
+      mono = cfg.font.mono.name;
+    };
+    inherit (cfg) fontSize dim;
+  };
   # Shared code stays beside its consumers whether Pi follows the home-file links or not.
   extensions = lib.fileset.toSource {
     root = ./.;
@@ -27,6 +35,8 @@ in
     pkgs.pi-coding-agent
     # Pi with the personal workflow appended to its system prompt.
     (pkgs.writeShellScriptBin "wpi" ''exec ${pkgs.pi-coding-agent}/bin/pi --append-system-prompt ${agents.workflow} "$@"'')
+    # HTML report of what Pi's model calls contained, styled with the system theme.
+    (pkgs.writeShellScriptBin "pi-stats" ''exec ${pkgs.python3}/bin/python3 ${./stats.py} ${statsTheme} "$@"'')
   ];
 
   ozozka.home.profiles.pi.files = {
