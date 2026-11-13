@@ -19,6 +19,7 @@ used to read model context windows.
 
 import argparse
 import html
+import io
 import json
 import os
 import re
@@ -336,196 +337,365 @@ def collect(since, project, windows):
     return found, results, skipped
 
 
-# Rendering
+# Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
+
+TABS = {"overview": "Overview", "tools": "Tools"}
+# Chart groups and their theme colors, in stacking order; parts map to them by prefix.
+CHART_GROUPS = {
+    "tool results": "s",
+    "tool calls": "p",
+    "fixed": "m",
+    "conversation": "f",
+}
+CHART_GROUP = {
+    "system": "fixed",
+    "context": "fixed",
+    "tool": "fixed",
+    "conversation": "conversation",
+    "call": "tool calls",
+    "result": "tool results",
+}
+BAR_WIDTH = 0.72
+TICK_COUNT = 8
+
+# Tabs follow the URL hash; a select shows the panel named by its value.
+SCRIPT = """
+const show = () => {
+  const id = location.hash.slice(1) || document.querySelector("main > section").id;
+  document.querySelectorAll("main > section").forEach(tab => { tab.hidden = tab.id !== id; });
+  document.querySelectorAll("nav a").forEach(link => {
+    link.toggleAttribute("aria-current", link.hash === "#" + id);
+  });
+};
+addEventListener("hashchange", show);
+show();
+document.querySelectorAll("select[data-panels]").forEach(select => {
+  select.addEventListener("change", () => {
+    select.parentElement.querySelectorAll(":scope > .panel").forEach(panel => {
+      panel.hidden = panel.id !== select.value;
+    });
+  });
+});
+"""
 
 
 def esc(value):
     return html.escape(str(value))
 
 
-def num(value, digits=0):
+def num(value):
     if value >= 1e6:
         return f"{value / 1e6:.1f}M"
     if value >= 1e4:
         return f"{value / 1e3:.0f}k"
-    return f"{value:,.{digits}f}"
+    return f"{value:,.0f}"
+
+
+def pct(value):
+    return f"{100 * value:.1f}%"
 
 
 def p90(values):
     return statistics.quantiles(values, n=10)[-1] if len(values) > 1 else values[0]
 
 
-def table(headers, rows, bar=None, cls=""):
-    # rows: lists of cells; bar: (column index, maximum) drawn behind that cell.
+def group_of(part):
+    return CHART_GROUP[part.split(":", 1)[0]]
+
+
+def square(part, theme):
+    color = theme["colors"][CHART_GROUPS[group_of(part)]]
+    return f'<span class="square" style="color:#{color}">■</span>'
+
+
+def kpis(items):
+    cells = "".join(f"<div><span>{esc(k)}</span><b>{esc(v)}</b></div>" for k, v in items)
+    return f'<div class="kpis">{cells}</div>'
+
+
+def table(headers, rows, cls=""):
+    # rows: (cells, row class); cells are escaped unless wrapped in Markup.
     head = "".join(f"<th>{esc(h)}</th>" for h in headers)
-    body = []
-    for row, row_class in rows:
-        cells = []
-        for i, cell in enumerate(row):
-            style = ""
-            if bar and i == bar[0] and bar[1]:
-                width = 100 * float(str(cell).rstrip("%")) / bar[1]
-                style = f' style="--w:{width:.1f}%" class="bar"'
-            cells.append(f"<td{style}>{esc(cell)}</td>")
-        body.append(f'<tr class="{row_class}">{"".join(cells)}</tr>')
-    return f'<table class="{cls}"><tr>{head}</tr>{"".join(body)}</table>'
+    body = "".join(
+        f'<tr class="{row_class}">{"".join(f"<td>{cell_html(c)}</td>" for c in cells)}</tr>'
+        for cells, row_class in rows
+    )
+    return f'<table class="{cls}"><tr>{head}</tr>{body}</table>'
 
 
-def line_chart(series):
-    # series: (label, color, [values by call number]); a plain SVG polyline per series.
-    width, height, pad = 640, 220, 36
-    top = max((max(v) for _, _, v in series if v), default=1)
-    count = max((len(v) for _, _, v in series), default=1)
+class Markup(str):
+    pass
 
-    def x(i):
-        return pad + i * (width - 2 * pad) / max(count - 1, 1)
 
-    def y(v):
-        return height - pad - v * (height - 2 * pad) / top
+def cell_html(value):
+    return value if isinstance(value, Markup) else esc(value)
 
-    lines = [
-        f'<line x1="{pad}" y1="{height - pad}" x2="{width - pad}" y2="{height - pad}"/>',
-        f'<text x="{pad}" y="{pad - 8}">{num(top)}</text>',
-        f'<text x="{width - pad}" y="{height - 12}" text-anchor="end">{count}</text>',
-    ]
-    for i, (label, color, values) in enumerate(series):
-        points = " ".join(f"{x(j):.1f},{y(v):.1f}" for j, v in enumerate(values))
-        lines.append(f'<polyline points="{points}" fill="none" stroke="#{color}"/>')
-        lines.append(
-            f'<text x="{width - pad}" y="{pad + 16 * i}" text-anchor="end" fill="#{color}">{esc(label)}</text>'
-        )
-    return f'<svg viewBox="0 0 {width} {height}" class="chart">{"".join(lines)}</svg>'
+
+def px(points):
+    return points * 96 / 72
 
 
 def style(theme):
-    c, size, dim = theme["colors"], theme["fontSize"], theme["dim"]
+    c, size, dim, fonts = theme["colors"], theme["fontSize"], theme["dim"], theme["fonts"]
     return f"""
-:root {{ --p:#{c["p"]}; --s:#{c["s"]}; --f:#{c["f"]}; --m:#{c["m"]}; --o:#{c["o"]}; --b:#{c["b"]}; }}
-body {{ background:var(--b); color:var(--f); font:{size["m"]}px "{theme["fonts"]["sans"]}";
-  margin:{dim["m"]}px; }}
-h1 {{ font-size:{size["x"]}px; margin:0 0 {dim["s"]}px; }}
-h2 {{ font-size:{size["l"]}px; color:var(--p); margin:{dim["m"]}px 0 {dim["s"]}px; }}
-.kpis {{ display:flex; flex-wrap:wrap; gap:{dim["s"]}px; }}
-.kpi {{ background:var(--o); padding:{dim["s"]}px; min-width:{dim["x"]}px; }}
-.kpi b {{ display:block; font:{size["h"]}px "{theme["fonts"]["mono"]}"; color:var(--p); }}
-.kpi span, th, .muted {{ color:var(--m); }}
-table {{ border-collapse:collapse; font-family:"{theme["fonts"]["mono"]}"; }}
-th, td {{ text-align:right; padding:{dim["t"]}px {dim["s"]}px; white-space:nowrap; }}
-th:first-child, td:first-child {{ text-align:left; }}
-tr {{ border-bottom:1px solid var(--o); }}
-tr.group td {{ color:var(--p); font-weight:bold; }}
+:root {{ --p:#{c["p"]}; --s:#{c["s"]}; --f:#{c["f"]}; --m:#{c["m"]}; --o:#{c["o"]};
+  --b:#{c["b"]}; }}
+body {{ background:var(--b); color:var(--f); font:{px(size["m"])}px "{fonts["sans"]}";
+  margin:0; }}
+nav {{ display:flex; align-items:center; gap:{dim["s"]}px; padding:0 {dim["m"]}px; }}
+nav b {{ font-size:{px(size["x"])}px; margin-right:{dim["m"]}px; }}
+nav a {{ color:var(--f); text-decoration:none; padding:{dim["s"]}px; }}
+nav a[aria-current] {{ background:var(--o); }}
+main {{ padding:{dim["m"]}px; }}
+h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
+  border-bottom:1px solid var(--o); margin:{dim["m"]}px 0 {dim["s"]}px; }}
+.kpis {{ display:grid; grid-template-columns:repeat(auto-fit, minmax({dim["x"]}px, 1fr));
+  text-align:center; margin-bottom:{dim["s"]}px; }}
+.kpis span {{ display:block; color:var(--m); font-size:{px(size["s"])}px; }}
+.kpis b {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
+.split {{ display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr);
+  gap:{dim["m"]}px; align-items:start; }}
+@media (max-width:{dim["h"] * 3}px) {{ .split {{ grid-template-columns:1fr; }} }}
+table {{ border-collapse:collapse; width:100%; font:{px(size["l"])}px "{fonts["mono"]}";
+  margin-bottom:{dim["s"]}px; }}
+th {{ font-family:"{fonts["sans"]}"; color:var(--m); text-align:right; }}
+th, td {{ padding:{dim["t"]}px {dim["s"]}px; white-space:nowrap; text-align:right;
+  border-bottom:1px solid var(--o); }}
+th:first-child, td:first-child, table.text :is(td, th):last-child {{ text-align:left; }}
+table.text td:last-child {{ white-space:normal; color:var(--m);
+  font-size:{px(size["m"])}px; }}
+tr.group td {{ color:var(--m); }}
 tr.part td:first-child {{ padding-left:{dim["m"]}px; }}
 tr.flag td {{ color:var(--s); }}
-table.text td:last-child {{ text-align:left; }}
-td.bar {{ min-width:{dim["x"]}px; --c:color-mix(in srgb, var(--p) 35%, transparent);
-  background:linear-gradient(90deg, var(--c) var(--w), transparent var(--w)); }}
-td.wrap {{ white-space:normal; }}
-.chart {{ width:{dim["h"] * 2}px; max-width:100%; font:{size["s"]}px "{theme["fonts"]["mono"]}"; }}
-.chart line {{ stroke:var(--m); }} .chart text {{ fill:var(--m); }}
-.chart polyline {{ stroke-width:2; }}
+.square {{ margin-right:{dim["t"] * 2}px; }}
+.chart svg {{ width:100%; height:auto; display:block; margin-bottom:{dim["s"]}px; }}
+select {{ background:var(--o); color:var(--f); border:0; padding:{dim["t"] * 2}px;
+  font:{px(size["l"])}px "{fonts["mono"]}"; margin-bottom:{dim["s"]}px; }}
 """
 
 
-def report(calls, results, skipped, theme, title):
-    main = [c for c in calls if c["agent"] == "main"]
-    children = [c for c in calls if c["agent"] != "main"]
+# Charts
+
+
+def chart_style(theme):
+    from matplotlib import cycler
+
+    c = {key: f"#{value}" for key, value in theme["colors"].items()}
+    small = theme["fontSize"]["s"]
+    return {
+        "figure.figsize": (16, 6),
+        "svg.fonttype": "none",
+        "svg.hashsalt": "pi-stats",
+        "font.family": theme["fonts"]["mono"],
+        "font.size": small,
+        "legend.fontsize": small,
+        "figure.facecolor": c["b"],
+        "axes.facecolor": c["b"],
+        "text.color": c["f"],
+        "axes.labelcolor": c["m"],
+        "axes.edgecolor": c["o"],
+        "axes.grid": False,
+        "axes.xmargin": 0,
+        "xtick.color": c["o"],
+        "ytick.color": c["o"],
+        "xtick.labelcolor": c["m"],
+        "ytick.labelcolor": c["m"],
+        "legend.facecolor": c["b"],
+        "legend.edgecolor": c["o"],
+        "axes.prop_cycle": cycler(color=[c["p"], c["f"], c["m"]]),
+    }
+
+
+def render(theme, draw, size=None):
+    # Runs draw(figure) under the theme style and returns the SVG markup.
+    from matplotlib import rc_context
+    from matplotlib.figure import Figure
+
+    with rc_context(chart_style(theme)):
+        figure = Figure(layout="constrained", figsize=size)
+        draw(figure)
+        buffer = io.StringIO()
+        figure.savefig(buffer, format="svg", metadata={"Date": None})
+    svg = buffer.getvalue()
+    return Markup(f'<div class="chart">{svg[svg.index("<svg") :]}</div>')
+
+
+def compact_ticks(axes):
+    from matplotlib.ticker import FuncFormatter
+
+    axes.yaxis.set_major_formatter(FuncFormatter(lambda value, _: num(value)))
+
+
+def x_labels(axes, labels):
+    step = max(1, len(labels) // TICK_COUNT)
+    positions = sorted({0, len(labels) - 1, *range(0, len(labels), step)})
+    axes.set_xticks(positions, [labels[i] for i in positions], rotation=30, ha="right")
+    axes.set_xlim(-BAR_WIDTH / 2, len(labels) - 1 + BAR_WIDTH / 2)
+
+
+def combo_chart(theme, labels, bars, lines, xlabel="", points=False):
+    """Overlay-colored columns on the left axis and lines over them.
+
+    bars: (label, values); lines: (label, values, color key, axis label or None). Each line
+    has its own zero-based axis: the first labeled one on the right, the others hidden.
+    points draws unconnected markers instead, for categories rather than a sequence.
+    """
+    colors = theme["colors"]
+
+    def draw(figure):
+        base = figure.subplots()
+        handles = [
+            base.bar(
+                range(len(labels)),
+                bars[1],
+                width=BAR_WIDTH,
+                color=f"#{colors['o']}",
+                label=bars[0],
+            )
+        ]
+        base.set_ylim(bottom=0)
+        base.set_ylabel(bars[0])
+        compact_ticks(base)
+        shown = False
+        for label, values, color, axis_label in lines:
+            axes = base.twinx()
+            line = {"linestyle": "none", "marker": "D"} if points else {}
+            handles += axes.plot(
+                range(len(values)), values, color=f"#{colors[color]}", label=label, **line
+            )
+            axes.set_ylim(0, (max(values, default=0) or 1) * 1.05)
+            if axis_label and not shown:
+                shown = True
+                axes.set_ylabel(axis_label)
+                compact_ticks(axes)
+            else:
+                axes.set_axis_off()
+        x_labels(base, labels)
+        base.set_xlabel(xlabel)
+        legend = figure.legend(
+            handles=handles,
+            loc="upper left",
+            bbox_to_anchor=(0, 1),
+            bbox_transform=base.transAxes,
+            framealpha=1,
+        )
+        legend.set_in_layout(False)
+
+    return render(theme, draw)
+
+
+def composition_chart(theme, columns):
+    # 100% stacked areas of the chart groups per column, without axes; tables carry the legend.
+    colors = theme["colors"]
+
+    def draw(figure):
+        axes = figure.subplots()
+        totals = [sum(column.values()) or 1 for column in columns]
+        axes.stackplot(
+            range(len(columns)),
+            *[
+                [
+                    100 * column.get(group, 0) / total
+                    for column, total in zip(columns, totals, strict=True)
+                ]
+                for group in CHART_GROUPS
+            ],
+            colors=[f"#{colors[key]}" for key in CHART_GROUPS.values()],
+            step="mid",
+        )
+        axes.set_ylim(0, 100)
+        axes.set_xlim(-0.5, len(columns) - 0.5)
+        axes.set_axis_off()
+
+    return render(theme, draw, size=(8, 4))
+
+
+def grouped(parts):
+    # Part tokens summed per chart group.
+    totals = defaultdict(float)
+    for name, tokens in parts.items():
+        totals[group_of(name)] += tokens
+    return totals
+
+
+# Tabs
+
+
+def overview_tab(sessions, calls, skipped, theme):
     prompt = sum(c["prompt"] for c in calls)
+    main = [s for s in sessions if s["agent"] == "main"]
     ratio = statistics.median(c["chars"] / c["prompt"] for c in calls)
-    kpis = [
-        ("sessions", len({c["session"] for c in main})),
-        ("subagent runs", len({c["session"] for c in children})),
-        ("calls", len(calls)),
-        ("prompt tokens", num(prompt)),
-        ("output tokens", num(sum(c["output"] for c in calls))),
-        ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
-        ("cache hit", f"{100 * sum(c['cache'] for c in calls) / prompt:.0f}%"),
-        ("avg prompt", num(prompt / len(calls))),
-        ("chars/token", f"{ratio:.2f}"),
-        ("skipped calls", skipped),
-    ]
-    html_kpis = "".join(
-        f'<div class="kpi"><b>{esc(v)}</b><span>{esc(k)}</span></div>' for k, v in kpis
+    head = kpis(
+        [
+            ("sessions", len(main)),
+            ("subagent runs", len(sessions) - len(main)),
+            ("calls", len(calls)),
+            ("prompt", num(prompt)),
+            ("output", num(sum(c["output"] for c in calls))),
+            ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
+            ("cache hit", f"{100 * sum(c['cache'] for c in calls) / prompt:.0f}%"),
+            ("chars/token", f"{ratio:.2f}"),
+            ("skipped calls", skipped),
+        ]
     )
 
-    # Average main call, by part, grouped.
-    sections = []
-    if main:
-        totals = defaultdict(float)
-        for call in main:
-            for name, tokens in call["parts"].items():
-                totals[name] += tokens / len(main)
-        average = sum(totals.values())
-        groups = defaultdict(list)
-        for name, tokens in totals.items():
-            groups[name.split(":", 1)[0]].append((name.split(":", 1)[1], tokens))
-        rows = []
-        for group, label in GROUPS.items():
-            items = sorted(groups.get(group, []), key=lambda item: -item[1])
-            subtotal = sum(t for _, t in items)
-            if not items:
-                continue
-            rows.append(([label, num(subtotal), f"{100 * subtotal / average:.1f}%"], "group"))
-            shown = items[:TOP_PARTS]
-            rows += [([n, num(t), f"{100 * t / average:.1f}%"], "part") for n, t in shown]
-            rest = sum(t for _, t in items[TOP_PARTS:])
-            if rest:
-                rows.append(
-                    (
-                        [
-                            f"other ({len(items) - TOP_PARTS})",
-                            num(rest),
-                            f"{100 * rest / average:.1f}%",
-                        ],
-                        "part",
-                    )
-                )
-        top = max(float(r[0][2].rstrip("%")) for r in rows)
-        sections.append(
-            ("Average main call", table(["part", "tokens", "share"], rows, (2, top)))
-        )
+    days = defaultdict(lambda: {"tokens": 0, "cost": 0, "sessions": set()})
+    for call in calls:
+        day = days[call["time"][:10]]
+        day["tokens"] += call["prompt"] + call["output"]
+        day["cost"] += call["cost"]
+        day["sessions"].add(call["session"])
+    labels = sorted(days)
+    chart = combo_chart(
+        theme,
+        labels,
+        ("Tokens", [days[d]["tokens"] for d in labels]),
+        [
+            ("Cost $", [days[d]["cost"] for d in labels], "s", "Cost $"),
+            ("Sessions", [len(days[d]["sessions"]) for d in labels], "p", None),
+        ],
+        "Day",
+    )
 
-        # Prompt tokens by call number across main sessions.
-        by_session = defaultdict(list)
-        for call in sorted(main, key=lambda c: c["time"]):
-            by_session[call["session"]].append(call)
-        median, high, fixed = [], [], []
-        for i in range(max(len(s) for s in by_session.values())):
-            at = [s[i] for s in by_session.values() if len(s) > i]
-            if len(at) < GROWTH_MIN_SESSIONS:
-                break
-            median.append(statistics.median(c["prompt"] for c in at))
-            high.append(p90([c["prompt"] for c in at]))
-            fixed.append(
-                statistics.median(
-                    sum(
-                        t
-                        for n, t in c["parts"].items()
-                        if n.split(":")[0] in ("system", "context", "tool")
-                    )
-                    for c in at
-                )
+    models = defaultdict(list)
+    for call in calls:
+        models[call["model"]].append(call)
+    rows = []
+    for model, items in sorted(models.items(), key=lambda m: -len(m[1])):
+        tokens = sum(c["prompt"] for c in items)
+        rows.append(
+            (
+                [
+                    model,
+                    len(items),
+                    num(tokens),
+                    num(sum(c["output"] for c in items)),
+                    f"${sum(c['cost'] for c in items):.2f}",
+                    f"{100 * sum(c['cache'] for c in items) / tokens:.0f}%",
+                ],
+                "",
             )
-        colors = theme["colors"]
-        chart = line_chart(
-            [
-                ("p90", colors["s"], high),
-                ("median", colors["p"], median),
-                ("fixed", colors["m"], fixed),
-            ]
         )
-        sections.append(("Prompt tokens by call number", chart))
+    models_table = table(["Model", "Calls", "Prompt", "Output", "Cost", "Cache"], rows)
+    return head + chart + models_table
 
-    # Tools: calls and result sizes, plus tools declared but never called.
+
+def tools_tab(sessions, calls, results, theme):
+    ratio = statistics.median(c["chars"] / c["prompt"] for c in calls)
+    main_calls = [c for c in calls if c["agent"] == "main"]
     by_tool = defaultdict(list)
     for result in results:
         by_tool[result["tool"]].append(result)
-    declared = set().union(*(c["tools"] for c in main)) if main else set()
-    rows = []
-    for tool in sorted(
+    declared = set().union(*(c["tools"] for c in main_calls)) if main_calls else set()
+    order = sorted(
         set(by_tool) | declared, key=lambda t: -sum(r["chars"] for r in by_tool.get(t, []))
-    ):
+    )
+    rows, totals, counts = [], [], []
+    for tool in order:
         items = by_tool.get(tool, [])
         sizes = [r["chars"] / ratio for r in items] or [0]
+        totals.append(sum(sizes))
+        counts.append(len(items))
         rows.append(
             (
                 [
@@ -540,36 +710,42 @@ def report(calls, results, skipped, theme, title):
                 "" if items else "flag",
             )
         )
-    sections.append(
-        ("Tools", table(["tool", "calls", "errors", "avg", "p90", "max", "total"], rows))
+    tools = table(["Tool", "Calls", "Errors", "Avg", "P90", "Max", "Total"], rows)
+    chart = combo_chart(
+        theme,
+        order,
+        ("Result tokens", totals),
+        [("Calls", counts, "p", "Calls")],
+        "Tool",
+        points=True,
     )
 
-    # Subagents by agent name.
+    children = [s for s in sessions if s["agent"] != "main"]
+    agents = ""
     if children:
-        runs = defaultdict(lambda: defaultdict(list))
-        for call in children:
-            runs[call["agent"]][call["session"]].append(call)
+        runs = defaultdict(list)
+        for session in children:
+            runs[session["agent"]].append(session)
         rows = []
-        for agent, sessions in sorted(runs.items()):
-            flat = [c for s in sessions.values() for c in s]
+        for agent, items in sorted(runs.items()):
+            flat = [c for s in items for c in s["calls"]]
             rows.append(
                 (
                     [
                         agent,
-                        len(sessions),
-                        f"{len(flat) / len(sessions):.1f}",
-                        num(statistics.mean(c["prompt"] for c in flat)),
+                        len(items),
+                        f"{len(flat) / len(items):.1f}",
+                        num(statistics.mean(s["calls"][0]["prompt"] for s in items)),
                         num(sum(c["prompt"] for c in flat)),
                         num(sum(c["output"] for c in flat)),
-                        f"${sum(c['cost'] for c in flat):.2f}",
+                        f"${sum(s['cost'] for s in items):.2f}",
                     ],
                     "",
                 )
             )
-        headers = ["agent", "runs", "calls/run", "avg prompt", "prompt", "output", "cost"]
-        sections.append(("Subagents", table(headers, rows)))
+        headers = ["Agent", "Runs", "Calls/run", "Startup", "Prompt", "Output", "Cost"]
+        agents = "<h2>Subagents</h2>" + table(headers, rows)
 
-    # Largest tool results.
     rows = [
         (
             [
@@ -577,26 +753,28 @@ def report(calls, results, skipped, theme, title):
                 num(r["chars"] / ratio),
                 r["agent"],
                 Path(r["cwd"]).name,
-                r["time"][:16],
+                r["time"][:16].replace("T", " "),
                 r["args"][:PREVIEW],
             ],
             "",
         )
         for r in sorted(results, key=lambda r: -r["chars"])[:TOP_RESULTS]
     ]
-    sections.append(
-        (
-            "Largest tool results",
-            table(
-                ["tool", "tokens", "agent", "project", "time", "arguments"], rows, cls="text"
-            ),
-        )
-    )
+    largest = table(["Tool", "Tokens", "Agent", "Project", "Time", "Arguments"], rows, "text")
+    return tools + chart + agents + "<h2>Largest tool results</h2>" + largest
 
-    body = "".join(f"<h2>{esc(name)}</h2>{content}" for name, content in sections)
+
+def report(sessions, results, skipped, theme, title):
+    calls = [call for session in sessions for call in session["calls"]]
+    tabs = {
+        "overview": overview_tab(sessions, calls, skipped, theme),
+        "tools": tools_tab(sessions, calls, results, theme),
+    }
+    links = "".join(f'<a href="#{key}">{esc(TABS[key])}</a>' for key in tabs)
+    body = "".join(f'<section id="{key}">{content}</section>' for key, content in tabs.items())
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>{esc(title)}</title>
-<style>{style(theme)}</style></head><body><h1>{esc(title)}</h1><div class="kpis">{html_kpis}</div>
-{body}</body></html>"""
+<style>{style(theme)}</style></head><body><nav><b>{esc(title)}</b>{links}</nav>
+<main>{body}</main><script>{SCRIPT}</script></body></html>"""
 
 
 def main():
@@ -612,10 +790,9 @@ def main():
     sessions, results, skipped = collect(args.since, args.project, model_windows(args.pi))
     if not sessions:
         raise SystemExit("No sessions found.")
-    calls = [call for session in sessions for call in session["calls"]]
     filters = " ".join(f for f in [args.project, args.since and f"since {args.since}"] if f)
     title = f"Pi stats {filters}".strip()
-    args.out.write_text(report(calls, results, skipped, theme, title))
+    args.out.write_text(report(sessions, results, skipped, theme, title))
     print(args.out)
 
 
