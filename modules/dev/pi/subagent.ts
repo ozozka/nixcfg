@@ -7,17 +7,21 @@
  * system prompt. Without a model, an agent inherits the session's model and thinking level;
  * without tools, it gets the default tools. Project-local agents are not loaded.
  *
- * Children run with PI_SUBAGENT set and do not get this tool, so delegation stays one level
- * deep. While children run, their count is shown in the status line (status.ts). Vendored
+ * Children run with PI_SUBAGENT set to their agent name and do not get this tool, so delegation
+ * stays one level deep. Each child keeps its session in subagent-sessions/ under Pi's agent
+ * directory; the result details record its session ID, linking it to the parent's tool call. While children run, their count is shown in the status line (status.ts). Vendored
  * from the Pi subagent example.
  */
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   formatReadLineRange,
+  getAgentDir,
   getMarkdownTheme,
   parseFrontmatter,
   type Theme,
@@ -39,6 +43,7 @@ import {
 } from "./lib/shared.ts";
 
 const CHILD_ENV = "PI_SUBAGENT";
+const SESSION_DIR = join(getAgentDir(), "subagent-sessions");
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
@@ -89,6 +94,8 @@ type UsageStats = Record<(typeof SUMMED_KEYS)[number] | "contextTokens", number>
 interface SingleResult {
   agent: string;
   task: string;
+  // The child's session in SESSION_DIR.
+  sessionId: string;
   // -1 while running.
   exitCode: number;
   messages: Message[];
@@ -136,6 +143,7 @@ const emptyUsage = (): UsageStats => ({
 const newResult = (agent: string, task: string): SingleResult => ({
   agent,
   task,
+  sessionId: randomUUID(),
   exitCode: -1,
   messages: [],
   stderr: "",
@@ -276,8 +284,21 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
   return results;
 }
 
-function piArgs(agent: Agent, defaults: DispatchDefaults, task: string): string[] {
-  const args = ["--mode", "json", "-p", "--no-session"];
+function piArgs(
+  agent: Agent,
+  defaults: DispatchDefaults,
+  task: string,
+  sessionId: string,
+): string[] {
+  const args = [
+    "--mode",
+    "json",
+    "-p",
+    "--session-dir",
+    SESSION_DIR,
+    "--session-id",
+    sessionId,
+  ];
   const model = agent.model ?? defaults.model;
   const thinkingLevel =
     agent.thinkingLevel ?? (agent.model ? undefined : defaults.thinkingLevel);
@@ -307,10 +328,10 @@ async function runAgent(
   let aborted = false;
   result.exitCode = await new Promise<number>((resolve) => {
     // The same Pi as the parent: its script under the current Node runtime.
-    const args = [process.argv[1], ...piArgs(agent, defaults, run.task)];
+    const args = [process.argv[1], ...piArgs(agent, defaults, run.task, result.sessionId)];
     const proc = spawn(process.execPath, args, {
       cwd,
-      env: { ...process.env, [CHILD_ENV]: "1" },
+      env: { ...process.env, [CHILD_ENV]: run.agent },
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
