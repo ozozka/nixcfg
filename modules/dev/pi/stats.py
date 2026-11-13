@@ -668,7 +668,7 @@ def overview_tab(sessions, calls, skipped, theme):
             ("sessions", len(main)),
             ("subagent runs", len(sessions) - len(main)),
             ("calls", len(calls)),
-            ("prompt", num(prompt)),
+            ("input", num(prompt)),
             ("output", num(sum(c["output"] for c in calls))),
             ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
             ("cache hit", f"{100 * sum(c['cache'] for c in calls) / prompt:.0f}%"),
@@ -714,7 +714,7 @@ def overview_tab(sessions, calls, skipped, theme):
                 "",
             )
         )
-    models_table = table(["Model", "Calls", "Prompt", "Output", "Cost", "Cache"], rows)
+    models_table = table(["Model", "Calls", "Input", "Output", "Cost", "Cache"], rows)
     return head + chart + models_table
 
 
@@ -782,7 +782,7 @@ def tools_tab(sessions, calls, results, theme):
                     "",
                 )
             )
-        headers = ["Agent", "Runs", "Calls/run", "Startup", "Prompt", "Output", "Cost"]
+        headers = ["Agent", "Runs", "Calls/run", "Startup", "Input", "Output", "Cost"]
         agents = "<h2>Subagents</h2>" + table(headers, rows)
 
     rows = [
@@ -1163,7 +1163,7 @@ def session_tab(sessions, theme):
         tokens = combo_chart(
             theme,
             [str(c["index"] + 1) for c in calls],
-            ("Prompt tokens", [c["prompt"] for c in calls]),
+            ("Context tokens", [c["prompt"] for c in calls]),
             [
                 (group, [column.get(group, 0) for column in per_call], color, None)
                 for group, color in CHART_GROUPS.items()
