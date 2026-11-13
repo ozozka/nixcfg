@@ -1101,23 +1101,20 @@ def session_tab(sessions, theme):
             ],
             "Session",
         )
-        median, high, running = [], [], []
+        # Context size at each call number, averaged over the sessions that reached it.
+        average, running = [], []
         for i in range(max(len(s["calls"]) for s in items)):
             at = [s["calls"][i]["prompt"] for s in items if len(s["calls"]) > i]
             if len(at) < GROWTH_MIN_SESSIONS:
                 break
             running.append(len(at))
-            median.append(statistics.median(at))
-            high.append(p90(at))
+            average.append(statistics.mean(at))
         growth = (
             combo_chart(
                 theme,
                 [str(i + 1) for i in range(len(running))],
                 ("Sessions", running),
-                [
-                    ("Median prompt", median, "p", "Prompt tokens"),
-                    ("P90 prompt", high, "s", None),
-                ],
+                [("Average context", average, "p", "Context tokens")],
                 "Call",
                 axis="lines",
             )
