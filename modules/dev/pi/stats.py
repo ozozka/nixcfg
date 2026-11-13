@@ -280,6 +280,11 @@ def session_of(header, calls, agent, entries, windows):
         "fill": peak["prompt"] / peak["window"] if peak["window"] else None,
         "consumed": dict(consumed),
         "compactions": len(compactions),
+        # The first call after each compaction.
+        "marks": [
+            next((c["index"] for c in calls if c["time"] > e["timestamp"]), len(calls) - 1)
+            for e in compactions
+        ],
         "cost": sum(c["cost"] for c in calls),
     }
 
@@ -339,7 +344,13 @@ def collect(since, project, windows):
 
 # Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
 
-TABS = {"overview": "Overview", "startup": "Startup", "tools": "Tools"}
+TABS = {"overview": "Overview", "startup": "Startup", "session": "Session", "tools": "Tools"}
+# Sessions offered in the Session tab's selector, newest first; averages use all of them.
+SESSION_LIMIT = 30
+# Parts listed per group in session tables, by consumption.
+SESSION_PARTS = 8
+# Parts compared in the context vs consumption chart, by consumption.
+TOP_PAIRS = 15
 # Chart groups and their theme colors, in stacking order; parts map to them by prefix.
 CHART_GROUPS = {
     "tool results": "s",
@@ -537,18 +548,22 @@ def compact_ticks(axes):
 
 def x_labels(axes, labels):
     step = max(1, len(labels) // TICK_COUNT)
-    positions = sorted({0, len(labels) - 1, *range(0, len(labels), step)})
+    # Evenly spaced ticks plus the last label, skipping one that would crowd it.
+    last = len(labels) - 1
+    positions = sorted({0, last, *(i for i in range(0, last, step) if last - i > step / 2)})
     axes.set_xticks(positions, [labels[i] for i in positions], rotation=30, ha="right")
     axes.set_xlim(-BAR_WIDTH / 2, len(labels) - 1 + BAR_WIDTH / 2)
 
 
-def combo_chart(theme, labels, bars, lines, xlabel="", points=False, shared=False):
+def combo_chart(theme, labels, bars, lines, xlabel="", points=False, axis="own", marks=()):
     """Overlay-colored columns on the left axis and lines over them.
 
-    bars: (label, values); lines: (label, values, color key, axis label or None). Each line
-    has its own zero-based axis: the first labeled one on the right, the others hidden.
-    points draws unconnected markers instead, for categories rather than a sequence; shared
-    draws the lines on the columns' axis, for series in the same unit.
+    bars: (label, values); lines: (label, values, color key, axis label or None).
+    axis: "own" gives each line its own zero-based axis, the first labeled one on the right
+    and the others hidden; "bars" draws the lines on the columns' axis, for the same unit;
+    "lines" puts every line on one right axis, for lines sharing a unit apart from the bars.
+    points draws unconnected markers instead, for categories rather than a sequence.
+    marks: x positions drawn as dashed vertical rules.
     """
     colors = theme["colors"]
 
@@ -566,22 +581,26 @@ def combo_chart(theme, labels, bars, lines, xlabel="", points=False, shared=Fals
         base.set_ylim(bottom=0)
         base.set_ylabel(bars[0])
         compact_ticks(base)
+        for mark in marks:
+            base.axvline(mark, color=f"#{colors['m']}", linestyle="--", linewidth=1)
+        common = base if axis == "bars" else base.twinx() if axis == "lines" else None
         shown = False
         for label, values, color, axis_label in lines:
-            axes = base if shared else base.twinx()
+            axes = common or base.twinx()
             line = {"linestyle": "none", "marker": "D"} if points else {}
             handles += axes.plot(
                 range(len(values)), values, color=f"#{colors[color]}", label=label, **line
             )
-            if shared:
-                continue
-            axes.set_ylim(0, (max(values, default=0) or 1) * 1.05)
+            if common is None:
+                axes.set_ylim(0, (max(values, default=0) or 1) * 1.05)
             if axis_label and not shown:
                 shown = True
                 axes.set_ylabel(axis_label)
                 compact_ticks(axes)
-            else:
+            elif common is None:
                 axes.set_axis_off()
+        if axis == "lines":
+            common.set_ylim(bottom=0)
         x_labels(base, labels)
         base.set_xlabel(xlabel)
         legend = figure.legend(
@@ -897,7 +916,7 @@ def startup_tab(sessions, theme):
                 for key, (label, color) in STARTUP_GROUPS.items()
             ],
             "Session",
-            shared=True,
+            axis="bars",
         )
         panels.append(
             (
@@ -934,6 +953,214 @@ def startup_tab(sessions, theme):
     return "<h2>Average</h2>" + average + "<h2>Selected</h2>" + selector(panels)
 
 
+def shares(parts):
+    total = sum(parts.values()) or 1
+    return {name: tokens / total for name, tokens in parts.items()}
+
+
+def mean_shares(calls):
+    # Each call's context shares, averaged with equal weight per call.
+    totals = defaultdict(float)
+    for call in calls:
+        for name, share in shares(call["parts"]).items():
+            totals[name] += share / len(calls)
+    return totals
+
+
+def ratio(consumption, context):
+    return f"{consumption / context:.1f}x" if context else "-"
+
+
+def session_table(theme, context, consumption, context_label):
+    # Parts grouped by GROUPS: context share, consumption share, and their ratio.
+    rows = []
+    for key, label in GROUPS.items():
+        names = sorted(
+            {n for n in (*context, *consumption) if n.split(":")[0] == key},
+            key=lambda n: -consumption.get(n, 0),
+        )
+        if not names:
+            continue
+        ctx = sum(context.get(n, 0) for n in names)
+        cons = sum(consumption.get(n, 0) for n in names)
+        name = Markup(square(f"{key}:", theme) + esc(label))
+        rows.append(([name, pct(ctx), pct(cons), ratio(cons, ctx)], "group"))
+        for n in names[:SESSION_PARTS]:
+            ctx, cons = context.get(n, 0), consumption.get(n, 0)
+            rows.append(([n.split(":", 1)[1], pct(ctx), pct(cons), ratio(cons, ctx)], "part"))
+        rest = names[SESSION_PARTS:]
+        if rest:
+            ctx = sum(context.get(n, 0) for n in rest)
+            cons = sum(consumption.get(n, 0) for n in rest)
+            rows.append(
+                ([f"other ({len(rest)})", pct(ctx), pct(cons), ratio(cons, ctx)], "part")
+            )
+    return table(["Part", context_label, "Consumption", "Ratio"], rows)
+
+
+def pairs_chart(theme, context, consumption):
+    # Context share against consumption share for the most consumed parts.
+    colors = theme["colors"]
+    names = sorted(consumption, key=lambda n: -consumption[n])[:TOP_PAIRS][::-1]
+
+    def draw(figure):
+        axes = figure.subplots()
+        rows = range(len(names))
+        height = BAR_WIDTH / 2
+        axes.barh(
+            [r + height / 2 for r in rows],
+            [100 * context.get(n, 0) for n in names],
+            height=height,
+            color=f"#{colors['m']}",
+            label="Context %",
+        )
+        axes.barh(
+            [r - height / 2 for r in rows],
+            [100 * consumption[n] for n in names],
+            height=height,
+            color=f"#{colors['p']}",
+            label="Consumption %",
+        )
+        axes.set_yticks(list(rows), [n.replace(":", " ") for n in names])
+        axes.set_xlabel("Share %")
+        axes.legend(loc="lower right", framealpha=1)
+
+    return render(theme, draw, size=(16, 0.4 * len(names) + 1))
+
+
+def session_tab(sessions, theme):
+    ordered = sorted(sessions, key=lambda s: s["time"])
+    by_agent = defaultdict(list)
+    for session in ordered:
+        by_agent[session["agent"]].append(session)
+
+    # Average: all sessions of each agent.
+    panels = []
+    for agent in sorted(by_agent, key=lambda a: (a != "main", a)):
+        items = by_agent[agent]
+        calls = [c for s in items for c in s["calls"]]
+        consumed = defaultdict(float)
+        for session in items:
+            for name, tokens in session["consumed"].items():
+                consumed[name] += tokens
+        fills = [s["fill"] for s in items if s["fill"]]
+        head = kpis(
+            [
+                ("sessions", len(items)),
+                ("avg calls", f"{len(calls) / len(items):.0f}"),
+                ("avg peak", num(statistics.mean(s["peak"] for s in items))),
+                ("avg peak fill", pct(statistics.mean(fills)) if fills else "-"),
+                ("avg consumed", num(sum(consumed.values()) / len(items))),
+                ("avg cost", f"${statistics.mean(s['cost'] for s in items):.2f}"),
+            ]
+        )
+        columns = [grouped(s["consumed"]) for s in items]
+        labels = [s["time"][:10] for s in items]
+        history = combo_chart(
+            theme,
+            labels,
+            ("Consumed tokens", [sum(s["consumed"].values()) for s in items]),
+            [
+                (
+                    "Peak context %",
+                    [100 * (s["fill"] or 0) for s in items],
+                    "s",
+                    "Peak context %",
+                ),
+                ("Calls", [len(s["calls"]) for s in items], "p", None),
+            ],
+            "Session",
+        )
+        median, high, running = [], [], []
+        for i in range(max(len(s["calls"]) for s in items)):
+            at = [s["calls"][i]["prompt"] for s in items if len(s["calls"]) > i]
+            if len(at) < GROWTH_MIN_SESSIONS:
+                break
+            running.append(len(at))
+            median.append(statistics.median(at))
+            high.append(p90(at))
+        growth = (
+            combo_chart(
+                theme,
+                [str(i + 1) for i in range(len(running))],
+                ("Sessions", running),
+                [
+                    ("Median prompt", median, "p", "Prompt tokens"),
+                    ("P90 prompt", high, "s", None),
+                ],
+                "Call",
+                axis="lines",
+            )
+            if running
+            else ""
+        )
+        panels.append(
+            (
+                f"sessions-{agent}",
+                f"{agent} · {len(items)} sessions",
+                head
+                + '<div class="split">'
+                + session_table(theme, mean_shares(calls), shares(consumed), "Context")
+                + composition_chart(theme, columns)
+                + "</div>"
+                + history
+                + growth,
+            )
+        )
+    average = selector(panels)
+
+    # Selected: the newest sessions, one at a time.
+    panels = []
+    for session in ordered[::-1][:SESSION_LIMIT]:
+        calls = session["calls"]
+        peak = max(calls, key=lambda c: c["prompt"])
+        consumption = shares(session["consumed"])
+        context = shares(peak["parts"])
+        head = kpis(
+            [
+                ("calls", len(calls)),
+                ("peak context", num(session["peak"])),
+                ("peak fill", pct(session["fill"]) if session["fill"] else "-"),
+                ("consumed", num(sum(session["consumed"].values()))),
+                ("output", num(sum(c["output"] for c in calls))),
+                ("cost", f"${session['cost']:.2f}"),
+                ("compactions", session["compactions"]),
+            ]
+        )
+        per_call = [grouped(c["parts"]) for c in calls]
+        tokens = combo_chart(
+            theme,
+            [str(c["index"] + 1) for c in calls],
+            ("Prompt tokens", [c["prompt"] for c in calls]),
+            [
+                (group, [column.get(group, 0) for column in per_call], color, None)
+                for group, color in CHART_GROUPS.items()
+            ],
+            "Call",
+            axis="bars",
+            marks=session["marks"],
+        )
+        label = (
+            f"{session['time'][:16].replace('T', ' ')} · {Path(session['cwd']).name}"
+            f" · {session['agent']} · {len(calls)} calls"
+            + (f" · peak {pct(session['fill'])}" if session["fill"] else "")
+        )
+        panels.append(
+            (
+                f"session-{session['id']}",
+                label,
+                head
+                + '<div class="split">'
+                + session_table(theme, context, consumption, "Peak context")
+                + composition_chart(theme, per_call)
+                + "</div>"
+                + tokens
+                + pairs_chart(theme, context, consumption),
+            )
+        )
+    return "<h2>Average</h2>" + average + "<h2>Selected</h2>" + selector(panels)
+
+
 def selector(panels):
     # A select over panels (id, label, content); the first is shown.
     options = "".join(
@@ -951,6 +1178,7 @@ def report(sessions, results, skipped, theme, title):
     tabs = {
         "overview": overview_tab(sessions, calls, skipped, theme),
         "startup": startup_tab(sessions, theme),
+        "session": session_tab(sessions, theme),
         "tools": tools_tab(sessions, calls, results, theme),
     }
     links = "".join(f'<a href="#{key}">{esc(TABS[key])}</a>' for key in tabs)
