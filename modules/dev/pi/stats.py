@@ -667,7 +667,7 @@ def overview_tab(sessions, calls, skipped, theme):
         [
             ("sessions", len(main)),
             ("subagent runs", len(sessions) - len(main)),
-            ("calls", len(calls)),
+            ("requests", len(calls)),
             ("input", num(prompt)),
             ("output", num(sum(c["output"] for c in calls))),
             ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
@@ -714,7 +714,7 @@ def overview_tab(sessions, calls, skipped, theme):
                 "",
             )
         )
-    models_table = table(["Model", "Calls", "Input", "Output", "Cost", "Cache"], rows)
+    models_table = table(["Model", "Requests", "Input", "Output", "Cost", "Cache"], rows)
     return head + chart + models_table
 
 
@@ -782,7 +782,7 @@ def tools_tab(sessions, calls, results, theme):
                     "",
                 )
             )
-        headers = ["Agent", "Runs", "Calls/run", "Startup", "Input", "Output", "Cost"]
+        headers = ["Agent", "Runs", "Requests/run", "Startup", "Input", "Output", "Cost"]
         agents = "<h2>Subagents</h2>" + table(headers, rows)
 
     rows = [
@@ -1083,7 +1083,7 @@ def session_tab(sessions, theme):
         head = kpis(
             [
                 ("sessions", len(items)),
-                ("avg calls", f"{len(calls) / len(items):.0f}"),
+                ("avg requests", f"{len(calls) / len(items):.0f}"),
                 ("avg peak", num(statistics.mean(s["peak"] for s in items))),
                 ("avg consumed", num(sum(consumed.values()) / len(items))),
                 ("avg cost", f"${statistics.mean(s['cost'] for s in items):.2f}"),
@@ -1097,7 +1097,7 @@ def session_tab(sessions, theme):
             ("Consumed tokens", [sum(s["consumed"].values()) for s in items]),
             [
                 ("Peak context", [s["peak"] for s in items], "s", "Peak context"),
-                ("Calls", [len(s["calls"]) for s in items], "p", None),
+                ("Requests", [len(s["calls"]) for s in items], "p", None),
             ],
             "Session",
         )
@@ -1115,7 +1115,7 @@ def session_tab(sessions, theme):
                 [str(i + 1) for i in range(len(running))],
                 ("Sessions", running),
                 [("Average context", average, "p", "Context tokens")],
-                "Call",
+                "Request",
                 axis="lines",
             )
             if running
@@ -1151,7 +1151,7 @@ def session_tab(sessions, theme):
         context = shares(merged(peak["parts"]))
         head = kpis(
             [
-                ("calls", len(calls)),
+                ("requests", len(calls)),
                 ("peak context", num(session["peak"])),
                 ("consumed", num(sum(session["consumed"].values()))),
                 ("output", num(sum(c["output"] for c in calls))),
@@ -1168,13 +1168,13 @@ def session_tab(sessions, theme):
                 (group, [column.get(group, 0) for column in per_call], color, None)
                 for group, color in CHART_GROUPS.items()
             ],
-            "Call",
+            "Request",
             axis="bars",
             marks=session["marks"],
         )
         label = (
             f"{session['time'][:16].replace('T', ' ')} · {Path(session['cwd']).name}"
-            f" · {session['agent']} · {len(calls)} calls · peak {num(session['peak'])}"
+            f" · {session['agent']} · {len(calls)} requests · peak {num(session['peak'])}"
         )
         panels.append(
             (
