@@ -1,15 +1,17 @@
+/**
+ * Project documentation as context: README.md and the Markdown files under docs/ (skipping _
+ * entries and links) join the context files of every run. The --docs flag is the only switch,
+ * so plain `pi` loads nothing and `wpi` passes it. /docs lists the context files of the
+ * current run.
+ */
+
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { lastEntry, projectRoot } from "./lib/shared.ts";
+import { projectRoot } from "./lib/shared.ts";
 
-const ENTRY_TYPE = "project-docs-setting";
+const FLAG = "docs";
 type ContextFile = { path: string; content: string };
-
-function restoreSetting(ctx: ExtensionContext): boolean {
-  const enabled = lastEntry<{ enabled?: unknown }>(ctx, ENTRY_TYPE)?.enabled;
-  return typeof enabled === "boolean" ? enabled : true;
-}
 
 async function loadDocs(cwd: string, ctx: ExtensionContext): Promise<ContextFile[]> {
   const root = projectRoot(cwd);
@@ -44,9 +46,14 @@ async function loadDocs(cwd: string, ctx: ExtensionContext): Promise<ContextFile
 }
 
 export default function (pi: ExtensionAPI) {
-  let enabled = true;
+  pi.registerFlag(FLAG, {
+    description: "Add README.md and docs/**/*.md to the context",
+    type: "boolean",
+    default: false,
+  });
+  // The flag's value is known only after loading, not in this factory.
+  const enabled = () => pi.getFlag(FLAG) === true;
   let snapshot: { cwd: string; files: ContextFile[] } | undefined;
-  let hasInjected = false;
 
   async function getDocs(ctx: ExtensionContext): Promise<ContextFile[]> {
     if (!snapshot || snapshot.cwd !== ctx.cwd) {
@@ -55,69 +62,36 @@ export default function (pi: ExtensionAPI) {
     return snapshot.files;
   }
 
-  pi.on("session_start", (_event, ctx) => {
-    enabled = restoreSetting(ctx);
+  pi.on("session_start", () => {
     snapshot = undefined;
-    hasInjected = false;
-  });
-
-  pi.on("session_tree", (_event, ctx) => {
-    enabled = restoreSetting(ctx);
   });
 
   pi.registerCommand("docs", {
-    description: "Show or switch README/docs/**/*.md context (excluding _ entries)",
-    getArgumentCompletions: (prefix) =>
-      ["on", "off"]
-        .filter((value) => value.startsWith(prefix))
-        .map((value) => ({ value, label: value })),
-    handler: async (args, ctx) => {
-      const value = args.trim().toLowerCase();
-      if (!value) {
-        const trust = enabled && !ctx.isProjectTrusted() ? " (waiting for project trust)" : "";
-        const paths = new Set(
-          (ctx.getSystemPromptOptions().contextFiles ?? []).map((file) =>
-            resolve(ctx.cwd, file.path),
-          ),
-        );
-        if (enabled && ctx.isProjectTrusted()) {
-          for (const file of await getDocs(ctx)) paths.add(file.path);
-        }
-        const files = [...paths].map((path) => {
-          const local = relative(ctx.cwd, path);
-          return `  ${local.startsWith("..") ? path : local || path}`;
-        });
-        ctx.ui.notify(
-          `Docs ${enabled ? "on" : "off"}${trust}\n${files.join("\n") || "  (none)"}`,
-          "info",
-        );
-        return;
+    description: "List the context files of the current run",
+    handler: async (_args, ctx) => {
+      const on = enabled();
+      const trust = on && !ctx.isProjectTrusted() ? " (waiting for project trust)" : "";
+      const paths = new Set(
+        (ctx.getSystemPromptOptions().contextFiles ?? []).map((file) =>
+          resolve(ctx.cwd, file.path),
+        ),
+      );
+      if (on && ctx.isProjectTrusted()) {
+        for (const file of await getDocs(ctx)) paths.add(file.path);
       }
-      if (value !== "on" && value !== "off") {
-        ctx.ui.notify("Usage: /docs [on|off]", "warning");
-        return;
-      }
-      if (!ctx.isIdle()) {
-        ctx.ui.notify(
-          "Wait until Pi is idle before changing documentation context.",
-          "warning",
-        );
-        return;
-      }
-      const next = value === "on";
-      if (next !== enabled) {
-        enabled = next;
-        // Durable session data, not a message sent to the model.
-        pi.appendEntry(ENTRY_TYPE, { enabled });
-      }
-      const history =
-        !enabled && hasInjected ? " Previously sent documentation remains in history." : "";
-      ctx.ui.notify(`Docs ${value}; applies to the next prompt.${history}`, "info");
+      const files = [...paths].map((path) => {
+        const local = relative(ctx.cwd, path);
+        return `  ${local.startsWith("..") ? path : local || path}`;
+      });
+      ctx.ui.notify(
+        `Docs ${on ? "on" : "off"} (--${FLAG})${trust}\n${files.join("\n") || "  (none)"}`,
+        "info",
+      );
     },
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    if (!enabled || !ctx.isProjectTrusted()) return;
+    if (!enabled() || !ctx.isProjectTrusted()) return;
     const files = await getDocs(ctx);
     // Each run starts with Pi's base context. Add one stable copy per path,
     // preserving AGENTS.md and context contributed by other extensions.
@@ -128,7 +102,6 @@ export default function (pi: ExtensionAPI) {
       if (existing.has(file.path)) continue;
       event.systemPromptOptions.contextFiles.push({ ...file });
       existing.add(file.path);
-      hasInjected = true;
     }
   });
 
