@@ -5,7 +5,7 @@ Usage: stats.py THEME [--since YYYY-MM-DD] [--project TEXT] [--out FILE]
 Each assistant message is one model call. Its context is the path from the session root to
 that message: system messages patch the prompt sections and tool declarations, the latest
 compaction replaces older entries with its summary and prompt checkpoint, and context edits
-replace or drop entries. Parts are measured in characters; their tokens are the part's share
+replace or drop entries. Parts are measured in UTF-8 bytes; their tokens are the part's share
 of the call's real prompt tokens (input + cache read + cache write) from the response usage.
 
 Output tokens are split over the response's own text, thinking, and tool calls the same way;
@@ -29,7 +29,7 @@ from pathlib import Path
 
 AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
 # Image blocks carry base64 data; count each as a fixed size instead.
-IMAGE_CHARS = 6000
+IMAGE_BYTES = 6000
 CONTEXT_FILE = re.compile(
     r'<project_instructions path="([^"]+)">(.*?)</project_instructions>', re.DOTALL
 )
@@ -62,45 +62,50 @@ def read_session(path):
     return header, [e for e in entries if "id" in e]
 
 
-def text_chars(content):
+def size(text):
+    # Sizes are UTF-8 bytes.
+    return len(text.encode())
+
+
+def text_size(content):
     if isinstance(content, str):
-        return len(content)
+        return size(content)
     return sum(
-        IMAGE_CHARS if block.get("type") == "image" else len(block.get("text", ""))
+        IMAGE_BYTES if block.get("type") == "image" else size(block.get("text", ""))
         for block in content
     )
 
 
 def message_parts(entry, content=None):
-    # (part, chars) for one context entry; content overrides it after a context edit.
+    # (part, bytes) for one context entry; content overrides it after a context edit.
     if entry["type"] == "compaction":
-        return [("conversation:compaction summary", len(entry["summary"]))]
+        return [("conversation:compaction summary", size(entry["summary"]))]
     if entry["type"] == "branch_summary":
-        return [("conversation:branch summary", len(entry.get("summary", "")))]
+        return [("conversation:branch summary", size(entry.get("summary", "")))]
     if entry["type"] == "custom_message":
-        return [(f"conversation:custom {entry['customType']}", text_chars(entry["content"]))]
+        return [(f"conversation:custom {entry['customType']}", text_size(entry["content"]))]
     if entry["type"] != "message":
         return []
     message = entry["message"]
     content = message.get("content") if content is None else content
     role = message["role"]
     if role == "user":
-        return [("conversation:user", text_chars(content))]
+        return [("conversation:user", text_size(content))]
     if role == "toolResult":
-        return [(f"result:{message['toolName']}", text_chars(content))]
+        return [(f"result:{message['toolName']}", text_size(content))]
     if role != "assistant":
         return []
     if isinstance(content, str):
-        return [("conversation:assistant", len(content))]
+        return [("conversation:assistant", size(content))]
     parts = []
     for block in content:
         kind = block.get("type")
         if kind == "text":
-            parts.append(("conversation:assistant", len(block["text"])))
+            parts.append(("conversation:assistant", size(block["text"])))
         elif kind == "thinking":
-            parts.append(("conversation:thinking", len(block.get("thinking", ""))))
+            parts.append(("conversation:thinking", size(block.get("thinking", ""))))
         elif kind == "toolCall":
-            parts.append((f"call:{block['name']}", len(json.dumps(block["arguments"]))))
+            parts.append((f"call:{block['name']}", size(json.dumps(block["arguments"]))))
     return parts
 
 
@@ -110,12 +115,12 @@ def output_parts(message):
     output = usage.get("output", 0)
     reasoning = min(usage.get("reasoning", 0) or 0, output)
     parts = defaultdict(int)
-    for name, chars in message_parts({"type": "message", "message": message}):
-        parts[name] += chars
-    chars = sum(parts.values())
-    if not chars:
+    for name, length in message_parts({"type": "message", "message": message}):
+        parts[name] += length
+    length = sum(parts.values())
+    if not length:
         return {"conversation:thinking": output} if output else {}
-    shares = {name: (output - reasoning) * value / chars for name, value in parts.items()}
+    shares = {name: (output - reasoning) * value / length for name, value in parts.items()}
     if reasoning:
         shares["conversation:thinking"] = shares.get("conversation:thinking", 0) + reasoning
     return shares
@@ -128,7 +133,7 @@ def apply_system(state, message):
         else:
             state["sections"][name] = value
     for tool in message.get("toolsAdded") or []:
-        state["tools"][tool["name"]] = len(json.dumps(tool))
+        state["tools"][tool["name"]] = size(json.dumps(tool))
     for tool in message.get("toolsRemoved") or []:
         state["tools"].pop(tool["name"], None)
 
@@ -143,8 +148,8 @@ def context_file_name(path, cwd):
 def context_parts(text, cwd):
     # The project_context section split into its files and the wrapper text around them.
     files = CONTEXT_FILE.findall(text)
-    parts = [(f"context:{context_file_name(path, cwd)}", len(body)) for path, body in files]
-    wrapper = len(text) - sum(len(body) for _, body in files)
+    parts = [(f"context:{context_file_name(path, cwd)}", size(body)) for path, body in files]
+    wrapper = size(text) - sum(size(body) for _, body in files)
     return [*parts, ("system:project_context", wrapper)]
 
 
@@ -164,8 +169,8 @@ def system_parts(state, cwd):
         if name == "project_context":
             parts += context_parts(text, cwd)
         else:
-            parts.append((f"system:{name}", len(text)))
-    parts.extend((f"tool:{name}", chars) for name, chars in state["tools"].items())
+            parts.append((f"system:{name}", size(text)))
+    parts.extend((f"tool:{name}", length) for name, length in state["tools"].items())
     return parts
 
 
@@ -229,9 +234,9 @@ def calls_of(header, entries, agent):
             continue
 
         parts = defaultdict(int)
-        for name, chars in system_parts(state, header.get("cwd")) + conversation:
-            parts[name] += chars
-        chars = sum(parts.values()) or 1
+        for name, length in system_parts(state, header.get("cwd")) + conversation:
+            parts[name] += length
+        total = sum(parts.values()) or 1
         yield {
             "skipped": False,
             "session": header.get("id"),
@@ -241,12 +246,13 @@ def calls_of(header, entries, agent):
             "model": message.get("model"),
             "mode": mode or "free",
             "prompt": prompt,
-            "chars": chars,
+            "bytes": total,
+            "sizes": dict(parts),
             "output": usage.get("output", 0),
             "cache": usage.get("cacheRead", 0),
             "cost": (usage.get("cost") or {}).get("total", 0),
             "tools": set(state["tools"]),
-            "parts": {name: value / chars * prompt for name, value in parts.items()},
+            "parts": {name: value / total * prompt for name, value in parts.items()},
             "out": output_parts(message),
         }
 
@@ -328,7 +334,7 @@ def collect(since, project):
                 {
                     "agent": agent,
                     "tool": message["toolName"],
-                    "chars": text_chars(message["content"]),
+                    "bytes": text_size(message["content"]),
                     "error": bool(message.get("isError")),
                     "cwd": header.get("cwd", ""),
                     "time": entry["timestamp"],
@@ -404,6 +410,10 @@ def num(value):
     return f"{value:,.0f}"
 
 
+def kib(value):
+    return f"{value / 1024:,.1f}"
+
+
 def pct(value):
     return f"{100 * value:.1f}%"
 
@@ -469,7 +479,7 @@ h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   text-align:center; margin-bottom:{dim["s"]}px; }}
 .kpis span {{ display:block; color:var(--m); font-size:{px(size["s"])}px; }}
 .kpis b {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
-.split {{ display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr);
+.split {{ display:grid; grid-template-columns:max-content minmax(0, 1fr);
   gap:{dim["m"]}px; align-items:start; }}
 @media (max-width:{dim["h"] * 3}px) {{ .split {{ grid-template-columns:1fr; }} }}
 table {{ border-collapse:collapse; width:100%; font:{px(size["l"])}px "{fonts["mono"]}";
@@ -652,7 +662,7 @@ def grouped(parts):
 def overview_tab(sessions, calls, skipped, theme):
     prompt = sum(c["prompt"] for c in calls)
     main = [s for s in sessions if s["agent"] == "main"]
-    ratio = statistics.median(c["chars"] / c["prompt"] for c in calls)
+    ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
     head = kpis(
         [
             ("sessions", len(main)),
@@ -662,7 +672,7 @@ def overview_tab(sessions, calls, skipped, theme):
             ("output", num(sum(c["output"] for c in calls))),
             ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
             ("cache hit", f"{100 * sum(c['cache'] for c in calls) / prompt:.0f}%"),
-            ("chars/token", f"{ratio:.2f}"),
+            ("bytes/token", f"{ratio:.2f}"),
             ("skipped calls", skipped),
         ]
     )
@@ -709,19 +719,19 @@ def overview_tab(sessions, calls, skipped, theme):
 
 
 def tools_tab(sessions, calls, results, theme):
-    ratio = statistics.median(c["chars"] / c["prompt"] for c in calls)
+    ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
     main_calls = [c for c in calls if c["agent"] == "main"]
     by_tool = defaultdict(list)
     for result in results:
         by_tool[result["tool"]].append(result)
     declared = set().union(*(c["tools"] for c in main_calls)) if main_calls else set()
     order = sorted(
-        set(by_tool) | declared, key=lambda t: -sum(r["chars"] for r in by_tool.get(t, []))
+        set(by_tool) | declared, key=lambda t: -sum(r["bytes"] for r in by_tool.get(t, []))
     )
     rows, totals, counts = [], [], []
     for tool in order:
         items = by_tool.get(tool, [])
-        sizes = [r["chars"] / ratio for r in items] or [0]
+        sizes = [r["bytes"] / ratio for r in items] or [0]
         totals.append(sum(sizes))
         counts.append(len(items))
         rows.append(
@@ -734,11 +744,12 @@ def tools_tab(sessions, calls, results, theme):
                     num(p90(sizes)),
                     num(max(sizes)),
                     num(sum(sizes)),
+                    kib(sum(r["bytes"] for r in items)),
                 ],
                 "" if items else "flag",
             )
         )
-    tools = table(["Tool", "Calls", "Errors", "Avg", "P90", "Max", "Total"], rows)
+    tools = table(["Tool", "Calls", "Errors", "Avg", "P90", "Max", "Total", "KiB"], rows)
     chart = combo_chart(
         theme,
         order,
@@ -778,7 +789,8 @@ def tools_tab(sessions, calls, results, theme):
         (
             [
                 r["tool"],
-                num(r["chars"] / ratio),
+                num(r["bytes"] / ratio),
+                kib(r["bytes"]),
                 r["agent"],
                 Path(r["cwd"]).name,
                 r["time"][:16].replace("T", " "),
@@ -786,19 +798,23 @@ def tools_tab(sessions, calls, results, theme):
             ],
             "",
         )
-        for r in sorted(results, key=lambda r: -r["chars"])[:TOP_RESULTS]
+        for r in sorted(results, key=lambda r: -r["bytes"])[:TOP_RESULTS]
     ]
-    largest = table(["Tool", "Tokens", "Agent", "Project", "Time", "Arguments"], rows, "text")
+    largest = table(
+        ["Tool", "Tokens", "KiB", "Agent", "Project", "Time", "Arguments"], rows, "text"
+    )
     return tools + chart + agents + "<h2>Largest tool results</h2>" + largest
 
 
 def startup_of(session):
-    # The first call's parts before any conversation, and the user's first message.
-    parts = session["calls"][0]["parts"]
-    fixed = {
-        name: tokens for name, tokens in parts.items() if name.split(":")[0] in STARTUP_GROUPS
-    }
-    return fixed, parts.get("conversation:user", 0)
+    # The first call's parts before any conversation in tokens and bytes, and the user's
+    # first message in tokens.
+    call = session["calls"][0]
+
+    def fixed(parts):
+        return {n: v for n, v in parts.items() if n.split(":")[0] in STARTUP_GROUPS}
+
+    return fixed(call["parts"]), call["parts"].get("conversation:user", 0), fixed(call["sizes"])
 
 
 def startup_kpis(totals, user):
@@ -815,8 +831,9 @@ def startup_kpis(totals, user):
     )
 
 
-def startup_table(theme, values, extra=None, limit=TOP_PARTS):
-    # values: part -> tokens; extra: part -> one more cell (sessions seen), when given;
+def startup_table(theme, values, sizes, extra=None, limit=TOP_PARTS):
+    # values: part -> tokens; sizes: part -> bytes;
+    # extra: part -> one more cell (sessions seen), when given;
     # limit: parts listed per group before the rest folds into one row, None for all.
     total = sum(values.values()) or 1
     rows = []
@@ -832,17 +849,28 @@ def startup_table(theme, values, extra=None, limit=TOP_PARTS):
             Markup(swatch(color, theme) + esc(label)),
             num(subtotal),
             pct(subtotal / total),
+            kib(sum(sizes.get(name, 0) for name, _ in items)),
         ]
         rows.append(([*cells, ""] if extra else cells, "group"))
         shown, rest = (items[:limit], items[limit:]) if limit else (items, [])
         for name, tokens in shown:
-            cells = [name.split(":", 1)[1], num(tokens), pct(tokens / total)]
+            cells = [
+                name.split(":", 1)[1],
+                num(tokens),
+                pct(tokens / total),
+                kib(sizes.get(name, 0)),
+            ]
             rows.append(([*cells, extra[name]] if extra else cells, "part"))
         if rest:
             tokens = sum(t for _, t in rest)
-            cells = [f"other ({len(rest)})", num(tokens), pct(tokens / total)]
+            cells = [
+                f"other ({len(rest)})",
+                num(tokens),
+                pct(tokens / total),
+                kib(sum(sizes.get(name, 0) for name, _ in rest)),
+            ]
             rows.append(([*cells, ""] if extra else cells, "part"))
-    headers = ["Part", "Tokens", "Share"] + (["Sessions"] if extra else [])
+    headers = ["Part", "Tokens", "Share", "KiB"] + (["Sessions"] if extra else [])
     return table(headers, rows)
 
 
@@ -886,26 +914,30 @@ def startup_tab(sessions, theme):
     panels = []
     for agent in agents:
         items = by_agent[agent]
-        starts = [(merged(fixed), user) for fixed, user in map(startup_of, items)]
-        totals, seen = defaultdict(float), defaultdict(int)
-        for fixed, _ in starts:
+        starts = [
+            (merged(fixed), user, merged(sizes))
+            for fixed, user, sizes in map(startup_of, items)
+        ]
+        totals, seen, size_totals = defaultdict(float), defaultdict(int), defaultdict(float)
+        for fixed, _, sizes in starts:
             for name, tokens in fixed.items():
                 totals[name] += tokens / len(starts)
+                size_totals[name] += sizes.get(name, 0) / len(starts)
                 seen[name] += 1
-        user = statistics.mean(u for _, u in starts)
+        user = statistics.mean(u for _, u, _ in starts)
         columns = [
             {
                 key: sum(t for n, t in fixed.items() if n.split(":")[0] == key)
                 for key in STARTUP_GROUPS
             }
-            for fixed, _ in starts
+            for fixed, _, _ in starts
         ]
         groups = {key: color for key, (_, color) in STARTUP_GROUPS.items()}
         labels = [s["time"][:10] for s in items]
         history = combo_chart(
             theme,
             labels,
-            ("Startup tokens", [sum(f.values()) for f, _ in starts]),
+            ("Startup tokens", [sum(f.values()) for f, _, _ in starts]),
             [
                 (label, [c[key] for c in columns], color, None)
                 for key, (label, color) in STARTUP_GROUPS.items()
@@ -919,7 +951,7 @@ def startup_tab(sessions, theme):
                 f"{agent} · {len(items)} sessions",
                 startup_kpis(totals, user)
                 + '<div class="split">'
-                + startup_table(theme, totals, seen)
+                + startup_table(theme, totals, size_totals, seen)
                 + composition_chart(theme, columns, groups)
                 + "</div>"
                 + history,
@@ -935,14 +967,14 @@ def startup_tab(sessions, theme):
     for (project, agent), session in sorted(
         latest.items(), key=lambda kv: kv[1]["time"], reverse=True
     ):
-        fixed, user = startup_of(session)
+        fixed, user, sizes = startup_of(session)
         panels.append(
             (
                 f"start-{session['id']}",
                 f"{project} · {agent} · {session['time'][:10]}",
                 startup_kpis(fixed, user)
                 + startup_bar(theme, fixed)
-                + startup_table(theme, fixed, limit=None),
+                + startup_table(theme, fixed, sizes, limit=None),
             )
         )
     return "<h2>Average</h2>" + average + "<h2>Selected</h2>" + selector(panels)
@@ -962,12 +994,21 @@ def mean_shares(calls):
     return totals
 
 
+def mean_sizes(calls):
+    # Each part's bytes, averaged over the calls.
+    totals = defaultdict(float)
+    for call in calls:
+        for name, value in merged(call["sizes"]).items():
+            totals[name] += value / len(calls)
+    return totals
+
+
 def ratio(consumption, context):
     return f"{consumption / context:.1f}x" if context else "-"
 
 
-def session_table(theme, context, consumption, context_label):
-    # Parts grouped by GROUPS: context share, consumption share, and their ratio.
+def session_table(theme, context, consumption, sizes, context_label):
+    # Parts grouped by GROUPS: context share, consumption share, their ratio, and size.
     rows = []
     for key, label in GROUPS.items():
         names = sorted(
@@ -979,18 +1020,19 @@ def session_table(theme, context, consumption, context_label):
         ctx = sum(context.get(n, 0) for n in names)
         cons = sum(consumption.get(n, 0) for n in names)
         name = Markup(square(f"{key}:", theme) + esc(label))
-        rows.append(([name, pct(ctx), pct(cons), ratio(cons, ctx)], "group"))
+        group_size = kib(sum(sizes.get(n, 0) for n in names))
+        rows.append(([name, pct(ctx), pct(cons), ratio(cons, ctx), group_size], "group"))
         for n in names[:SESSION_PARTS]:
             ctx, cons = context.get(n, 0), consumption.get(n, 0)
-            rows.append(([n.split(":", 1)[1], pct(ctx), pct(cons), ratio(cons, ctx)], "part"))
+            cells = [n.split(":", 1)[1], pct(ctx), pct(cons), ratio(cons, ctx)]
+            rows.append(([*cells, kib(sizes.get(n, 0))], "part"))
         rest = names[SESSION_PARTS:]
         if rest:
             ctx = sum(context.get(n, 0) for n in rest)
             cons = sum(consumption.get(n, 0) for n in rest)
-            rows.append(
-                ([f"other ({len(rest)})", pct(ctx), pct(cons), ratio(cons, ctx)], "part")
-            )
-    return table(["Part", context_label, "Consumption", "Ratio"], rows)
+            cells = [f"other ({len(rest)})", pct(ctx), pct(cons), ratio(cons, ctx)]
+            rows.append(([*cells, kib(sum(sizes.get(n, 0) for n in rest))], "part"))
+    return table(["Part", context_label, "Consumption", "Ratio", "KiB"], rows)
 
 
 def pairs_chart(theme, context, consumption):
@@ -1088,7 +1130,13 @@ def session_tab(sessions, theme):
                 f"{agent} · {len(items)} sessions",
                 head
                 + '<div class="split">'
-                + session_table(theme, mean_shares(calls), shares(merged(consumed)), "Context")
+                + session_table(
+                    theme,
+                    mean_shares(calls),
+                    shares(merged(consumed)),
+                    mean_sizes(calls),
+                    "Context",
+                )
                 + composition_chart(theme, columns)
                 + "</div>"
                 + history
@@ -1137,7 +1185,9 @@ def session_tab(sessions, theme):
                 label,
                 head
                 + '<div class="split">'
-                + session_table(theme, context, consumption, "Peak context")
+                + session_table(
+                    theme, context, consumption, merged(peak["sizes"]), "Peak context"
+                )
                 + composition_chart(theme, per_call)
                 + "</div>"
                 + tokens
