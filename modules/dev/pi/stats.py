@@ -1,6 +1,6 @@
 """Pi context statistics: what each model call contained, rebuilt from Pi's session files.
 
-Usage: stats.py THEME [--since YYYY-MM-DD] [--project TEXT] [--out FILE]
+Usage: stats.py THEME PI [--since YYYY-MM-DD] [--project TEXT] [--out FILE]
 
 Each assistant message is one model call. Its context is the path from the session root to
 that message: system messages patch the prompt sections and tool declarations, the latest
@@ -8,8 +8,13 @@ compaction replaces older entries with its summary and prompt checkpoint, and co
 replace or drop entries. Parts are measured in characters; their tokens are the part's share
 of the call's real prompt tokens (input + cache read + cache write) from the response usage.
 
+Output tokens are split over the response's own text, thinking, and tool calls the same way;
+reported reasoning tokens go to thinking. A session's consumption is the sum of its calls'
+prompt and output parts, so a part sent with every call weighs more than its context share.
+
 Subagent sessions live in subagent-sessions/; parent tool results record their session IDs.
-THEME is a JSON file of colors, fonts, and sizes supplied by Nix.
+THEME is a JSON file of colors, fonts, and sizes supplied by Nix; PI is the Pi executable,
+used to read model context windows.
 """
 
 import argparse
@@ -18,6 +23,7 @@ import json
 import os
 import re
 import statistics
+import subprocess
 from collections import defaultdict
 from functools import cache
 from pathlib import Path
@@ -95,6 +101,23 @@ def message_parts(entry, content=None):
         elif kind == "toolCall":
             parts.append((f"call:{block['name']}", len(json.dumps(block["arguments"]))))
     return parts
+
+
+def output_parts(message):
+    # The response's output tokens split over its own blocks; reasoning tokens go to thinking.
+    usage = message["usage"]
+    output = usage.get("output", 0)
+    reasoning = min(usage.get("reasoning", 0) or 0, output)
+    parts = defaultdict(int)
+    for name, chars in message_parts({"type": "message", "message": message}):
+        parts[name] += chars
+    chars = sum(parts.values())
+    if not chars:
+        return {"conversation:thinking": output} if output else {}
+    shares = {name: (output - reasoning) * value / chars for name, value in parts.items()}
+    if reasoning:
+        shares["conversation:thinking"] = shares.get("conversation:thinking", 0) + reasoning
+    return shares
 
 
 def apply_system(state, message):
@@ -180,9 +203,9 @@ def calls_of(header, entries, agent):
             )
         conversation = []
         for item in path:
-            message = item.get("message") or {}
-            if message.get("role") == "system":
-                apply_system(state, message)
+            item_message = item.get("message") or {}
+            if item_message.get("role") == "system":
+                apply_system(state, item_message)
             elif item["id"] in edits:
                 if edits[item["id"]] is not None:
                     conversation += message_parts(item, edits[item["id"]])
@@ -213,10 +236,54 @@ def calls_of(header, entries, agent):
             "cost": (usage.get("cost") or {}).get("total", 0),
             "tools": set(state["tools"]),
             "parts": {name: value / chars * prompt for name, value in parts.items()},
+            "out": output_parts(message),
         }
 
 
-def collect(since, project):
+def model_windows(pi):
+    # Context window by model ID, from the table `pi --list-models` prints.
+    windows = {}
+    units = {"K": 1e3, "M": 1e6}
+    output = subprocess.run([pi, "--list-models"], capture_output=True, text=True, check=False)
+    for line in output.stdout.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) >= 3 and fields[2][-1] in units:
+            windows[fields[1]] = round(float(fields[2][:-1]) * units[fields[2][-1]])
+    return windows
+
+
+def session_of(header, calls, agent, entries, windows):
+    # Session totals; consumption sums every call's prompt parts and output parts.
+    consumed = defaultdict(float)
+    for index, call in enumerate(calls):
+        call["index"] = index
+        call["window"] = windows.get(call["model"])
+        for parts in (call["parts"], call["out"]):
+            for name, tokens in parts.items():
+                consumed[name] += tokens
+    compactions = [e for e in entries if e["type"] == "compaction"]
+    for compaction in compactions:
+        usage = compaction.get("usage") or {}
+        consumed["conversation:compaction runs"] += sum(
+            usage.get(key, 0) for key in ("input", "cacheRead", "cacheWrite", "output")
+        )
+    peak = max(calls, key=lambda c: c["prompt"])
+    return {
+        "id": header.get("id"),
+        "agent": agent,
+        "cwd": header.get("cwd", ""),
+        "time": calls[0]["time"],
+        "model": peak["model"],
+        "calls": calls,
+        "peak": peak["prompt"],
+        "fill": peak["prompt"] / peak["window"] if peak["window"] else None,
+        "consumed": dict(consumed),
+        "compactions": len(compactions),
+        "cost": sum(c["cost"] for c in calls),
+    }
+
+
+def collect(since, project, windows):
     main_files = sorted(AGENT_DIR.glob("sessions/*/*.jsonl"))
     child_files = sorted(AGENT_DIR.glob("subagent-sessions/*.jsonl"))
     sessions = [(*read_session(path), False) for path in main_files]
@@ -231,16 +298,20 @@ def collect(since, project):
                         agents[result["sessionId"]] = result["agent"]
     sessions += [(*read_session(path), True) for path in child_files]
 
-    calls, results, skipped = [], [], 0
+    found, results, skipped = [], [], 0
     for header, entries, child in sessions:
         if project and project not in header.get("cwd", ""):
             continue
         agent = agents.get(header.get("id"), "subagent") if child else "main"
+        calls = []
         for call in calls_of(header, entries, agent):
             if call["skipped"]:
                 skipped += 1
-            elif not since or call["time"] >= since:
+            else:
                 calls.append(call)
+        if not calls or (since and calls[0]["time"] < since):
+            continue
+        found.append(session_of(header, calls, agent, entries, windows))
         arguments = {
             block["id"]: block["arguments"]
             for e in entries
@@ -249,7 +320,7 @@ def collect(since, project):
         }
         for entry in entries:
             message = entry.get("message") or {}
-            if message.get("role") != "toolResult" or (since and entry["timestamp"] < since):
+            if message.get("role") != "toolResult":
                 continue
             results.append(
                 {
@@ -262,7 +333,7 @@ def collect(since, project):
                     "args": json.dumps(arguments.get(message.get("toolCallId"), {})),
                 }
             )
-    return calls, results, skipped
+    return found, results, skipped
 
 
 # Rendering
@@ -531,15 +602,17 @@ def report(calls, results, skipped, theme, title):
 def main():
     parser = argparse.ArgumentParser(description="Pi context statistics as an HTML report.")
     parser.add_argument("theme", type=Path, help="theme JSON supplied by Nix")
-    parser.add_argument("--since", help="only calls from this date (YYYY-MM-DD)")
+    parser.add_argument("pi", help="Pi executable, for model context windows")
+    parser.add_argument("--since", help="only sessions started from this date (YYYY-MM-DD)")
     parser.add_argument("--project", help="only sessions whose directory contains this text")
     parser.add_argument("--out", type=Path, default=Path("/tmp/pi-stats.html"))
     args = parser.parse_args()
 
     theme = json.loads(args.theme.read_text())
-    calls, results, skipped = collect(args.since, args.project)
-    if not calls:
-        raise SystemExit("No calls found.")
+    sessions, results, skipped = collect(args.since, args.project, model_windows(args.pi))
+    if not sessions:
+        raise SystemExit("No sessions found.")
+    calls = [call for session in sessions for call in session["calls"]]
     filters = " ".join(f for f in [args.project, args.since and f"since {args.since}"] if f)
     title = f"Pi stats {filters}".strip()
     args.out.write_text(report(calls, results, skipped, theme, title))

@@ -36,7 +36,7 @@ in
     # Pi with the personal workflow appended to its system prompt.
     (pkgs.writeShellScriptBin "wpi" ''exec ${pkgs.pi-coding-agent}/bin/pi --append-system-prompt ${agents.workflow} "$@"'')
     # HTML report of what Pi's model calls contained, styled with the system theme.
-    (pkgs.writeShellScriptBin "pi-stats" ''exec ${pkgs.python3}/bin/python3 ${./stats.py} ${statsTheme} "$@"'')
+    (pkgs.writeShellScriptBin "pi-stats" ''exec ${pkgs.python3}/bin/python3 ${./stats.py} ${statsTheme} ${pkgs.pi-coding-agent}/bin/pi "$@"'')
   ];
 
   ozozka.home.profiles.pi.files = {
