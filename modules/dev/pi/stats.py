@@ -142,19 +142,20 @@ def context_file_name(path, cwd):
 @cache
 def context_parts(text, cwd):
     # The project_context section split into its files and the wrapper text around them.
-    # Pi's own context files stay separate; everything else comes from docs.ts, as one part.
     files = CONTEXT_FILE.findall(text)
-    parts = [
-        (
-            f"context:{context_file_name(path, cwd)}"
-            if Path(path).name in PI_CONTEXT_FILES
-            else "context:docs.ts",
-            len(body),
-        )
-        for path, body in files
-    ]
+    parts = [(f"context:{context_file_name(path, cwd)}", len(body)) for path, body in files]
     wrapper = len(text) - sum(len(body) for _, body in files)
     return [*parts, ("system:project_context", wrapper)]
+
+
+def merged(parts):
+    # Context files from docs.ts as one part; Pi's own context files stay separate.
+    result = defaultdict(float)
+    for name, value in parts.items():
+        group, _, item = name.partition(":")
+        docs = group == "context" and Path(item).name not in PI_CONTEXT_FILES
+        result["context:docs.ts" if docs else name] += value
+    return result
 
 
 def system_parts(state, cwd):
@@ -814,8 +815,9 @@ def startup_kpis(totals, user):
     )
 
 
-def startup_table(theme, values, extra=None):
-    # values: part -> tokens; extra: part -> one more cell (sessions seen), when given.
+def startup_table(theme, values, extra=None, limit=TOP_PARTS):
+    # values: part -> tokens; extra: part -> one more cell (sessions seen), when given;
+    # limit: parts listed per group before the rest folds into one row, None for all.
     total = sum(values.values()) or 1
     rows = []
     for key, (label, color) in STARTUP_GROUPS.items():
@@ -832,7 +834,7 @@ def startup_table(theme, values, extra=None):
             pct(subtotal / total),
         ]
         rows.append(([*cells, ""] if extra else cells, "group"))
-        shown, rest = items[:TOP_PARTS], items[TOP_PARTS:]
+        shown, rest = (items[:limit], items[limit:]) if limit else (items, [])
         for name, tokens in shown:
             cells = [name.split(":", 1)[1], num(tokens), pct(tokens / total)]
             rows.append(([*cells, extra[name]] if extra else cells, "part"))
@@ -884,7 +886,7 @@ def startup_tab(sessions, theme):
     panels = []
     for agent in agents:
         items = by_agent[agent]
-        starts = [startup_of(s) for s in items]
+        starts = [(merged(fixed), user) for fixed, user in map(startup_of, items)]
         totals, seen = defaultdict(float), defaultdict(int)
         for fixed, _ in starts:
             for name, tokens in fixed.items():
@@ -940,7 +942,7 @@ def startup_tab(sessions, theme):
                 f"{project} · {agent} · {session['time'][:10]}",
                 startup_kpis(fixed, user)
                 + startup_bar(theme, fixed)
-                + startup_table(theme, fixed),
+                + startup_table(theme, fixed, limit=None),
             )
         )
     return "<h2>Average</h2>" + average + "<h2>Selected</h2>" + selector(panels)
@@ -955,7 +957,7 @@ def mean_shares(calls):
     # Each call's context shares, averaged with equal weight per call.
     totals = defaultdict(float)
     for call in calls:
-        for name, share in shares(call["parts"]).items():
+        for name, share in shares(merged(call["parts"])).items():
             totals[name] += share / len(calls)
     return totals
 
@@ -1086,7 +1088,7 @@ def session_tab(sessions, theme):
                 f"{agent} · {len(items)} sessions",
                 head
                 + '<div class="split">'
-                + session_table(theme, mean_shares(calls), shares(consumed), "Context")
+                + session_table(theme, mean_shares(calls), shares(merged(consumed)), "Context")
                 + composition_chart(theme, columns)
                 + "</div>"
                 + history
@@ -1100,8 +1102,8 @@ def session_tab(sessions, theme):
     for session in ordered[::-1][:SESSION_LIMIT]:
         calls = session["calls"]
         peak = max(calls, key=lambda c: c["prompt"])
-        consumption = shares(session["consumed"])
-        context = shares(peak["parts"])
+        consumption = shares(merged(session["consumed"]))
+        context = shares(merged(peak["parts"]))
         head = kpis(
             [
                 ("calls", len(calls)),
