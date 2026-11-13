@@ -35,6 +35,8 @@ IMAGE_CHARS = 6000
 CONTEXT_FILE = re.compile(
     r'<project_instructions path="([^"]+)">(.*?)</project_instructions>', re.DOTALL
 )
+# Context files Pi loads itself; the rest of project_context is added by docs.ts.
+PI_CONTEXT_FILES = {"AGENTS.md", "CLAUDE.md"}
 TOP_PARTS = 15
 TOP_RESULTS = 15
 GROWTH_MIN_SESSIONS = 3
@@ -142,8 +144,17 @@ def context_file_name(path, cwd):
 @cache
 def context_parts(text, cwd):
     # The project_context section split into its files and the wrapper text around them.
+    # Pi's own context files stay separate; everything else comes from docs.ts, as one part.
     files = CONTEXT_FILE.findall(text)
-    parts = [(f"context:{context_file_name(path, cwd)}", len(body)) for path, body in files]
+    parts = [
+        (
+            f"context:{context_file_name(path, cwd)}"
+            if Path(path).name in PI_CONTEXT_FILES
+            else "context:docs.ts",
+            len(body),
+        )
+        for path, body in files
+    ]
     wrapper = len(text) - sum(len(body) for _, body in files)
     return [*parts, ("system:project_context", wrapper)]
 
