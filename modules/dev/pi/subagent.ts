@@ -1,7 +1,6 @@
 /**
  * Subagent tool: delegates tasks to agents, each in its own `pi` process with an isolated
- * context window. Modes: single ({ agent, task }), parallel ({ tasks }), and chain ({ chain },
- * where {previous} is replaced by the prior step's output).
+ * context window. Modes: single ({ agent, task }) and parallel ({ tasks }).
  *
  * Agents are Markdown files in agents/ under Pi's agent directory, loaded at startup: the
  * file name is the agent name, the frontmatter its settings, and the body is appended to its
@@ -44,7 +43,6 @@ const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
-const PREVIOUS = /\{previous\}/g;
 
 interface Agent {
   description: string;
@@ -99,10 +97,9 @@ interface SingleResult {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
-  step?: number;
 }
 
-type Mode = "single" | "parallel" | "chain";
+type Mode = "single" | "parallel";
 
 interface SubagentDetails {
   mode: Mode;
@@ -122,7 +119,6 @@ interface DispatchDefaults {
 interface Run {
   agent: string;
   task: string;
-  step?: number;
   onProgress?: (result: SingleResult) => void;
 }
 
@@ -137,14 +133,13 @@ const emptyUsage = (): UsageStats => ({
 });
 
 // A result that has not finished yet.
-const newResult = (agent: string, task: string, step?: number): SingleResult => ({
+const newResult = (agent: string, task: string): SingleResult => ({
   agent,
   task,
   exitCode: -1,
   messages: [],
   stderr: "",
   usage: emptyUsage(),
-  step,
 });
 
 const details = (mode: Mode, results: SingleResult[]): SubagentDetails => ({ mode, results });
@@ -300,7 +295,7 @@ async function runAgent(
   run: Run,
   signal: AbortSignal | undefined,
 ): Promise<SingleResult> {
-  const result = newResult(run.agent, run.task, run.step);
+  const result = newResult(run.agent, run.task);
   const agent = agents.get(run.agent);
   if (!agent) {
     result.exitCode = 1;
@@ -385,13 +380,6 @@ const TaskItem = Type.Object({
   task: Type.String({ description: "Task to delegate to the agent" }),
 });
 
-const ChainItem = Type.Object({
-  agent: Type.String({ description: "Name of the agent to invoke" }),
-  task: Type.String({
-    description: "Task with an optional {previous} placeholder for the prior step's output",
-  }),
-});
-
 const SubagentParams = Type.Object({
   agent: Type.Optional(Type.String({ description: "Agent to invoke (single mode)" })),
   task: Type.Optional(Type.String({ description: "Task to delegate (single mode)" })),
@@ -400,7 +388,6 @@ const SubagentParams = Type.Object({
       description: `Tasks to run in parallel (at most ${MAX_PARALLEL_TASKS})`,
     }),
   ),
-  chain: Type.Optional(Type.Array(ChainItem, { description: "Steps to run in sequence" })),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -428,7 +415,7 @@ export default function (pi: ExtensionAPI) {
     label: "Subagent",
     description: [
       "Run tasks in subagents with isolated contexts. Each subagent receives its task, not the parent conversation.",
-      "Modes: single (agent + task), parallel (tasks array), chain (sequential, with {previous} replaced by the prior step's output).",
+      "Modes: single (agent + task) or parallel (tasks array).",
       `Agents:\n${[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`).join("\n")}`,
     ].join("\n\n"),
     parameters: SubagentParams,
@@ -453,32 +440,10 @@ export default function (pi: ExtensionAPI) {
       const runningText = (current: SingleResult) =>
         getFinalOutput(current.messages) || "(running...)";
 
-      const modes = [params.chain?.length, params.tasks?.length, params.agent && params.task];
+      const modes = [params.tasks?.length, params.agent && params.task];
       if (modes.filter(Boolean).length !== 1) {
         const text = `Invalid parameters: provide exactly one mode.\nAgents: ${[...agents.keys()].join(", ")}`;
         return reply(text, details("single", []), true);
-      }
-
-      if (params.chain?.length) {
-        const results: SingleResult[] = [];
-        let previous = "";
-        for (const [i, step] of params.chain.entries()) {
-          // biome-ignore lint/performance/noAwaitInLoops: each step needs the previous output.
-          const result = await run({
-            agent: step.agent,
-            task: step.task.replace(PREVIOUS, previous),
-            step: i + 1,
-            onProgress: (current) =>
-              update("chain", [...results, current], runningText(current)),
-          });
-          results.push(result);
-          if (isFailedResult(result)) {
-            const text = `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(result)}`;
-            return reply(text, details("chain", results), true);
-          }
-          previous = getFinalOutput(result.messages);
-        }
-        return reply(previous || "(no output)", details("chain", results));
       }
 
       if (params.tasks?.length) {
@@ -535,27 +500,17 @@ export default function (pi: ExtensionAPI) {
     renderCall(args, theme, _context) {
       const title = theme.fg("toolTitle", theme.bold("subagent "));
       const preview = (task: string, max: number) => {
-        const clean = task.replace(PREVIOUS, "").trim();
+        const clean = task.trim();
         return clean.length > max ? `${clean.slice(0, max)}...` : clean;
       };
-      const list = (steps: { agent: string; task: string }[], numbered: boolean) => {
-        let text = "";
-        for (const [i, step] of steps.slice(0, 3).entries()) {
-          const prefix = numbered ? `${theme.fg("muted", `${i + 1}.`)} ` : "";
-          text += `\n  ${prefix}${theme.fg("accent", step.agent)}${theme.fg("dim", ` ${preview(step.task, 40)}`)}`;
-        }
-        if (steps.length > 3)
-          text += `\n  ${theme.fg("muted", `... +${steps.length - 3} more`)}`;
-        return text;
-      };
-
-      if (args.chain && args.chain.length > 0) {
-        const head = theme.fg("accent", `chain (${args.chain.length} steps)`);
-        return new Text(title + head + list(args.chain, true), 0, 0);
-      }
       if (args.tasks && args.tasks.length > 0) {
-        const head = theme.fg("accent", `parallel (${args.tasks.length} tasks)`);
-        return new Text(title + head + list(args.tasks, false), 0, 0);
+        const { tasks } = args;
+        let text = theme.fg("accent", `parallel (${tasks.length} tasks)`);
+        for (const t of tasks.slice(0, 3))
+          text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview(t.task, 40)}`)}`;
+        if (tasks.length > 3)
+          text += `\n  ${theme.fg("muted", `... +${tasks.length - 3} more`)}`;
+        return new Text(title + text, 0, 0);
       }
       const shown = args.task ? preview(args.task, 60) : "...";
       return new Text(
@@ -633,21 +588,19 @@ export default function (pi: ExtensionAPI) {
         return new Text(text, 0, 0);
       }
 
-      // Chain and parallel: one section per step or task.
+      // Parallel: one section per task.
       const running = data.results.filter((r) => r.exitCode === -1).length;
       const succeeded = data.results.filter(
         (r) => r.exitCode !== -1 && !isFailedResult(r),
       ).length;
       const total = data.results.length;
       const status =
-        data.mode === "chain"
-          ? `${succeeded}/${total} steps`
-          : running > 0
-            ? `${total - running}/${total} done, ${running} running`
-            : `${succeeded}/${total} tasks`;
+        running > 0
+          ? `${total - running}/${total} done, ${running} running`
+          : `${succeeded}/${total} tasks`;
       const header = `${icon(running > 0, succeeded < total)} ${fg("toolTitle", theme.bold(`${data.mode} `))}${fg("accent", status)}`;
       const label = (r: SingleResult) =>
-        `${fg("muted", r.step ? `─── Step ${r.step}: ` : "─── ")}${fg("accent", r.agent)} ${statusIcon(r)}`;
+        `${fg("muted", "─── ")}${fg("accent", r.agent)} ${statusIcon(r)}`;
       const totalUsage = running > 0 ? "" : formatUsageStats(aggregateUsage(data.results));
 
       if (expanded && running === 0) {
