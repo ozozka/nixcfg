@@ -1,6 +1,6 @@
 """Pi context statistics: what each model call contained, rebuilt from Pi's session files.
 
-Usage: stats.py THEME PI [--since YYYY-MM-DD] [--project TEXT] [--out FILE]
+Usage: stats.py THEME [--since YYYY-MM-DD] [--project TEXT] [--out FILE]
 
 Each assistant message is one model call. Its context is the path from the session root to
 that message: system messages patch the prompt sections and tool declarations, the latest
@@ -13,8 +13,7 @@ reported reasoning tokens go to thinking. A session's consumption is the sum of 
 prompt and output parts, so a part sent with every call weighs more than its context share.
 
 Subagent sessions live in subagent-sessions/; parent tool results record their session IDs.
-THEME is a JSON file of colors, fonts, and sizes supplied by Nix; PI is the Pi executable,
-used to read model context windows.
+THEME is a JSON file of colors, fonts, and sizes supplied by Nix.
 """
 
 import argparse
@@ -24,7 +23,6 @@ import json
 import os
 import re
 import statistics
-import subprocess
 from collections import defaultdict
 from functools import cache
 from pathlib import Path
@@ -252,24 +250,11 @@ def calls_of(header, entries, agent):
         }
 
 
-def model_windows(pi):
-    # Context window by model ID, from the table `pi --list-models` prints.
-    windows = {}
-    units = {"K": 1e3, "M": 1e6}
-    output = subprocess.run([pi, "--list-models"], capture_output=True, text=True, check=False)
-    for line in output.stdout.splitlines()[1:]:
-        fields = line.split()
-        if len(fields) >= 3 and fields[2][-1] in units:
-            windows[fields[1]] = round(float(fields[2][:-1]) * units[fields[2][-1]])
-    return windows
-
-
-def session_of(header, calls, agent, entries, windows):
+def session_of(header, calls, agent, entries):
     # Session totals; consumption sums every call's prompt parts and output parts.
     consumed = defaultdict(float)
     for index, call in enumerate(calls):
         call["index"] = index
-        call["window"] = windows.get(call["model"])
         for parts in (call["parts"], call["out"]):
             for name, tokens in parts.items():
                 consumed[name] += tokens
@@ -288,7 +273,6 @@ def session_of(header, calls, agent, entries, windows):
         "model": peak["model"],
         "calls": calls,
         "peak": peak["prompt"],
-        "fill": peak["prompt"] / peak["window"] if peak["window"] else None,
         "consumed": dict(consumed),
         "compactions": len(compactions),
         # The first call after each compaction.
@@ -300,7 +284,7 @@ def session_of(header, calls, agent, entries, windows):
     }
 
 
-def collect(since, project, windows):
+def collect(since, project):
     main_files = sorted(AGENT_DIR.glob("sessions/*/*.jsonl"))
     child_files = sorted(AGENT_DIR.glob("subagent-sessions/*.jsonl"))
     sessions = [(*read_session(path), False) for path in main_files]
@@ -328,7 +312,7 @@ def collect(since, project, windows):
                 calls.append(call)
         if not calls or (since and calls[0]["time"] < since):
             continue
-        found.append(session_of(header, calls, agent, entries, windows))
+        found.append(session_of(header, calls, agent, entries))
         arguments = {
             block["id"]: block["arguments"]
             for e in entries
@@ -816,7 +800,7 @@ def startup_of(session):
     return fixed, parts.get("conversation:user", 0)
 
 
-def startup_kpis(totals, user, window):
+def startup_kpis(totals, user):
     by_group = defaultdict(float)
     for name, tokens in totals.items():
         by_group[name.split(":")[0]] += tokens
@@ -826,7 +810,6 @@ def startup_kpis(totals, user, window):
             ("startup", num(total)),
             *[(label, num(by_group[key])) for key, (label, _) in STARTUP_GROUPS.items()],
             ("first message", num(user)),
-            ("of window", pct(total / window) if window else "-"),
         ]
     )
 
@@ -908,7 +891,6 @@ def startup_tab(sessions, theme):
                 totals[name] += tokens / len(starts)
                 seen[name] += 1
         user = statistics.mean(u for _, u in starts)
-        windows = [s["calls"][0]["window"] for s in items if s["calls"][0]["window"]]
         columns = [
             {
                 key: sum(t for n, t in fixed.items() if n.split(":")[0] == key)
@@ -933,7 +915,7 @@ def startup_tab(sessions, theme):
             (
                 f"average-{agent}",
                 f"{agent} · {len(items)} sessions",
-                startup_kpis(totals, user, statistics.mean(windows) if windows else None)
+                startup_kpis(totals, user)
                 + '<div class="split">'
                 + startup_table(theme, totals, seen)
                 + composition_chart(theme, columns, groups)
@@ -956,7 +938,7 @@ def startup_tab(sessions, theme):
             (
                 f"start-{session['id']}",
                 f"{project} · {agent} · {session['time'][:10]}",
-                startup_kpis(fixed, user, session["calls"][0]["window"])
+                startup_kpis(fixed, user)
                 + startup_bar(theme, fixed)
                 + startup_table(theme, fixed),
             )
@@ -1054,13 +1036,11 @@ def session_tab(sessions, theme):
         for session in items:
             for name, tokens in session["consumed"].items():
                 consumed[name] += tokens
-        fills = [s["fill"] for s in items if s["fill"]]
         head = kpis(
             [
                 ("sessions", len(items)),
                 ("avg calls", f"{len(calls) / len(items):.0f}"),
                 ("avg peak", num(statistics.mean(s["peak"] for s in items))),
-                ("avg peak fill", pct(statistics.mean(fills)) if fills else "-"),
                 ("avg consumed", num(sum(consumed.values()) / len(items))),
                 ("avg cost", f"${statistics.mean(s['cost'] for s in items):.2f}"),
             ]
@@ -1072,12 +1052,7 @@ def session_tab(sessions, theme):
             labels,
             ("Consumed tokens", [sum(s["consumed"].values()) for s in items]),
             [
-                (
-                    "Peak context %",
-                    [100 * (s["fill"] or 0) for s in items],
-                    "s",
-                    "Peak context %",
-                ),
+                ("Peak context", [s["peak"] for s in items], "s", "Peak context"),
                 ("Calls", [len(s["calls"]) for s in items], "p", None),
             ],
             "Session",
@@ -1131,7 +1106,6 @@ def session_tab(sessions, theme):
             [
                 ("calls", len(calls)),
                 ("peak context", num(session["peak"])),
-                ("peak fill", pct(session["fill"]) if session["fill"] else "-"),
                 ("consumed", num(sum(session["consumed"].values()))),
                 ("output", num(sum(c["output"] for c in calls))),
                 ("cost", f"${session['cost']:.2f}"),
@@ -1153,8 +1127,7 @@ def session_tab(sessions, theme):
         )
         label = (
             f"{session['time'][:16].replace('T', ' ')} · {Path(session['cwd']).name}"
-            f" · {session['agent']} · {len(calls)} calls"
-            + (f" · peak {pct(session['fill'])}" if session["fill"] else "")
+            f" · {session['agent']} · {len(calls)} calls · peak {num(session['peak'])}"
         )
         panels.append(
             (
@@ -1202,14 +1175,13 @@ def report(sessions, results, skipped, theme, title):
 def main():
     parser = argparse.ArgumentParser(description="Pi context statistics as an HTML report.")
     parser.add_argument("theme", type=Path, help="theme JSON supplied by Nix")
-    parser.add_argument("pi", help="Pi executable, for model context windows")
     parser.add_argument("--since", help="only sessions started from this date (YYYY-MM-DD)")
     parser.add_argument("--project", help="only sessions whose directory contains this text")
     parser.add_argument("--out", type=Path, default=Path("/tmp/pi-stats.html"))
     args = parser.parse_args()
 
     theme = json.loads(args.theme.read_text())
-    sessions, results, skipped = collect(args.since, args.project, model_windows(args.pi))
+    sessions, results, skipped = collect(args.since, args.project)
     if not sessions:
         raise SystemExit("No sessions found.")
     filters = " ".join(f for f in [args.project, args.since and f"since {args.since}"] if f)
