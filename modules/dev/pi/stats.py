@@ -1189,12 +1189,20 @@ def session_kpis(items, average):
             ("cache hit", cache_hit(items)),
             ("output", num(mean([sum(c["output"] for c in s["calls"]) for s in items]))),
             ("cost", f"${mean([s['cost'] for s in items]):.2f}"),
-            ("compactions", f"{round(mean([s['compactions'] for s in items]), 1):g}"),
             ("active time", duration(mean([sum(s["spent"].values()) for s in items]))),
             ("wait/turn", wait_per_turn(items)),
             *startup_figures(items),
+            ("subagents", f"{round(mean([len(s['delegations']) for s in items]), 1):g}"),
+            ("subagent share", subagent_share(items)),
         ]
     )
+
+
+def subagent_share(items):
+    # The subagent runs' share of the tokens of the sessions and their runs together.
+    children = sum(r["consumed"] or 0 for s in items for r in s["delegations"])
+    own = sum(sum(s["consumed"].values()) for s in items)
+    return pct(children / (own + children)) if children else "-"
 
 
 def cache_hit(items):
@@ -1231,13 +1239,14 @@ def startup_line(theme, items):
 
 
 def compactions_summary(items):
-    # Means over every compaction of the sessions; the count is among the session figures.
+    # The compactions per session, then means over every compaction of the sessions.
     every = [c for s in items for c in s["compaction_list"]]
     if not every:
         return ""
     done = [c for c in every if c["after"] and c["before"]]
     return "<h2>Compactions</h2>" + kpis(
         [
+            ("compactions", f"{round(len(every) / len(items), 1):g}"),
             ("context before", num(statistics.mean(c["before"] for c in every))),
             ("context after", num(statistics.mean(c["after"] for c in done)) if done else "-"),
             (
@@ -1315,12 +1324,9 @@ def delegations_section(session):
     rows = session["delegations"]
     if not rows:
         return ""
-    consumed = sum(r["consumed"] or 0 for r in rows)
-    own = sum(session["consumed"].values())
+    # The number of runs and their share are among the session figures.
     head = kpis(
         [
-            ("subagents", len(rows)),
-            ("subagent share", pct(consumed / (own + consumed)) if consumed else "-"),
             ("kept out", num(sum(r["kept"] or 0 for r in rows))),
             ("parent re-send", num(sum(r["resent"] for r in rows))),
             ("parallelism", parallelism(rows)),
