@@ -735,22 +735,18 @@ def overview_tab(sessions, calls, skipped, theme):
         ]
     )
 
-    days = defaultdict(lambda: {"tokens": 0, "cost": 0, "sessions": set()})
+    # Tokens per day: input and output of every request.
+    days = defaultdict(int)
     for call in calls:
-        day = days[call["time"][:10]]
-        day["tokens"] += call["prompt"] + call["output"]
-        day["cost"] += call["cost"]
-        day["sessions"].add(call["session"])
+        days[call["time"][:10]] += call["prompt"] + call["output"]
     labels = sorted(days)
-    chart = combo_chart(
+    chart = stacked_chart(
         theme,
         labels,
-        ("Tokens", [days[d]["tokens"] for d in labels]),
-        [
-            ("Cost $", [days[d]["cost"] for d in labels], "s", "Cost $"),
-            ("Sessions", [len(days[d]["sessions"]) for d in labels], "p", None),
-        ],
+        [{"tokens": days[d]} for d in labels],
+        "Tokens",
         "Day",
+        groups={"tokens": "o"},
     )
 
     models = defaultdict(list)
