@@ -23,11 +23,12 @@ import argparse
 import html
 import io
 import json
+import math
 import os
 import re
 import statistics
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from functools import cache
 from pathlib import Path
 
@@ -47,6 +48,8 @@ OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "
 GROWTH_MIN_SESSIONS = 3
 # Gaps before a prompt longer than this are breaks, not time spent on the session.
 BREAK_MS = 60 * 60 * 1000
+# Weight of each new day in the overview's moving averages: about a six-day memory.
+EMA_ALPHA = 1 / 6
 # Where a session's time goes, and the theme colors of the time bar.
 TIME_PARTS = {
     "model": "p",
@@ -364,7 +367,7 @@ def timing(entries):
     answer the question tool. The session files do not record closing Pi or /resume, so a
     shorter gap across them counts as a wait too.
 
-    Returns the milliseconds per category and each counted wait.
+    Returns the milliseconds per category and each counted wait as (prompt time, wait).
     """
     spent, calls, waits = defaultdict(float), {}, []
     # ended: when the last run finished, None while one runs; entries after it (a mode switch,
@@ -382,7 +385,7 @@ def timing(entries):
         elif role == "user":
             if ended is not None and stamp - ended <= BREAK_MS:
                 spent["you"] += stamp - ended
-                waits.append(stamp - ended)
+                waits.append((stamp, stamp - ended))
             ended = None
         elif role == "assistant":
             spent["model"] += message.get("durationMs") or 0
@@ -791,7 +794,9 @@ def x_labels(axes, labels):
 def combo_chart(theme, labels, bars, lines, xlabel="", axis="own", marks=()):
     """Overlay-colored columns on the left axis and lines over them.
 
-    bars: (label, values); lines: (label, values, color key, axis label or None).
+    bars: (label, values); lines: (label, values, color key, axis label or None), plus
+    "bars" as a fifth item to draw that line on the columns' axis whatever axis says. Lines
+    may hold NaN where they have no value yet.
     axis: "own" gives each line its own zero-based axis, the first labeled one on the right
     and the others hidden; "bars" draws the lines on the columns' axis, for the same unit;
     "lines" puts every line on one right axis, for lines sharing a unit apart from the bars.
@@ -817,13 +822,17 @@ def combo_chart(theme, labels, bars, lines, xlabel="", axis="own", marks=()):
             base.axvline(mark, color=f"#{colors['m']}", linestyle="--", linewidth=1)
         common = base if axis == "bars" else base.twinx() if axis == "lines" else None
         shown = False
-        for label, values, color, axis_label in lines:
-            axes = common or base.twinx()
+        for label, values, color, axis_label, *place in lines:
+            on_bars = place == ["bars"]
+            axes = base if on_bars else common or base.twinx()
             handles += axes.plot(
                 range(len(values)), values, color=f"#{colors[color]}", label=label
             )
+            if on_bars:
+                continue
             if common is None:
-                axes.set_ylim(0, (max(values, default=0) or 1) * 1.05)
+                top = max((v for v in values if not math.isnan(v)), default=0)
+                axes.set_ylim(0, (top or 1) * 1.05)
             if axis_label and not shown:
                 shown = True
                 axes.set_ylabel(axis_label)
@@ -915,6 +924,72 @@ def subagent_share(sessions):
     return pct(children / total) if total else "-"
 
 
+def ema(values, carry=False):
+    """The exponential moving average with EMA_ALPHA.
+
+    With carry, None (a day without a value) keeps the previous average instead of counting
+    as zero; days before the first value are NaN.
+    """
+    averages, current = [], None
+    for value in values:
+        if value is not None:
+            current = (
+                value if current is None else EMA_ALPHA * value + (1 - EMA_ALPHA) * current
+            )
+        averages.append(float("nan") if current is None else current)
+    return averages
+
+
+def daily_chart(theme, sessions, calls):
+    """Tokens per calendar day as columns, with moving averages of tokens, active hours, your
+    wait per turn, and the main model's output tokens per second.
+
+    Days without sessions count as zero tokens and hours; waits and speed carry over them.
+    A session's active time counts on the day it started; a wait on the day of its prompt.
+    """
+    tokens, active, waits = defaultdict(int), defaultdict(float), defaultdict(list)
+    for call in calls:
+        tokens[call["time"][:10]] += call["prompt"] + call["output"]
+    for session in sessions:
+        active[session["time"][:10]] += sum(session["spent"].values()) / 3_600_000
+        for stamp, wait in session["waits"]:
+            day = datetime.fromtimestamp(stamp / 1000).date().isoformat()
+            waits[day].append(wait / 60_000)
+    main = Counter(c["model"] for c in calls).most_common(1)[0][0]
+    output, seconds = defaultdict(int), defaultdict(float)
+    for call in calls:
+        if call["model"] == main and call["duration"]:
+            output[call["time"][:10]] += call["output"]
+            seconds[call["time"][:10]] += call["duration"] / 1000
+    first, last = date.fromisoformat(min(tokens)), date.fromisoformat(max(tokens))
+    days = [(first + timedelta(n)).isoformat() for n in range((last - first).days + 1)]
+    daily = [tokens[d] for d in days]
+    return combo_chart(
+        theme,
+        days,
+        ("Tokens", daily),
+        [
+            ("Tokens EMA", ema(daily), "m", None, "bars"),
+            ("Active hours EMA", ema([active[d] for d in days]), "p", "Hours"),
+            (
+                "Wait/turn minutes EMA",
+                ema(
+                    [statistics.mean(waits[d]) if waits[d] else None for d in days], carry=True
+                ),
+                "s",
+                None,
+            ),
+            (
+                f"{main} tok/s EMA",
+                ema([output[d] / seconds[d] if seconds[d] else None for d in days], carry=True),
+                "f",
+                None,
+            ),
+        ],
+        "Day",
+    )
+
+
 def overview(sessions, calls, skipped, theme):
     prompt = sum(c["prompt"] for c in calls)
     main = [s for s in sessions if s["agent"] == "main"]
@@ -940,19 +1015,7 @@ def overview(sessions, calls, skipped, theme):
         ]
     )
 
-    # Tokens per day: input and output of every request.
-    days = defaultdict(int)
-    for call in calls:
-        days[call["time"][:10]] += call["prompt"] + call["output"]
-    labels = sorted(days)
-    chart = stacked_chart(
-        theme,
-        labels,
-        [{"tokens": days[d]} for d in labels],
-        "Tokens",
-        "Day",
-        groups={"tokens": "o"},
-    )
+    chart = daily_chart(theme, sessions, calls)
 
     models = defaultdict(list)
     for call in calls:
@@ -1154,7 +1217,7 @@ def session_kpis(items, average):
 
 def wait_per_turn(items):
     # Your average wait over every counted turn of the sessions.
-    waits = [w for s in items for w in s["waits"]]
+    waits = [w for s in items for _, w in s["waits"]]
     return duration(statistics.mean(waits)) if waits else "-"
 
 
