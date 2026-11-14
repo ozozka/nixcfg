@@ -379,19 +379,13 @@ def run_tokens(compaction):
 
 
 def compaction_of(entry, calls):
-    # One compaction: the context before it (Pi's count), the first request after it, and
-    # the summary's tokens in that request; after and summary are None when none followed.
+    # One compaction: the context before it (Pi's count), the context of the first request
+    # after it (None when none followed), and the tokens of its own run.
     after = next((c for c in calls if c["time"] > entry["timestamp"]), None)
-    details = entry.get("details") or {}
     return {
-        "time": entry["timestamp"],
-        "request": after["index"] + 1 if after else None,
         "before": entry.get("tokensBefore", 0),
         "after": after["prompt"] if after else None,
-        "summary": after["parts"].get("conversation:compaction summary") if after else None,
         "run": run_tokens(entry),
-        "read": len(details.get("readFiles") or []),
-        "modified": len(details.get("modifiedFiles") or []),
     }
 
 
@@ -1123,45 +1117,25 @@ def session_kpis(items, average):
     )
 
 
-def compactions_table(items, with_session):
-    # One row per compaction of the sessions, then their means when there are several.
-    rows = []
-    for session in items:
-        for c in session["compaction_list"]:
-            reduction = pct(1 - c["after"] / c["before"]) if c["after"] and c["before"] else "-"
-            cells = [
-                c["request"] or "-",
-                c["time"][:16].replace("T", " "),
-                num(c["before"]),
-                num(c["after"]) if c["after"] is not None else "-",
-                reduction,
-                num(c["summary"]) if c["summary"] is not None else "-",
-                num(c["run"]),
-                c["read"],
-                c["modified"],
-            ]
-            label = [f"{Path(session['cwd']).name} · {session['time'][:10]}"]
-            rows.append(((label if with_session else []) + cells, ""))
-    if not rows:
-        return ""
+def compactions_summary(items):
+    # Means over every compaction of the sessions; the count is among the session figures.
     every = [c for s in items for c in s["compaction_list"]]
+    if not every:
+        return ""
     done = [c for c in every if c["after"] and c["before"]]
-    if len(every) > 1:
-        cells = [
-            "",
-            "mean",
-            num(statistics.mean(c["before"] for c in every)),
-            num(statistics.mean(c["after"] for c in done)) if done else "-",
-            pct(statistics.mean(1 - c["after"] / c["before"] for c in done)) if done else "-",
-            num(statistics.mean(c["summary"] for c in done)) if done else "-",
-            num(statistics.mean(c["run"] for c in every)),
-            f"{statistics.mean(c['read'] for c in every):.0f}",
-            f"{statistics.mean(c['modified'] for c in every):.0f}",
+    return "<h2>Compactions</h2>" + kpis(
+        [
+            ("context before", num(statistics.mean(c["before"] for c in every))),
+            ("context after", num(statistics.mean(c["after"] for c in done)) if done else "-"),
+            (
+                "reduction",
+                pct(statistics.mean(1 - c["after"] / c["before"] for c in done))
+                if done
+                else "-",
+            ),
+            ("run tokens", num(statistics.mean(c["run"] for c in every))),
         ]
-        rows.append((([""] if with_session else []) + cells, "group"))
-    headers = ["Request", "Time", "Before", "After", "Reduction", "Summary", "Run tokens"]
-    headers += ["Read", "Modified"]
-    return "<h2>Compactions</h2>" + table((["Session"] if with_session else []) + headers, rows)
+    )
 
 
 def time_bar(theme, spent):
@@ -1321,7 +1295,7 @@ def session_average(items, theme):
         )
         + tools_table(items, average=True)
         + time_section(theme, items)
-        + compactions_table(items, with_session=True)
+        + compactions_summary(items)
         + growth
     )
 
@@ -1349,7 +1323,7 @@ def session_single(session, theme):
         )
         + tools_table([session], average=False)
         + time_section(theme, [session])
-        + compactions_table([session], with_session=False)
+        + compactions_summary([session])
         + delegations_table(session)
     )
 
