@@ -36,8 +36,6 @@ IMAGE_BYTES = 6000
 CONTEXT_FILE = re.compile(
     r'<project_instructions path="([^"]+)">(.*?)</project_instructions>', re.DOTALL
 )
-# Context files Pi loads itself; the rest of project_context is added by docs.ts.
-PI_CONTEXT_FILES = {"AGENTS.md", "CLAUDE.md"}
 # How Pi lists each skill in the system prompt's skills section.
 SKILL_TAG = "<skill>"
 # How subagent.ts marks the parent's messages to a child, and the child's note tool.
@@ -45,7 +43,6 @@ PARENT_MESSAGE = "Message from the parent:"
 NOTE_TOOL = "send_message"
 # Run endings in subagent.ts, as labeled in the report.
 OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "Stopped"}
-TOP_PARTS = 15
 TOP_RESULTS = 15
 GROWTH_MIN_SESSIONS = 3
 PREVIEW = 80
@@ -167,16 +164,6 @@ def context_parts(text, cwd):
     parts = [(f"context:{context_file_name(path, cwd)}", size(body)) for path, body in files]
     wrapper = size(text) - sum(size(body) for _, body in files)
     return [*parts, ("system:project_context", wrapper)]
-
-
-def merged(parts):
-    # Context files from docs.ts as one part; Pi's own context files stay separate.
-    result = defaultdict(float)
-    for name, value in parts.items():
-        group, _, item = name.partition(":")
-        docs = group == "context" and Path(item).name not in PI_CONTEXT_FILES
-        result["context:docs.ts" if docs else name] += value
-    return result
 
 
 def system_parts(state, cwd):
@@ -393,8 +380,6 @@ TABS = {"overview": "Overview", "startup": "Startup", "session": "Session", "too
 # Sessions offered after the averages in the Startup and Session selectors, newest first;
 # averages use all of them.
 SESSION_LIMIT = 30
-# Parts listed per group in session tables, by consumption.
-SESSION_PARTS = 8
 # Chart groups and their theme colors, in stacking order; parts map to them by prefix.
 CHART_GROUPS = {
     "tool results": "s",
@@ -902,7 +887,7 @@ def tools_tab(sessions, calls, results, theme):
 
 def startup_of(session):
     # The first call's parts before any conversation in tokens and bytes, and the counts of
-    # its tools, context files (each file, before docs.ts files are merged), and skills.
+    # its tools, context files, and skills.
     call = session["calls"][0]
 
     def fixed(parts):
@@ -928,10 +913,9 @@ def startup_kpis(tokens, sizes, counts):
     )
 
 
-def startup_table(theme, values, sizes, extra=None, limit=TOP_PARTS):
-    # values: part -> tokens; sizes: part -> bytes;
-    # extra: part -> one more cell (sessions seen), when given;
-    # limit: parts listed per group before the rest folds into one row, None for all.
+def startup_table(theme, values, sizes, extra=None):
+    # Every part, by group. values: part -> tokens; sizes: part -> bytes;
+    # extra: part -> one more cell (sessions seen), when given.
     total = sum(values.values()) or 1
     rows = []
     for key, (label, color) in STARTUP_GROUPS.items():
@@ -949,8 +933,7 @@ def startup_table(theme, values, sizes, extra=None, limit=TOP_PARTS):
             kib(sum(sizes.get(name, 0) for name, _ in items)),
         ]
         rows.append(([*cells, ""] if extra else cells, "group"))
-        shown, rest = (items[:limit], items[limit:]) if limit else (items, [])
-        for name, tokens in shown:
+        for name, tokens in items:
             cells = [
                 name.split(":", 1)[1],
                 num(tokens),
@@ -958,15 +941,6 @@ def startup_table(theme, values, sizes, extra=None, limit=TOP_PARTS):
                 kib(sizes.get(name, 0)),
             ]
             rows.append(([*cells, extra[name]] if extra else cells, "part"))
-        if rest:
-            tokens = sum(t for _, t in rest)
-            cells = [
-                f"other ({len(rest)})",
-                num(tokens),
-                pct(tokens / total),
-                kib(sum(sizes.get(name, 0) for name, _ in rest)),
-            ]
-            rows.append(([*cells, ""] if extra else cells, "part"))
     headers = ["Part", "Tokens", "Share", "KiB"] + (["Sessions"] if extra else [])
     return table(headers, rows)
 
@@ -1038,7 +1012,7 @@ def startup_single(session, theme):
     return (
         startup_kpis(fixed, sizes, counts)
         + startup_bar(theme, fixed)
-        + startup_table(theme, fixed, sizes, limit=None)
+        + startup_table(theme, fixed, sizes)
     )
 
 
@@ -1055,7 +1029,7 @@ def mean_shares(calls):
     # Each call's context shares, averaged with equal weight per call.
     totals = defaultdict(float)
     for call in calls:
-        for name, share in shares(merged(call["parts"])).items():
+        for name, share in shares(call["parts"]).items():
             totals[name] += share / len(calls)
     return totals
 
@@ -1064,7 +1038,7 @@ def mean_sizes(calls):
     # Each part's bytes, averaged over the calls.
     totals = defaultdict(float)
     for call in calls:
-        for name, value in merged(call["sizes"]).items():
+        for name, value in call["sizes"].items():
             totals[name] += value / len(calls)
     return totals
 
@@ -1074,7 +1048,7 @@ def ratio(consumption, context):
 
 
 def session_table(theme, context, consumption, sizes, context_label):
-    # Parts grouped by GROUPS: context share, consumption share, their ratio, and size.
+    # Every part, grouped by GROUPS: context share, consumption share, their ratio, and size.
     rows = []
     for key, label in GROUPS.items():
         names = sorted(
@@ -1088,16 +1062,10 @@ def session_table(theme, context, consumption, sizes, context_label):
         name = Markup(square(f"{key}:", theme) + esc(label))
         group_size = kib(sum(sizes.get(n, 0) for n in names))
         rows.append(([name, pct(ctx), pct(cons), ratio(cons, ctx), group_size], "group"))
-        for n in names[:SESSION_PARTS]:
+        for n in names:
             ctx, cons = context.get(n, 0), consumption.get(n, 0)
             cells = [n.split(":", 1)[1], pct(ctx), pct(cons), ratio(cons, ctx)]
             rows.append(([*cells, kib(sizes.get(n, 0))], "part"))
-        rest = names[SESSION_PARTS:]
-        if rest:
-            ctx = sum(context.get(n, 0) for n in rest)
-            cons = sum(consumption.get(n, 0) for n in rest)
-            cells = [f"other ({len(rest)})", pct(ctx), pct(cons), ratio(cons, ctx)]
-            rows.append(([*cells, kib(sum(sizes.get(n, 0) for n in rest))], "part"))
     return table(["Part", context_label, "Consumption", "Ratio", "KiB"], rows)
 
 
@@ -1157,7 +1125,7 @@ def session_average(items, theme):
         session_kpis(items, average=True)
         + history
         + session_table(
-            theme, mean_shares(calls), shares(merged(consumed)), mean_sizes(calls), "Context"
+            theme, mean_shares(calls), shares(consumed), mean_sizes(calls), "Context"
         )
         + growth
     )
@@ -1179,9 +1147,9 @@ def session_single(session, theme):
         + tokens
         + session_table(
             theme,
-            shares(merged(peak["parts"])),
-            shares(merged(session["consumed"])),
-            merged(peak["sizes"]),
+            shares(peak["parts"]),
+            shares(session["consumed"]),
+            peak["sizes"],
             "Peak context",
         )
     )
