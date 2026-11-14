@@ -38,6 +38,8 @@ CONTEXT_FILE = re.compile(
 )
 # Context files Pi loads itself; the rest of project_context is added by docs.ts.
 PI_CONTEXT_FILES = {"AGENTS.md", "CLAUDE.md"}
+# How Pi lists each skill in the system prompt's skills section.
+SKILL_TAG = "<skill>"
 # How subagent.ts marks the parent's messages to a child, and the child's note tool.
 PARENT_MESSAGE = "Message from the parent:"
 NOTE_TOOL = "send_message"
@@ -266,6 +268,8 @@ def calls_of(header, entries, agent):
             "cache": usage.get("cacheRead", 0),
             "cost": (usage.get("cost") or {}).get("total", 0),
             "tools": set(state["tools"]),
+            # Skills listed in the system prompt.
+            "skills": state["sections"].get("skills", "").count(SKILL_TAG),
             "parts": {name: value / total * prompt for name, value in parts.items()},
             "out": output_parts(message),
         }
@@ -405,11 +409,12 @@ CHART_GROUP = {
     "call": "tool calls",
     "result": "tool results",
 }
-# Startup groups: the parts of a call before any conversation, and their theme colors.
+# Startup groups: the parts of a call before any conversation, and their theme colors, in
+# the order the prompt is put together.
 STARTUP_GROUPS = {
-    "context": ("context files", "s"),
-    "tool": ("tool definitions", "p"),
     "system": ("system prompt", "m"),
+    "tool": ("tool definitions", "p"),
+    "context": ("context files", "s"),
 }
 BAR_WIDTH = 0.72
 # Above this many columns, stacked bars touch, so dense sessions read as a stepped area.
@@ -915,26 +920,29 @@ def tools_tab(sessions, calls, results, theme):
 
 
 def startup_of(session):
-    # The first call's parts before any conversation in tokens and bytes, and the user's
-    # first message in tokens.
+    # The first call's parts before any conversation in tokens and bytes, and the counts of
+    # its tools, context files (each file, before docs.ts files are merged), and skills.
     call = session["calls"][0]
 
     def fixed(parts):
         return {n: v for n, v in parts.items() if n.split(":")[0] in STARTUP_GROUPS}
 
-    return fixed(call["parts"]), call["parts"].get("conversation:user", 0), fixed(call["sizes"])
+    groups = [name.split(":")[0] for name in fixed(call["parts"])]
+    counts = {
+        "tools": groups.count("tool"),
+        "context files": groups.count("context"),
+        "skills": call["skills"],
+    }
+    return fixed(call["parts"]), fixed(call["sizes"]), counts
 
 
-def startup_kpis(totals, user):
-    by_group = defaultdict(float)
-    for name, tokens in totals.items():
-        by_group[name.split(":")[0]] += tokens
-    total = sum(totals.values())
+def startup_kpis(tokens, sizes, counts):
+    # Totals of a startup, or averages over several; counts averaged keep one decimal.
     return kpis(
         [
-            ("startup", num(total)),
-            *[(label, num(by_group[key])) for key, (label, _) in STARTUP_GROUPS.items()],
-            ("first message", num(user)),
+            ("startup tokens", num(sum(tokens.values()))),
+            ("startup KiB", kib(sum(sizes.values()))),
+            *[(name, f"{round(value, 1):g}") for name, value in counts.items()],
         ]
     )
 
@@ -1023,16 +1031,16 @@ def startup_tab(sessions, theme):
     for agent in agents:
         items = by_agent[agent]
         starts = [
-            (merged(fixed), user, merged(sizes))
-            for fixed, user, sizes in map(startup_of, items)
+            (merged(fixed), merged(sizes), counts)
+            for fixed, sizes, counts in map(startup_of, items)
         ]
         totals, seen, size_totals = defaultdict(float), defaultdict(int), defaultdict(float)
-        for fixed, _, sizes in starts:
+        for fixed, sizes, _ in starts:
             for name, tokens in fixed.items():
                 totals[name] += tokens / len(starts)
                 size_totals[name] += sizes.get(name, 0) / len(starts)
                 seen[name] += 1
-        user = statistics.mean(u for _, u, _ in starts)
+        counts = {name: statistics.mean(c[name] for _, _, c in starts) for name in starts[0][2]}
         columns = [
             {
                 key: sum(t for n, t in fixed.items() if n.split(":")[0] == key)
@@ -1057,7 +1065,7 @@ def startup_tab(sessions, theme):
             (
                 f"average-{agent}",
                 f"{agent} · {len(items)} sessions",
-                startup_kpis(totals, user)
+                startup_kpis(totals, size_totals, counts)
                 + '<div class="split">'
                 + startup_table(theme, totals, size_totals, seen)
                 + composition_chart(theme, columns, groups)
@@ -1075,12 +1083,12 @@ def startup_tab(sessions, theme):
     for (project, agent), session in sorted(
         latest.items(), key=lambda kv: kv[1]["time"], reverse=True
     ):
-        fixed, user, sizes = startup_of(session)
+        fixed, sizes, counts = startup_of(session)
         panels.append(
             (
                 f"start-{session['id']}",
                 f"{project} · {agent} · {session['time'][:10]}",
-                startup_kpis(fixed, user)
+                startup_kpis(fixed, sizes, counts)
                 + startup_bar(theme, fixed)
                 + startup_table(theme, fixed, sizes, limit=None),
             )
