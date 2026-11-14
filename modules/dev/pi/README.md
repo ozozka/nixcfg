@@ -101,8 +101,8 @@ the session files and writes `/tmp/pi-stats.html`, styled with the system theme,
 Each session panel shows figures (including the startup's tokens, KiB, tools, context files, and
 skills), the context per request stacked by section, the startup's parts as one bar, and a parts
 table nested by section (startup, conversation, tool calls, tool results, other) that opens on
-click, with context and consumed tokens, their shares and ratio, KiB, and, for averages, how
-many sessions each part appeared in. Then tools (calls, errors, result tokens, run time), where
-time goes, and compaction summaries. A parent shows its subagent runs (cost, report,
-compression, kept out, parent re-send, ending, parallelism), a run shows its delegation, and an
-agent's average shows its efficiency (median compression, startup overhead, budget stops).
+click, with context and consumed tokens, their shares and ratio, KiB, how many times each part
+occurred, and, for averages, how many sessions it appeared in. Then where time goes, and
+compaction summaries. A parent shows its subagent runs (cost, report, compression, kept out,
+parent re-send, ending, parallelism), a run shows its delegation, and an agent's average shows
+its efficiency (median compression, startup overhead, budget stops).

@@ -474,18 +474,9 @@ def collect(since, project):
         # Set below for a child whose parent's reports include it.
         found[-1]["delegation"] = None
         found[-1]["reports"] = [] if child else reports_of(entries, calls, uses)
-        # Tool results, sized at the session's own bytes per token.
-        ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
-        found[-1]["results"] = [
-            {
-                "tool": message["toolName"],
-                "tokens": text_size(message["content"]) / ratio,
-                "error": bool(message.get("isError")),
-                "duration": message.get("durationMs"),
-            }
-            for message in (e.get("message") or {} for e in entries)
-            if message.get("role") == "toolResult"
-        ]
+        found[-1]["counts"], once = occurrences(found[-1], entries)
+        # The tool results the session read, each counted once, for delegation's kept out.
+        found[-1]["material"] = sum(t for n, t in once.items() if n.startswith("result:"))
     # Each parent's subagent runs, with the child sessions' own totals; each child keeps its
     # row and parent.
     children = {s["id"]: s for s in found if s["child"]}
@@ -495,6 +486,26 @@ def collect(since, project):
             if row["child"] in children:
                 children[row["child"]]["delegation"] = {**row, "parent": session}
     return found, skipped
+
+
+def occurrences(session, entries):
+    """How many times each part occurred, and its tokens with each occurrence counted once.
+
+    Every message block, custom message, and summary counts once however often later requests
+    resend it; each compaction run counts once; startup parts count 1. Tokens are bytes at the
+    session's own bytes per token.
+    """
+    ratio = statistics.median(c["bytes"] / c["prompt"] for c in session["calls"])
+    counts, once = Counter(), defaultdict(float)
+    for entry in entries:
+        for name, length in message_parts(entry):
+            counts[name] += 1
+            once[name] += length / ratio
+    counts["conversation:compaction runs"] = session["compactions"]
+    for name in session["consumed"]:
+        if section_of(name)[0] == "startup":
+            counts[name] = 1
+    return +counts, once
 
 
 def reports_of(entries, calls, uses):
@@ -563,7 +574,7 @@ def delegations_of(reports, children):
             else None
         )
         # What the parent never had to hold: the child's tool results, less the report.
-        material = sum(r["tokens"] for r in child["results"]) if child else None
+        material = child["material"] if child else None
         row["kept"] = max(0, material - row["tokens"]) if material is not None else None
         row["corrections"] = child["parent_messages"] if child else None
         row["notes"] = child["notes"] if child else None
@@ -1108,12 +1119,13 @@ def ratio(consumption, context):
 TABLE_IDS = iter(range(1, 1_000_000))
 
 
-def session_table(theme, context, consumed, sizes, sessions=None, context_shares=None):
+def session_table(theme, context, consumed, sizes, counts, sessions=None, context_shares=None):
     """Every part, nested in SECTIONS (startup in STARTUP_SECTIONS), collapsed to the
     section rows until opened.
 
     context: part -> tokens in the context; consumed: part -> tokens over the session;
-    sizes: part -> bytes; sessions, for averages: each session's set of parts, counted for
+    sizes: part -> bytes; counts: part -> how many times it occurred (per session in
+    averages); sessions, for averages: each session's set of parts, counted for
     every row; context_shares, for averages: part -> its context share averaged over the
     requests, so each request weighs the same, instead of its share of the mean tokens.
     """
@@ -1135,6 +1147,7 @@ def session_table(theme, context, consumed, sizes, sessions=None, context_shares
             pct(cons / cons_total),
             ratio(cons / cons_total, share),
             kib(sum(sizes.get(n, 0) for n in members)),
+            f"{sum(counts.get(n, 0) for n in members):.{1 if sessions is not None else 0}f}",
         ]
         if sessions is not None:
             row.append(sum(1 for present in sessions if any(n in present for n in members)))
@@ -1176,6 +1189,7 @@ def session_table(theme, context, consumed, sizes, sessions=None, context_shares
             fixed = CONVERSATION_PARTS if section == "conversation" else None
             nest(section, by_section[(section, None)], None, 0, fixed)
     headers = ["Part", "Context", "Context %", "Consumed", "Consumed %", "Ratio", "KiB"]
+    headers.append("Count/session" if sessions is not None else "Count")
     if sessions is not None:
         headers.append(f"Sessions/{len(sessions)}")
     return table(headers, rows, "nested")
@@ -1289,53 +1303,6 @@ def time_section(theme, items):
     if not any(spent.values()):
         return ""
     return "<h2>Time</h2>" + time_bar(theme, spent)
-
-
-def tools_table(items, average):
-    """One row per tool the sessions called: calls, errors, result tokens, and run time.
-
-    Averages show calls, totals, and errors per session; Avg and Max are per call. The
-    subagent tool is left out: its runs have their own section.
-    """
-    results = defaultdict(list)
-    for session in items:
-        for result in session["results"]:
-            if result["tool"] != "subagent":
-                results[result["tool"]].append(result)
-    per = len(items) if average else 1
-    # Sessions that called each tool.
-    sessions = Counter(t for s in items for t in {r["tool"] for r in s["results"]})
-    rows = []
-    for tool, calls in sorted(results.items(), key=lambda kv: -sum(r["tokens"] for r in kv[1])):
-        tokens = [r["tokens"] for r in calls]
-        times = [r["duration"] for r in calls if r["duration"] is not None]
-        rows.append(
-            (
-                [
-                    tool,
-                    f"{len(calls) / per:.1f}" if average else len(calls),
-                    f"{sum(r['error'] for r in calls) / per:.1f}"
-                    if average
-                    else sum(r["error"] for r in calls),
-                    num(sum(tokens) / per),
-                    num(statistics.mean(tokens)),
-                    num(max(tokens)),
-                    duration(sum(times) / per) if times else "-",
-                    duration(statistics.mean(times)) if times else "-",
-                    duration(max(times)) if times else "-",
-                    *([sessions[tool]] if average else []),
-                ],
-                "",
-            )
-        )
-    if not rows:
-        return ""
-    each = "/session" if average else ""
-    headers = ["Tool", f"Calls{each}", f"Errors{each}", f"Tokens{each}", "Avg tokens"]
-    headers += ["Max tokens", f"Time{each}", "Avg time", "Max time"]
-    if average:
-        headers.append(f"Sessions/{len(items)}")
-    return "<h2>Tools</h2>" + table(headers, rows)
 
 
 def compression(row):
@@ -1503,10 +1470,13 @@ def session_average(items, theme):
             mean_parts(calls, "parts"),
             {name: tokens / len(items) for name, tokens in consumed.items()},
             mean_parts(calls, "sizes"),
+            {
+                n: c / len(items)
+                for n, c in sum((s["counts"] for s in items), Counter()).items()
+            },
             [set(s["consumed"]) for s in items],
             mean_shares(calls),
         )
-        + tools_table(items, average=True)
         + time_section(theme, items)
         + compactions_summary(items)
         + efficiency_section(items)
@@ -1529,8 +1499,9 @@ def session_single(session, theme):
         session_kpis([session], average=False)
         + tokens
         + startup_line(theme, [session])
-        + session_table(theme, peak["parts"], session["consumed"], peak["sizes"])
-        + tools_table([session], average=False)
+        + session_table(
+            theme, peak["parts"], session["consumed"], peak["sizes"], session["counts"]
+        )
         + time_section(theme, [session])
         + compactions_summary([session])
         + delegations_section(session)
