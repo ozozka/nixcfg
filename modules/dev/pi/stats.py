@@ -926,13 +926,6 @@ def grouped(parts):
 # Tabs
 
 
-def subagent_share(sessions):
-    # Child sessions' share of all consumed tokens.
-    total = sum(sum(s["consumed"].values()) for s in sessions)
-    children = sum(sum(s["consumed"].values()) for s in sessions if s["child"])
-    return pct(children / total) if total else "-"
-
-
 def ema(values, carry=False):
     """The exponential moving average with EMA_ALPHA.
 
@@ -988,15 +981,12 @@ def daily_chart(theme, sessions, calls):
 
 
 def overview(sessions, calls, theme):
-    # Your usage of Pi over every session: volume, delegation, efficiency, time, and rhythm.
+    # Your usage of Pi over every session: volume, efficiency, time, and rhythm.
     prompt = sum(c["prompt"] for c in calls)
     main = [s for s in sessions if s["agent"] == "main"]
     head = kpis(
         [
             ("sessions", len(main)),
-            ("subagent runs", len(sessions) - len(main)),
-            ("subagent share", subagent_share(sessions)),
-            ("requests", len(calls)),
             ("input", num(prompt)),
             ("output", num(sum(c["output"] for c in calls))),
             ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
