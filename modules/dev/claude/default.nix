@@ -41,7 +41,7 @@ let
     };
     statusLine = {
       type = "command";
-      command = "${python} ${./statusline.py} ${pkgs.git}/bin/git";
+      command = "${python} ${./status.py} ${pkgs.git}/bin/git";
       padding = 0;
       refreshInterval = 30;
     };
