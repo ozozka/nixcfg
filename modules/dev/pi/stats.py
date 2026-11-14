@@ -731,7 +731,7 @@ main {{ padding:{dim["m"]}px; }}
 h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   border-bottom:1px solid var(--o); margin:{dim["m"]}px 0 {dim["s"]}px; }}
 .kpis {{ display:grid; grid-template-columns:repeat({KPI_COLUMNS}, minmax(0, 1fr));
-  text-align:center; margin-bottom:{dim["s"]}px; }}
+  row-gap:{dim["s"]}px; text-align:center; margin-bottom:{dim["s"]}px; }}
 .kpis span {{ display:block; color:var(--m); font-size:{px(size["s"])}px; }}
 .kpis b {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
 table {{ border-collapse:collapse; width:100%; font:{px(size["l"])}px "{fonts["mono"]}";
@@ -754,7 +754,7 @@ tr.flag td {{ color:var(--s); }}
 .square {{ margin-right:{dim["t"] * 2}px; }}
 .chart svg {{ width:100%; height:auto; display:block; margin-bottom:{dim["s"]}px; }}
 select {{ background:var(--o); color:var(--f); border:0; padding:{dim["t"] * 2}px;
-  font:{px(size["l"])}px "{fonts["mono"]}"; margin-bottom:{dim["s"]}px; }}
+  font:{px(size["l"])}px "{fonts["mono"]}"; margin:{dim["s"]}px 0; }}
 """
 
 
@@ -799,7 +799,10 @@ def render(theme, draw, size=None):
         figure = Figure(layout="constrained", figsize=size)
         draw(figure)
         buffer = io.StringIO()
-        figure.savefig(buffer, format="svg", metadata={"Date": None})
+        # Without the figure's own margins, the page's spacing is the only space between blocks.
+        figure.savefig(
+            buffer, format="svg", metadata={"Date": None}, bbox_inches="tight", pad_inches=0
+        )
     svg = buffer.getvalue()
     return Markup(f'<div class="chart">{svg[svg.index("<svg") :]}</div>')
 
@@ -1078,6 +1081,7 @@ def startup_bar(theme, values):
                 axes.barh(
                     0,
                     tokens,
+                    height=1,
                     left=left,
                     color=f"#{colors[color]}",
                     edgecolor=f"#{colors['b']}",
@@ -1086,6 +1090,7 @@ def startup_bar(theme, values):
                 left += tokens
         axes.set_xlim(0, left or 1)
         axes.set_yticks([])
+        axes.set_ylim(-0.5, 0.5)
         compact_ticks(axes)
         axes.xaxis.set_major_formatter(axes.yaxis.get_major_formatter())
         axes.set_xlabel("Tokens")
@@ -1294,6 +1299,7 @@ def time_bar(theme, spent):
                 axes.barh(
                     0,
                     value,
+                    height=1,
                     left=left,
                     color=f"#{colors[key]}",
                     linewidth=0,
@@ -1303,6 +1309,7 @@ def time_bar(theme, spent):
             left += value
         axes.set_xlim(0, left or 1)
         axes.set_yticks([])
+        axes.set_ylim(-0.5, 0.5)
         axes.set_xlabel("Minutes")
         figure.legend(handles=handles, loc="outside lower center", ncols=len(handles))
 
