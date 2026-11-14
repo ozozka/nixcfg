@@ -1025,7 +1025,7 @@ def startup_tab(sessions, theme):
             [{STARTUP_GROUPS[key][0]: c[key] for key in c} for c in columns],
             "Startup tokens",
             "Session",
-            groups={label: color for label, color in STARTUP_GROUPS.values()},
+            groups=dict(STARTUP_GROUPS.values()),
         )
         panels.append(
             (
