@@ -210,9 +210,9 @@ def system_parts(state, cwd):
     return parts
 
 
-def calls_of(header, entries, agent, uses=None):
-    # uses, when given, counts for each entry ID the requests whose context included it.
-    # One record per assistant message with real usage.
+def calls_of(header, entries, uses):
+    # One record per assistant message with real usage and a system prompt; uses counts for
+    # each entry ID the requests whose context included it.
     by_id = {e["id"]: e for e in entries}
     # Each entry is measured once; later calls share it.
     measured = {}
@@ -233,8 +233,6 @@ def calls_of(header, entries, agent, uses=None):
 
         edits = {e["targetId"]: e["replacement"] for e in path if e["type"] == "context_edit"}
         state = {"sections": {}, "tools": {}}
-        modes = [e.get("data") or {} for e in path if e.get("customType") == "mode"]
-        mode = modes[-1].get("name") if modes else None
         compactions = [i for i, e in enumerate(path) if e["type"] == "compaction"]
         if compactions:
             index = compactions[-1]
@@ -269,23 +267,16 @@ def calls_of(header, entries, agent, uses=None):
                 conversation += measured[item["id"]]
                 included.append(item["id"])
         if not state["sections"]:
-            yield {"skipped": True}
             continue
-        if uses is not None:
-            uses.update(included)
+        uses.update(included)
 
         parts = defaultdict(int)
         for name, length in system_parts(state, header.get("cwd")) + conversation:
             parts[name] += length
         total = sum(parts.values()) or 1
         yield {
-            "skipped": False,
-            "session": header.get("id"),
-            "agent": agent,
-            "cwd": header.get("cwd", ""),
             "time": entry["timestamp"],
             "model": message.get("model"),
-            "mode": mode or "free",
             "prompt": prompt,
             "bytes": total,
             "sizes": dict(parts),
@@ -295,7 +286,6 @@ def calls_of(header, entries, agent, uses=None):
             "duration": message.get("durationMs"),
             "cache": usage.get("cacheRead", 0),
             "cost": (usage.get("cost") or {}).get("total", 0),
-            "tools": set(state["tools"]),
             # Skills listed in the system prompt.
             "skills": state["sections"].get("skills", "").count(SKILL_TAG),
             "parts": {name: value / total * prompt for name, value in parts.items()},
@@ -478,7 +468,7 @@ def collect(since, project):
             continue
         agent = agents.get(header.get("id"), "subagent") if child else "main"
         uses = Counter()
-        calls = [c for c in calls_of(header, entries, agent, uses) if not c["skipped"]]
+        calls = list(calls_of(header, entries, uses))
         if not calls or (since and calls[0]["time"] < since):
             continue
         found.append(session_of(header, calls, agent, entries))
@@ -582,7 +572,7 @@ def delegations_of(reports, children):
         row["consumed"] = sum(child["consumed"].values()) if child else None
         row["active"] = sum(child["spent"].values()) if child else None
         # The fixed price of an agent: its startup tokens, sent with every request.
-        startup = sum(startup_of(child)[0].values()) if child else 0
+        startup = sum(startup_of(child).values()) if child else 0
         row["overhead"] = (
             startup * len(child["calls"]) / row["consumed"]
             if child and row["consumed"]
@@ -621,7 +611,6 @@ KPI_COLUMNS = 6
 DENSE_COLUMNS = 60
 TICK_COUNT = 8
 
-# Tabs follow the URL hash; a select shows the panel named by its value.
 SCRIPT = """
 // Nested table rows: a row with data-id opens its direct children and closes all its
 // descendants.
@@ -822,16 +811,15 @@ def x_labels(axes, labels):
     axes.set_xlim(-BAR_WIDTH / 2, len(labels) - 1 + BAR_WIDTH / 2)
 
 
-def combo_chart(theme, labels, bars, lines, xlabel="", axis="own", marks=()):
+def combo_chart(theme, labels, bars, lines, xlabel="", axis="own"):
     """Overlay-colored columns on the left axis and lines over them.
 
     bars: (label, values); lines: (label, values, color key, axis label or None), plus
-    "bars" as a fifth item to draw that line on the columns' axis whatever axis says. Lines
-    may hold NaN where they have no value yet.
+    "bars" as a fifth item to draw that line on the columns' axis. Lines may hold NaN where
+    they have no value yet.
     axis: "own" gives each line its own zero-based axis, the first labeled one on the right
-    and the others hidden; "bars" draws the lines on the columns' axis, for the same unit;
-    "lines" puts every line on one right axis, for lines sharing a unit apart from the bars.
-    marks: x positions drawn as dashed vertical rules.
+    and the others hidden; "lines" puts every line on one right axis, for lines sharing a
+    unit apart from the bars.
     """
     colors = theme["colors"]
 
@@ -849,9 +837,7 @@ def combo_chart(theme, labels, bars, lines, xlabel="", axis="own", marks=()):
         base.set_ylim(bottom=0)
         base.set_ylabel(bars[0])
         compact_ticks(base)
-        for mark in marks:
-            base.axvline(mark, color=f"#{colors['m']}", linestyle="--", linewidth=1)
-        common = base if axis == "bars" else base.twinx() if axis == "lines" else None
+        common = base.twinx() if axis == "lines" else None
         shown = False
         for label, values, color, axis_label, *place in lines:
             on_bars = place == ["bars"]
@@ -886,12 +872,13 @@ def combo_chart(theme, labels, bars, lines, xlabel="", axis="own", marks=()):
     return render(theme, draw)
 
 
-def stacked_chart(theme, labels, columns, ylabel, xlabel, marks=(), groups=CHART_GROUPS):
-    """Columns stacked by group, in group order from the bottom: each column's height is its
-    total, each color a group's tokens, and a group's colored area over all columns its sum.
+def stacked_chart(theme, labels, columns, ylabel, xlabel, marks=()):
+    """Columns stacked by CHART_GROUPS, in their order from the bottom: each column's height
+    is its total, each color a group's tokens, and a group's colored area over all columns
+    its sum.
 
-    columns: group name -> tokens, one per label; groups: group name -> theme color key.
-    marks: x positions drawn as dashed vertical rules.
+    columns: group name -> tokens, one per label; marks: x positions drawn as dashed
+    vertical rules.
     """
     colors = theme["colors"]
 
@@ -902,7 +889,7 @@ def stacked_chart(theme, labels, columns, ylabel, xlabel, marks=(), groups=CHART
         width = 1 if dense else BAR_WIDTH
         bottom = [0.0] * len(columns)
         handles = []
-        for group, key in groups.items():
+        for group, key in CHART_GROUPS.items():
             values = [column.get(group, 0) for column in columns]
             handles.append(
                 axes.bar(
@@ -945,7 +932,7 @@ def grouped(parts):
     return totals
 
 
-# Tabs
+# Sections
 
 
 def ema(values, carry=False):
@@ -1050,20 +1037,9 @@ def overview(sessions, calls, theme):
 
 
 def startup_of(session):
-    # The first call's parts before any conversation in tokens and bytes, and the counts of
-    # its tools, context files, and skills.
-    call = session["calls"][0]
-
-    def fixed(parts):
-        return {n: v for n, v in parts.items() if n.split(":")[0] in STARTUP_GROUPS}
-
-    groups = [name.split(":")[0] for name in fixed(call["parts"])]
-    counts = {
-        "tools": groups.count("tool"),
-        "context files": groups.count("context"),
-        "skills": call["skills"],
-    }
-    return fixed(call["parts"]), fixed(call["sizes"]), counts
+    # The first call's parts before any conversation, in tokens.
+    parts = session["calls"][0]["parts"]
+    return {n: v for n, v in parts.items() if n.split(":")[0] in STARTUP_GROUPS}
 
 
 def startup_bar(theme, values):
@@ -1245,10 +1221,9 @@ def wait_per_turn(items):
 def startup_figures(items):
     # The startup's tokens and skills, or their means over several sessions; its other
     # sizes and counts are in the parts table's startup rows.
-    starts = [startup_of(s) for s in items]
-    skills = statistics.mean(c["skills"] for _, _, c in starts)
+    skills = statistics.mean(s["calls"][0]["skills"] for s in items)
     return [
-        ("startup tokens", num(statistics.mean(sum(t.values()) for t, _, _ in starts))),
+        ("startup tokens", num(statistics.mean(sum(startup_of(s).values()) for s in items))),
         ("skills", f"{round(skills, 1):g}"),
     ]
 
@@ -1257,7 +1232,7 @@ def startup_line(theme, items):
     # The startup's parts as one bar; averaged part by part over several sessions.
     tokens = defaultdict(float)
     for session in items:
-        for name, value in startup_of(session)[0].items():
+        for name, value in startup_of(session).items():
             tokens[name] += value / len(items)
     return startup_bar(theme, tokens)
 
@@ -1528,10 +1503,6 @@ def session_single(session, theme):
 
 
 def session_panels(sessions, theme):
-    return panels_tab(sessions, "session", session_average, session_single, theme)
-
-
-def panels_tab(sessions, prefix, average, single, theme):
     """One selector: an average per agent, then every session newest first, each followed by
     the subagent runs it started, then subagent runs whose parent is not in the report.
     """
@@ -1539,7 +1510,7 @@ def panels_tab(sessions, prefix, average, single, theme):
     for session in sorted(sessions, key=lambda s: s["time"]):
         by_agent[session["agent"]].append(session)
     averages = [
-        (f"avg-{agent}", f"{agent} · {len(items)} sessions", average(items, theme))
+        (f"avg-{agent}", f"{agent} · {len(items)} sessions", session_average(items, theme))
         for agent, items in sorted(by_agent.items(), key=lambda kv: (kv[0] != "main", kv[0]))
     ]
     newest = sorted(sessions, key=lambda s: s["time"], reverse=True)
@@ -1558,13 +1529,15 @@ def panels_tab(sessions, prefix, average, single, theme):
         ]
     unlinked = [s for s in newest if s["child"] and s["parent"] not in ids]
     return selector(
-        prefix,
         [
             ("Averages", averages),
-            ("Sessions", [(key, label, single(s, theme)) for key, label, s in entries]),
+            ("Sessions", [(key, label, session_single(s, theme)) for key, label, s in entries]),
             (
                 "Unlinked subagents",
-                [(f"s-{s['id']}", session_label(s), single(s, theme)) for s in unlinked],
+                [
+                    (f"s-{s['id']}", session_label(s), session_single(s, theme))
+                    for s in unlinked
+                ],
             ),
         ],
     )
@@ -1587,13 +1560,13 @@ def child_label(session):
     return f"\u00a0\u00a0\u00a0└ {session['agent']} · {task} · {len(session['calls'])} requests"
 
 
-def selector(prefix, groups):
+def selector(groups):
     # A select over grouped panels (key, label, content); the first panel is shown.
     panels = [panel for _, items in groups for panel in items]
     options = "".join(
         f'<optgroup label="{esc(group)}">'
         + "".join(
-            f'<option value="{esc(prefix)}-{esc(key)}">{esc(label)}</option>'
+            f'<option value="session-{esc(key)}">{esc(label)}</option>'
             for key, label, _ in items
         )
         + "</optgroup>"
@@ -1601,7 +1574,7 @@ def selector(prefix, groups):
         if items
     )
     shown = "".join(
-        f'<div class="panel" id="{esc(prefix)}-{esc(key)}"{" hidden" if n else ""}>{content}</div>'
+        f'<div class="panel" id="session-{esc(key)}"{" hidden" if n else ""}>{content}</div>'
         for n, (key, _, content) in enumerate(panels)
     )
     return f"<div><select data-panels>{options}</select>{shown}</div>"
