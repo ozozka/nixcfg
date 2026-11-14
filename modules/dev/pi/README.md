@@ -91,11 +91,11 @@ tokens and cost, current tool call) until the next prompt after it ends, and
 ## pi-stats
 
 `pi-stats [--since YYYY-MM-DD] [--project TEXT] [--out FILE]` rebuilds every model request from
-the session files and writes `/tmp/pi-stats.html`, styled with the system theme. Tabs:
+the session files and writes `/tmp/pi-stats.html`, styled with the system theme, as one page:
 
-- Overview: totals, the subagent share of all tokens, and tokens per day.
-- Session: one dropdown with an average per agent, then every session newest first, with the
-  subagent runs it started nested under it, then subagent runs whose parent is missing.
+- The overview: totals, the subagent share of all tokens, and tokens per day.
+- The sessions: one dropdown with an average per agent, then every session newest first, with
+  the subagent runs it started nested under it, then subagent runs whose parent is missing.
 
 Each session panel shows figures (including the startup's tokens, KiB, tools, context files, and
 skills), the context per request stacked by section, the startup's parts as one bar, and a parts
