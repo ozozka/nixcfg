@@ -4,9 +4,12 @@
  * session (`wpi --subagents`). The tool is model-only, so codemode scripts cannot call it.
  *
  * Every run is a background job: `start` returns its ID at once, at most MAX_CONCURRENCY run
- * at a time and the rest wait in a queue, and `wait` waits for them. Each ended run is
- * delivered once: to a `wait` watching it, otherwise as a steer message that starts a turn
- * when the parent is idle. In print mode the parent waits for its runs before it settles.
+ * at a time and the rest wait in a queue, and `wait` waits for them. `send` steers a running
+ * child or continues one that ended its turn, in the same session; `stop` aborts children, as
+ * does `/subagents stop [id]`. A child reports by ending its turn, asking questions the same
+ * way, and can send a note while it keeps working with NOTE_TOOL, which only children get.
+ * Each report or note is delivered once: to a `wait` watching that child (a note always ends
+ * the wait), otherwise as a steer message that starts a turn when the parent is idle. In print mode the parent waits for its runs before it settles.
  * Runs are aborted when the session shuts down (quit, /new, /resume, /reload).
  *
  * A child gets its task as a prompt on stdin, its events are read from stdout, and closing
@@ -68,7 +71,19 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const MESSAGE_TYPE = "subagent";
+// The child's tool for notes to the parent; registered inactive, turned on for children.
+const NOTE_TOOL = "send_message";
+// Appended to every child's system prompt, after its agent prompt.
+const CHILD_RULES = [
+  "You are a subagent: your final message goes to the parent agent that gave you the task.",
+  "To ask the parent something, end your turn with the question; its reply continues your session.",
+  `Use ${NOTE_TOOL} only for a decision you made on your own that the parent might want to override, for example using a different function than the task names, then keep working; the parent may answer with a message. Never send progress updates.`,
+].join(" ");
+const parentMessage = (text: string) => `Message from the parent: ${text}`;
 const WIDGET = "subagents";
+// IDs may be written with a leading #.
+const ID_PREFIX = /^#/;
+const WHITESPACE = /\s+/;
 // Characters of a task shown in the widget.
 const TASK_PREVIEW = 40;
 // The end of a child's stderr kept for error reports.
@@ -301,21 +316,36 @@ function piArgs(agent: Agent, defaults: DispatchDefaults, sessionId: string): st
     agent.thinkingLevel ?? (agent.model ? undefined : defaults.thinkingLevel);
   if (model) args.push("--model", model);
   if (thinkingLevel) args.push("--thinking", thinkingLevel);
-  if (agent.tools) args.push("--tools", agent.tools.join(","));
-  args.push("--append-system-prompt", agent.prompt);
+  args.push("--tools", agent.tools ? [...agent.tools, NOTE_TOOL].join(",") : `+${NOTE_TOOL}`);
+  args.push("--append-system-prompt", `${agent.prompt}\n\n${CHILD_RULES}`);
   return args;
 }
 
-// Runs one child to the end of its turn, filling in its result; onProgress follows each message.
+interface RunHooks {
+  prompt: string;
+  signal: AbortSignal;
+  // After each assistant message.
+  onProgress: () => void;
+  // The child's command channel; it returns false once the child no longer takes commands.
+  onStart: (send: (command: object) => boolean) => void;
+  onNote: (text: string) => void;
+}
+
+// Runs one turn of a child, the first or a continuation of its session, filling in its result.
 async function runAgent(
   cwd: string,
   defaults: DispatchDefaults,
   agent: Agent,
   result: SingleResult,
-  signal: AbortSignal,
-  onProgress: () => void,
+  hooks: RunHooks,
 ) {
   result.model = agent.model ?? defaults.model;
+  result.exitCode = -1;
+  result.limit = undefined;
+  result.stopReason = undefined;
+  result.errorMessage = undefined;
+  // Budgets count this run's turns only.
+  let turns = 0;
   let aborted = false;
   result.exitCode = await new Promise<number>((resolve) => {
     // The same Pi as the parent: its script under the current Node runtime.
@@ -327,8 +357,11 @@ async function runAgent(
     });
     // RPC commands, one JSON object per line.
     const send = (command: object) => {
-      if (proc.stdin.writable) proc.stdin.write(`${JSON.stringify(command)}\n`);
+      if (!proc.stdin.writable) return false;
+      proc.stdin.write(`${JSON.stringify(command)}\n`);
+      return true;
     };
+    hooks.onStart(send);
     // The child shuts down once it is idle.
     const close = () => proc.stdin.end();
     // The child may exit before a write; its exit code reports the failure.
@@ -375,6 +408,11 @@ async function runAgent(
       const msg = event.message;
       if (event.type !== "message_end" || msg?.role !== "assistant") return;
       addMessage(result, msg);
+      for (const part of msg.content) {
+        if (part.type === "toolCall" && part.name === NOTE_TOOL)
+          hooks.onNote(String(part.arguments.text ?? ""));
+      }
+      turns++;
       result.usage.turns++;
       const usage = msg.usage;
       if (usage) {
@@ -385,9 +423,9 @@ async function runAgent(
       if (!result.model && msg.model) result.model = msg.model;
       if (msg.stopReason) result.stopReason = msg.stopReason;
       if (msg.errorMessage) result.errorMessage = msg.errorMessage;
-      if (result.usage.turns >= TURN_LIMIT + TURN_GRACE) overLimit("turn");
-      else if (result.usage.turns >= TURN_LIMIT) reachLimit("turn");
-      onProgress();
+      if (turns >= TURN_LIMIT + TURN_GRACE) overLimit("turn");
+      else if (turns >= TURN_LIMIT) reachLimit("turn");
+      hooks.onProgress();
     };
 
     // Splits on LF only, as the RPC framing requires.
@@ -407,7 +445,7 @@ async function runAgent(
     });
     proc.on("error", () => resolve(1));
 
-    send({ type: "prompt", message: `Task: ${result.task}` });
+    send({ type: "prompt", message: hooks.prompt });
 
     const kill = () => {
       aborted = true;
@@ -417,8 +455,8 @@ async function runAgent(
         if (proc.exitCode === null) proc.kill("SIGKILL");
       }, KILL_DELAY_MS).unref();
     };
-    if (signal.aborted) kill();
-    else signal.addEventListener("abort", kill, { once: true });
+    if (hooks.signal.aborted) kill();
+    else hooks.signal.addEventListener("abort", kill, { once: true });
   });
   if (aborted && !result.limit) result.stopReason = "aborted";
 }
@@ -433,10 +471,17 @@ interface Job {
   started: boolean;
   startedAt?: number;
   endedAt?: number;
+  // The result's turn count when the current run started; budgets count from here.
+  turnsAtStart: number;
   // Ended jobs leave the widget at the next user prompt.
   hidden: boolean;
+  // The prompt of the next run: the task, then the parent's messages.
+  prompt: string;
+  // Replaced for each run.
   controller: AbortController;
-  // Starts the child; set when the job is created.
+  // The running child's command channel.
+  send?: (command: object) => boolean;
+  // Starts a run of the child; set when the job is created.
   launch: () => Promise<void>;
 }
 
@@ -458,20 +503,30 @@ type JobView = SingleResult & { id: string; state: JobState };
 const view = (job: Job): JobView => ({ ...job.result, id: job.id, state: jobState(job) });
 
 interface SubagentDetails {
-  action: "start" | "wait" | "event";
+  action: "start" | "send" | "wait" | "stop" | "event";
   // `results` keeps the session IDs pi-stats reads.
   results: JobView[];
+  // The note of a note event.
+  note?: string;
 }
 
-const details = (action: SubagentDetails["action"], jobs: Job[]): SubagentDetails => ({
-  action,
-  results: jobs.map(view),
-});
+const details = (
+  action: SubagentDetails["action"],
+  jobs: Job[],
+  note?: string,
+): SubagentDetails => ({ action, results: jobs.map(view), note });
 
-// What the parent reads when a run ends.
-function eventText(job: Job): string {
+// A child's report (the end of its turn) or note, delivered once to the parent.
+interface JobEvent {
+  job: Job;
+  note?: string;
+}
+
+// What the parent reads for an event.
+function eventText({ job, note }: JobEvent): string {
   const r = job.result;
   const label = `[subagent #${job.id} ${r.agent}]`;
+  if (note !== undefined) return `${label} note, still running:\n\n${note}`;
   const report = truncateOutput(r.output || "(no output)");
   switch (jobState(job)) {
     case "budget":
@@ -494,25 +549,27 @@ function jobLine(job: Job): string {
 
 type Until = "any" | "all";
 
-// A pending `wait`: the jobs it watches and the ended runs delivered to it.
+// A pending `wait`: the jobs it watches and the events delivered to it.
 interface Waiter {
   ids: Set<string>;
   until: Until;
-  ended: Job[];
+  events: JobEvent[];
   done: () => void;
   progress?: () => void;
 }
 
 const SubagentParams = Type.Object({
-  action: StringEnum(["start", "wait"] as const, {
-    description: "start: run a task in a new subagent; wait: wait for running subagents",
-  }),
+  action: StringEnum(["start", "send", "wait", "stop"] as const),
   agent: Type.Optional(Type.String({ description: "start: the agent to run" })),
   task: Type.Optional(
     Type.String({ description: "start: the task, the only context the subagent gets" }),
   ),
+  to: Type.Optional(Type.String({ description: "send: the subagent ID" })),
+  text: Type.Optional(Type.String({ description: "send: the message" })),
   ids: Type.Optional(
-    Type.Array(Type.String(), { description: "wait: subagent IDs (default: all running)" }),
+    Type.Array(Type.String(), {
+      description: "wait, stop: subagent IDs (default: all running)",
+    }),
   ),
   until: Type.Optional(
     StringEnum(["any", "all"] as const, {
@@ -570,6 +627,7 @@ export default function (pi: ExtensionAPI) {
       if (job.started) continue;
       job.started = true;
       job.startedAt = Date.now();
+      job.turnsAtStart = job.result.usage.turns;
       job.launch().then(() => finish(job));
     }
     updateWidget();
@@ -579,67 +637,59 @@ export default function (pi: ExtensionAPI) {
     job.endedAt = Date.now();
     pump();
     for (const waiter of waiters) waiter.progress?.();
-    if (!shutDown) deliver(job);
+    if (!shutDown) deliver({ job });
   }
 
-  // An ended run goes to the wait watching it, otherwise to the parent as a steer message.
-  function deliver(job: Job) {
-    const waiter = [...waiters].find((w) => w.ids.has(job.id));
-    if (waiter) {
-      waiter.ended.push(job);
-      check(waiter);
-      return;
-    }
+  function sendEvent(event: JobEvent, deliverAs: "steer" | "nextTurn") {
     pi.sendMessage(
       {
         customType: MESSAGE_TYPE,
-        content: eventText(job),
+        content: eventText(event),
         display: true,
-        details: details("event", [job]),
+        details: details("event", [event.job], event.note),
       },
-      { deliverAs: "steer", triggerTurn: true },
+      { deliverAs, triggerTurn: deliverAs === "steer" },
     );
   }
 
+  // An event goes to the wait watching its child, otherwise to the parent as a steer message.
+  function deliver(event: JobEvent) {
+    const waiter = [...waiters].find((w) => w.ids.has(event.job.id));
+    if (!waiter) return sendEvent(event, "steer");
+    waiter.events.push(event);
+    check(waiter);
+  }
+
+  // A note ends any wait, so the parent can still correct the child.
   function check(waiter: Waiter) {
     const watched = [...waiter.ids].flatMap((id) => jobs.get(id) ?? []);
     const allEnded = watched.every((job) => !isActive(job));
-    if (allEnded || (waiter.until === "any" && waiter.ended.length > 0)) waiter.done();
+    const noted = waiter.events.some((event) => event.note !== undefined);
+    const any = waiter.until === "any" && waiter.events.length > 0;
+    if (allEnded || noted || any) waiter.done();
   }
 
-  // Waits for the given jobs; ended runs are returned instead of delivered as messages. On
-  // abort, the runs already delivered to it are queued for the parent's next turn.
+  // Waits for events of the given jobs, returned instead of delivered as messages. On abort,
+  // the events already delivered to it are queued for the parent's next turn.
   function waitFor(
     ids: string[],
     until: Until,
     signal?: AbortSignal,
     progress?: () => void,
-  ): Promise<Job[]> {
+  ): Promise<JobEvent[]> {
     return new Promise((resolve) => {
       const waiter: Waiter = {
         ids: new Set(ids),
         until,
-        ended: [],
+        events: [],
         done: () => end(false),
         progress,
       };
       const end = (aborted: boolean) => {
         waiters.delete(waiter);
         signal?.removeEventListener("abort", onAbort);
-        if (aborted) {
-          for (const job of waiter.ended) {
-            pi.sendMessage(
-              {
-                customType: MESSAGE_TYPE,
-                content: eventText(job),
-                display: true,
-                details: details("event", [job]),
-              },
-              { deliverAs: "nextTurn" },
-            );
-          }
-        }
-        resolve(aborted ? [] : waiter.ended);
+        if (aborted) for (const event of waiter.events) sendEvent(event, "nextTurn");
+        resolve(aborted ? [] : waiter.events);
       };
       const onAbort = () => end(true);
       waiters.add(waiter);
@@ -648,6 +698,47 @@ export default function (pi: ExtensionAPI) {
       else check(waiter);
     });
   }
+
+  // Aborts the given active jobs; a queued one ends without starting.
+  function stop(targets: Job[]): Job[] {
+    const active = targets.filter(isActive);
+    for (const job of active) {
+      if (job.started) {
+        job.controller.abort();
+        continue;
+      }
+      job.started = true;
+      job.result.stopReason = "aborted";
+      job.result.exitCode = 0;
+      finish(job);
+    }
+    return active;
+  }
+
+  // `/subagents stop [id ...]`: the notification for the user.
+  function stopCommand(args: string): [string, "info"] {
+    const [verb, ...ids] = args.trim().split(WHITESPACE);
+    if (verb !== "stop") return ["Usage: /subagents stop [id ...]", "info"];
+    const targets = ids.length
+      ? ids.flatMap((id) => jobs.get(id.replace(ID_PREFIX, "")) ?? [])
+      : jobList();
+    const stopped = stop(targets);
+    if (stopped.length === 0) return ["No subagent to stop is running", "info"];
+    return [`Stopping ${stopped.map((job) => `#${job.id}`).join(", ")}`, "info"];
+  }
+
+  // Children only: notes to the parent, turned on by the parent's tool selection.
+  pi.registerTool({
+    name: NOTE_TOOL,
+    label: "Send message",
+    exposure: "model-only",
+    defaultActive: false,
+    description:
+      "Send a note to the parent agent and keep working. Only for a decision you made on your own that the parent might want to override; never for progress updates or questions.",
+    parameters: Type.Object({ text: Type.String({ description: "The note" }) }),
+    execute: async () =>
+      reply("Sent to the parent. Keep working; it may answer with a message.", {}),
+  });
 
   // The flag's value is known only once the session starts; each session gets a new instance.
   pi.on("session_start", (_event, ctx) => {
@@ -677,17 +768,17 @@ export default function (pi: ExtensionAPI) {
     if (ctx.mode === "tui" || ctx.mode === "rpc") return;
     const active = jobList().filter(isActive);
     if (active.length === 0) return;
-    const ended = await waitFor(
+    const events = await waitFor(
       active.map((job) => job.id),
       "all",
     );
     return {
       entries: [
         ...event.entries,
-        ...ended.map((job) => ({
+        ...events.map((jobEvent) => ({
           type: "custom_message" as const,
           customType: MESSAGE_TYPE,
-          content: eventText(job),
+          content: eventText(jobEvent),
           display: true,
         })),
       ],
@@ -703,8 +794,10 @@ export default function (pi: ExtensionAPI) {
       description: [
         "Delegate tasks to subagents: separate agents with isolated contexts that see only their task, not this conversation. Every subagent runs in the background.",
         "- start { agent, task }: starts one subagent and returns its ID at once. For parallel work, call start several times in one turn.",
-        '- wait { ids?, until? }: waits for subagents (default: all running) and returns their reports; until "any" (default) returns at the first ended run, "all" when every one has ended.',
-        "A run that ends while you are not waiting arrives as a message.",
+        "- send { to, text }: messages a subagent. A running one sees it before its next model call; one that ended its turn continues its session with it.",
+        '- wait { ids?, until? }: waits for subagents (default: all running) and returns their reports; until "any" (default) returns at the first ended run, "all" when every one has ended. A note from a subagent always ends the wait.',
+        "- stop { ids? }: stops subagents (default: all running); each returns its last report.",
+        "A subagent ends its turn with a report or a question, and may send a note while it keeps working. What arrives while you are not waiting comes as a message.",
         `Agents:\n${[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`).join("\n")}`,
       ].join("\n"),
       parameters: SubagentParams,
@@ -725,13 +818,27 @@ export default function (pi: ExtensionAPI) {
             id,
             result: newResult(params.agent, params.task),
             started: false,
+            turnsAtStart: 0,
             hidden: false,
+            prompt: `Task: ${params.task}`,
             controller: new AbortController(),
-            launch: () =>
-              runAgent(ctx.cwd, defaults, agent, job.result, job.controller.signal, () => {
-                updateWidget();
-                for (const waiter of waiters) if (waiter.ids.has(id)) waiter.progress?.();
-              }),
+            launch: () => {
+              job.controller = new AbortController();
+              return runAgent(ctx.cwd, defaults, agent, job.result, {
+                prompt: job.prompt,
+                signal: job.controller.signal,
+                onProgress: () => {
+                  updateWidget();
+                  for (const waiter of waiters) if (waiter.ids.has(id)) waiter.progress?.();
+                },
+                onStart: (send) => {
+                  job.send = send;
+                },
+                onNote: (note) => deliver({ job, note }),
+              }).finally(() => {
+                job.send = undefined;
+              });
+            },
           };
           jobs.set(id, job);
           pump();
@@ -740,13 +847,55 @@ export default function (pi: ExtensionAPI) {
           return reply(text, details("start", [job]));
         }
 
-        const unknown = (params.ids ?? []).filter((id) => !jobs.has(id));
+        const ids = params.action === "send" ? [params.to ?? ""] : (params.ids ?? []);
+        const unknown = ids
+          .map((id) => id.replace(ID_PREFIX, ""))
+          .filter((id) => !jobs.has(id));
         if (unknown.length > 0) {
           const text = `Unknown subagent IDs: ${unknown.join(", ")}. Known: ${[...jobs.keys()].join(", ") || "none"}`;
-          return reply(text, details("wait", []), true);
+          return reply(text, details(params.action, []), true);
         }
+
+        if (params.action === "send") {
+          const job = jobs.get((params.to ?? "").replace(ID_PREFIX, "")) as Job;
+          if (!params.text) return reply("send needs a text.", details("send", []), true);
+          const state = jobState(job);
+          if (state === "queued") {
+            const text = `#${job.id} has not started yet; send once it runs.`;
+            return reply(text, details("send", [job]), true);
+          }
+          if (state === "running") {
+            if (!job.send?.({ type: "steer", message: parentMessage(params.text) })) {
+              const text = `#${job.id} is just ending its turn; send again to continue it.`;
+              return reply(text, details("send", [job]), true);
+            }
+            const text = `Sent to #${job.id}; it sees the message before its next model call.`;
+            return reply(text, details("send", [job]));
+          }
+          job.prompt = parentMessage(params.text);
+          job.started = false;
+          job.hidden = false;
+          job.startedAt = undefined;
+          job.endedAt = undefined;
+          pump();
+          const text = `Continued #${job.id} with the message; its report arrives when it ends its turn.`;
+          return reply(text, details("send", [job]));
+        }
+
+        if (params.action === "stop") {
+          const targets = params.ids?.length
+            ? params.ids.flatMap((id) => jobs.get(id.replace(ID_PREFIX, "")) ?? [])
+            : jobList();
+          const stopped = stop(targets);
+          const text =
+            stopped.length > 0
+              ? `Stopping ${stopped.map((job) => `#${job.id}`).join(", ")}; each returns its last report.`
+              : "No subagent to stop is running.";
+          return reply(text, details("stop", stopped));
+        }
+
         const watched = params.ids?.length
-          ? params.ids.flatMap((id) => jobs.get(id) ?? [])
+          ? params.ids.flatMap((id) => jobs.get(id.replace(ID_PREFIX, "")) ?? [])
           : jobList().filter(isActive);
         if (!watched.some(isActive)) {
           const states = watched.map(jobLine).join("\n");
@@ -756,25 +905,36 @@ export default function (pi: ExtensionAPI) {
         const progress = () =>
           onUpdate?.(reply(watched.map(jobLine).join("\n"), details("wait", watched)));
         progress();
-        const ended = await waitFor(
+        const events = await waitFor(
           watched.map((job) => job.id),
           params.until ?? "any",
           signal,
           progress,
         );
         const stillActive = watched.filter(isActive);
-        const parts = ended.map(eventText);
+        const parts = events.map(eventText);
         if (stillActive.length > 0)
           parts.push(`Still running: ${stillActive.map(jobLine).join("; ")}`);
-        return reply(parts.join("\n\n---\n\n"), details("wait", [...ended, ...stillActive]));
+        const shown = [...new Set([...events.map((event) => event.job), ...stillActive])];
+        const notes = events.flatMap((event) => event.note ?? []);
+        return reply(
+          parts.join("\n\n---\n\n"),
+          details("wait", shown, notes.length > 0 ? notes.join("\n") : undefined),
+        );
       },
 
       renderCall(args, theme, _context) {
         const title = theme.fg("toolTitle", theme.bold(`subagent ${args.action ?? ""} `));
-        if (args.action === "wait") {
+        if (args.action === "wait" || args.action === "stop") {
           const ids = args.ids?.length ? args.ids.map((id) => `#${id}`).join(" ") : "all";
+          const until = args.action === "wait" ? ` (${args.until ?? "any"})` : "";
+          return new Text(title + theme.fg("accent", ids) + theme.fg("dim", until), 0, 0);
+        }
+        if (args.action === "send") {
+          const text = (args.text ?? "...").trim();
+          const shown = text.length > 60 ? `${text.slice(0, 60)}...` : text;
           return new Text(
-            title + theme.fg("accent", ids) + theme.fg("dim", ` (${args.until ?? "any"})`),
+            `${title}${theme.fg("accent", `#${args.to ?? "?"}`)}\n  ${theme.fg("dim", shown)}`,
             0,
             0,
           );
@@ -803,6 +963,11 @@ export default function (pi: ExtensionAPI) {
       if (!data) return undefined;
       return renderJobs(data, expanded, theme);
     });
+
+    pi.registerCommand("subagents", {
+      description: "Stop background subagents: /subagents stop [id ...]",
+      handler: async (args, ctx) => ctx.ui.notify(...stopCommand(args)),
+    });
   }
 }
 
@@ -830,7 +995,7 @@ function widgetLine(job: Job, theme: Theme): string {
   ];
   if (job.startedAt) {
     parts.push(
-      theme.fg("muted", `${r.usage.turns}/${TURN_LIMIT}`),
+      theme.fg("muted", `${r.usage.turns - job.turnsAtStart}/${TURN_LIMIT}`),
       theme.fg("muted", formatDuration((job.endedAt ?? Date.now()) - job.startedAt)),
       theme.fg(
         "dim",
@@ -866,7 +1031,9 @@ function renderJobs(data: SubagentDetails, expanded: boolean, theme: Theme) {
     if (index > 0) container.addChild(new Spacer(1));
     container.addChild(new Text(header(r), 0, 0));
     if (r.state === "failed") container.addChild(new Text(fg("error", errorText(r)), 0, 0));
-    if (data.action === "start" && !expanded) continue;
+    if (data.note !== undefined && data.action === "event")
+      container.addChild(new Text(fg("accent", `Note: ${data.note}`), 0, 0));
+    if (["start", "send", "stop"].includes(data.action) && !expanded) continue;
     if (expanded) container.addChild(new Text(fg("muted", "Task: ") + fg("dim", r.task), 0, 0));
     const items = expanded ? r.items : r.items.slice(-(data.results.length > 1 ? 3 : 5));
     const skipped = r.itemCount - items.length;
