@@ -65,6 +65,22 @@ GROUPS = {
     "call": "tool calls",
     "result": "tool results",
 }
+# Sections of the parts table, top to bottom, with the subsections of startup; the chart
+# stacks them the other way round, so the system prompt is at the bottom of both.
+SECTIONS = ["other", "tool results", "tool calls", "conversation", "startup"]
+STARTUP_SECTIONS = ["tool definitions", "context files", "system prompt"]
+# The conversation's own parts, in table order; its other parts are listed under other.
+CONVERSATION_PARTS = ["conversation:thinking", "conversation:assistant", "conversation:user"]
+
+
+def section_of(part):
+    # The parts table section and, for startup, the subsection of a part.
+    group = part.split(":", 1)[0]
+    if group in ("system", "context", "tool"):
+        return "startup", GROUPS[group]
+    if group in ("call", "result"):
+        return GROUPS[group], None
+    return ("conversation" if part in CONVERSATION_PARTS else "other"), None
 
 
 def read_session(path):
@@ -568,6 +584,25 @@ TICK_COUNT = 8
 
 # Tabs follow the URL hash; a select shows the panel named by its value.
 SCRIPT = """
+// Nested table rows: a row with data-id opens its direct children and closes all its
+// descendants.
+const toggle = row => {
+  const open = !row.classList.contains("open");
+  row.classList.toggle("open", open);
+  const close = id => row.parentElement.querySelectorAll(`tr[data-parent="${id}"]`).forEach(child => {
+    child.hidden = true;
+    child.classList.remove("open");
+    if (child.dataset.id) close(child.dataset.id);
+  });
+  if (open) {
+    row.parentElement.querySelectorAll(`tr[data-parent="${row.dataset.id}"]`).forEach(child => {
+      child.hidden = false;
+    });
+  } else close(row.dataset.id);
+};
+document.querySelectorAll("table.nested tr[data-id]").forEach(row => {
+  row.addEventListener("click", () => toggle(row));
+});
 const show = () => {
   const id = location.hash.slice(1) || document.querySelector("main > section").id;
   document.querySelectorAll("main > section").forEach(tab => { tab.hidden = tab.id !== id; });
@@ -644,11 +679,14 @@ def kpis(items):
 
 
 def table(headers, rows, cls=""):
-    # rows: (cells, row class); cells are escaped unless wrapped in Markup.
+    # rows: (cells, row class) or (cells, row class, row attributes); cells are escaped
+    # unless wrapped in Markup.
     head = "".join(f"<th>{esc(h)}</th>" for h in headers)
     body = "".join(
-        f'<tr class="{row_class}">{"".join(f"<td>{cell_html(c)}</td>" for c in cells)}</tr>'
-        for cells, row_class in rows
+        f'<tr class="{row[1]}"{row[2] if len(row) > 2 else ""}>'
+        + "".join(f"<td>{cell_html(c)}</td>" for c in row[0])
+        + "</tr>"
+        for row in rows
     )
     return f'<table class="{cls}"><tr>{head}</tr>{body}</table>'
 
@@ -692,6 +730,12 @@ th:first-child, td:first-child, table.text :is(td, th):last-child {{ text-align:
 table.text td:last-child {{ white-space:normal; color:var(--m);
   font-size:{px(size["m"])}px; }}
 tr.group td {{ color:var(--m); }}
+table.nested tr[data-id] {{ cursor:pointer; }}
+table.nested tr[data-id] td:first-child::before {{ content:"▸ "; color:var(--m); }}
+table.nested tr.open td:first-child::before {{ content:"▾ "; }}
+table.nested tr.level-1 td:first-child, table.nested tr.part-1 td:first-child {{
+  padding-left:{dim["m"]}px; }}
+table.nested tr.part-2 td:first-child {{ padding-left:{dim["m"] * 2}px; }}
 tr.part td:first-child {{ padding-left:{dim["m"]}px; }}
 tr.flag td {{ color:var(--s); }}
 .square {{ margin-right:{dim["t"] * 2}px; }}
@@ -1085,25 +1129,21 @@ def startup_tab(sessions, theme):
     return panels_tab(sessions, "startup", startup_average, startup_single, theme)
 
 
-def shares(parts):
-    total = sum(parts.values()) or 1
-    return {name: tokens / total for name, tokens in parts.items()}
-
-
 def mean_shares(calls):
     # Each call's context shares, averaged with equal weight per call.
     totals = defaultdict(float)
     for call in calls:
-        for name, share in shares(call["parts"]).items():
-            totals[name] += share / len(calls)
+        total = sum(call["parts"].values()) or 1
+        for name, tokens in call["parts"].items():
+            totals[name] += tokens / total / len(calls)
     return totals
 
 
-def mean_sizes(calls):
-    # Each part's bytes, averaged over the calls.
+def mean_parts(calls, key):
+    # Each part's value in calls[key], averaged over the calls (0 where it is missing).
     totals = defaultdict(float)
     for call in calls:
-        for name, value in call["sizes"].items():
+        for name, value in call[key].items():
             totals[name] += value / len(calls)
     return totals
 
@@ -1112,26 +1152,78 @@ def ratio(consumption, context):
     return f"{consumption / context:.1f}x" if context else "-"
 
 
-def session_table(theme, context, consumption, sizes, context_label):
-    # Every part, grouped by GROUPS: context share, consumption share, their ratio, and size.
+TABLE_IDS = iter(range(1, 1_000_000))
+
+
+def session_table(context, consumed, sizes, sessions=None, context_shares=None):
+    """Every part, nested in SECTIONS (startup in STARTUP_SECTIONS), collapsed to the
+    section rows until opened.
+
+    context: part -> tokens in the context; consumed: part -> tokens over the session;
+    sizes: part -> bytes; sessions, for averages: each session's set of parts, counted for
+    every row; context_shares, for averages: part -> its context share averaged over the
+    requests, so each request weighs the same, instead of its share of the mean tokens.
+    """
+    ctx_total = sum(context.values()) or 1
+    if context_shares is None:
+        context_shares = {name: tokens / ctx_total for name, tokens in context.items()}
+    cons_total = sum(consumed.values()) or 1
+    names = set(context) | set(consumed)
+
+    def cells(label, members):
+        ctx = sum(context.get(n, 0) for n in members)
+        share = sum(context_shares.get(n, 0) for n in members)
+        cons = sum(consumed.get(n, 0) for n in members)
+        row = [
+            label,
+            num(ctx),
+            pct(share),
+            num(cons),
+            pct(cons / cons_total),
+            ratio(cons / cons_total, share),
+            kib(sum(sizes.get(n, 0) for n in members)),
+        ]
+        if sessions is not None:
+            row.append(sum(1 for present in sessions if any(n in present for n in members)))
+        return row
+
+    def order(members, fixed=None):
+        if fixed:
+            return [n for n in fixed if n in members]
+        return sorted(members, key=lambda n: -consumed.get(n, 0))
+
     rows = []
-    for key, label in GROUPS.items():
-        names = sorted(
-            {n for n in (*context, *consumption) if n.split(":")[0] == key},
-            key=lambda n: -consumption.get(n, 0),
-        )
-        if not names:
-            continue
-        ctx = sum(context.get(n, 0) for n in names)
-        cons = sum(consumption.get(n, 0) for n in names)
-        name = Markup(square(f"{key}:", theme) + esc(label))
-        group_size = kib(sum(sizes.get(n, 0) for n in names))
-        rows.append(([name, pct(ctx), pct(cons), ratio(cons, ctx), group_size], "group"))
-        for n in names:
-            ctx, cons = context.get(n, 0), consumption.get(n, 0)
-            cells = [n.split(":", 1)[1], pct(ctx), pct(cons), ratio(cons, ctx)]
-            rows.append(([*cells, kib(sizes.get(n, 0))], "part"))
-    return table(["Part", context_label, "Consumption", "Ratio", "KiB"], rows)
+
+    def nest(label, members, parent, depth, fixed=None, children=None):
+        # A row that opens to its parts, or to child rows given as (label, members, fixed).
+        if not members:
+            return
+        node = f"p{next(TABLE_IDS)}"
+        attrs = f' data-id="{node}"' + (f' data-parent="{parent}" hidden' if parent else "")
+        rows.append((cells(Markup(f"<b>{esc(label)}</b>"), members), f"level-{depth}", attrs))
+        if children:
+            for child_label, child_members, child_fixed in children:
+                nest(child_label, child_members, node, depth + 1, child_fixed)
+            return
+        for name in order(members, fixed):
+            part = f' data-parent="{node}" hidden'
+            rows.append((cells(name.split(":", 1)[1], [name]), f"part-{depth + 1}", part))
+
+    by_section = defaultdict(list)
+    for name in names:
+        by_section[section_of(name)].append(name)
+    for section in SECTIONS:
+        if section == "startup":
+            children = [(sub, by_section[("startup", sub)], None) for sub in STARTUP_SECTIONS]
+            members = [n for sub in STARTUP_SECTIONS for n in by_section[("startup", sub)]]
+            nest(section, members, None, 0, children=children)
+        else:
+            fixed = CONVERSATION_PARTS if section == "conversation" else None
+            nest(section, by_section[(section, None)], None, 0, fixed)
+    headers = ["Part", "Context", "Context %", "Consumed", "Consumed %", "Ratio", "KiB"]
+    if sessions is not None:
+        headers.append(f"Sessions/{len(sessions)}")
+    return table(headers, rows, "nested")
 
 
 def session_kpis(items, average):
@@ -1416,7 +1508,11 @@ def session_average(items, theme):
         session_kpis(items, average=True)
         + history
         + session_table(
-            theme, mean_shares(calls), shares(consumed), mean_sizes(calls), "Context"
+            mean_parts(calls, "parts"),
+            {name: tokens / len(items) for name, tokens in consumed.items()},
+            mean_parts(calls, "sizes"),
+            [set(s["consumed"]) for s in items],
+            mean_shares(calls),
         )
         + tools_table(items, average=True)
         + time_section(theme, items)
@@ -1440,13 +1536,7 @@ def session_single(session, theme):
     return (
         session_kpis([session], average=False)
         + tokens
-        + session_table(
-            theme,
-            shares(peak["parts"]),
-            shares(session["consumed"]),
-            peak["sizes"],
-            "Peak context",
-        )
+        + session_table(peak["parts"], session["consumed"], peak["sizes"])
         + tools_table([session], average=False)
         + time_section(theme, [session])
         + compactions_summary([session])
