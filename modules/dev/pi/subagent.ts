@@ -1,6 +1,7 @@
 /**
- * Subagent tool: delegates tasks to agents, each in its own `pi` process with an isolated
- * context window. Modes: single ({ agent, task }) and parallel ({ tasks }). Off by default:
+ * Subagent tool: delegates tasks to agents, each in its own `pi` process in RPC mode with an
+ * isolated context window: the task is sent as a prompt on stdin, the child's events are read
+ * from stdout, and closing stdin ends the child once its run settles. Modes: single ({ agent, task }) and parallel ({ tasks }). Off by default:
  * the --subagents flag registers the tool for the session (`wpi --subagents`).
  *
  * Agents are Markdown files in agents/ under Pi's agent directory, loaded at startup: the
@@ -11,7 +12,8 @@
  * Children never get the flag, so delegation stays one level deep, and run without
  * CHILD_EXCLUDED_TOOLS, since they have no user to ask. The tool is model-only: codemode scripts
  * cannot call it. Each child keeps its session in subagent-sessions/ under Pi's agent directory;
- * the result details record its session ID, linking it to the parent's tool call. Children
+ * the result details record its session ID, linking it to the parent's tool call, with only
+ * the final output and the last COLLAPSED_ITEM_COUNT items of the transcript. Children
  * inherit the parent's FORWARDED_FLAGS, so a `wpi` child loads the project docs too.
  * While children run, their count is shown in the status line (status.ts). Vendored from the
  * Pi subagent example.
@@ -21,7 +23,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   formatReadLineRange,
@@ -56,6 +58,12 @@ const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
+// The end of a child's stderr kept for error reports.
+const STDERR_CAP = 4096;
+// Lines of an assistant text item kept for display.
+const TEXT_ITEM_LINES = 3;
+// After an abort, a child still running is killed after this delay.
+const KILL_DELAY_MS = 5000;
 
 interface Agent {
   description: string;
@@ -106,7 +114,11 @@ interface SingleResult {
   sessionId: string;
   // -1 while running.
   exitCode: number;
-  messages: Message[];
+  // The latest assistant text: the report once the run ends.
+  output: string;
+  // The last COLLAPSED_ITEM_COUNT display items, out of itemCount.
+  items: DisplayItem[];
+  itemCount: number;
   stderr: string;
   usage: UsageStats;
   model?: string;
@@ -153,7 +165,9 @@ const newResult = (agent: string, task: string): SingleResult => ({
   task,
   sessionId: randomUUID(),
   exitCode: -1,
-  messages: [],
+  output: "",
+  items: [],
+  itemCount: 0,
   stderr: "",
   usage: emptyUsage(),
 });
@@ -222,13 +236,20 @@ function formatToolCall(toolName: string, args: Record<string, unknown>, theme: 
   }
 }
 
-// The text of the latest assistant message that has any.
-function getFinalOutput(messages: Message[]): string {
-  for (const message of [...messages].reverse()) {
-    const text = message.role === "assistant" ? assistantText(message) : "";
-    if (text) return text;
+// Records an assistant message: its text as the output, its parts as display items.
+function addMessage(result: SingleResult, message: AssistantMessage) {
+  const text = assistantText(message);
+  if (text) result.output = text;
+  for (const part of message.content) {
+    if (part.type === "text") {
+      const shown = part.text.split("\n").slice(0, TEXT_ITEM_LINES).join("\n");
+      result.items.push({ type: "text", text: shown });
+    } else if (part.type === "toolCall") {
+      result.items.push({ type: "toolCall", name: part.name, args: part.arguments });
+    } else continue;
+    result.itemCount++;
   }
-  return "";
+  result.items = result.items.slice(-COLLAPSED_ITEM_COUNT);
 }
 
 function isFailedResult(result: SingleResult): boolean {
@@ -238,7 +259,7 @@ function isFailedResult(result: SingleResult): boolean {
 }
 
 function getResultOutput(result: SingleResult): string {
-  const output = getFinalOutput(result.messages);
+  const output = result.output;
   if (isFailedResult(result))
     return result.errorMessage || result.stderr || output || "(no output)";
   return output || "(no output)";
@@ -260,19 +281,6 @@ function truncateOutput(output: string): string {
   return `${truncated}\n\n[Output truncated: ${omitted} bytes omitted. Full output preserved in tool details.]`;
 }
 
-function getDisplayItems(messages: Message[]): DisplayItem[] {
-  return messages.flatMap((message) =>
-    message.role !== "assistant"
-      ? []
-      : message.content.flatMap((part): DisplayItem[] => {
-          if (part.type === "text") return [{ type: "text", text: part.text }];
-          if (part.type === "toolCall")
-            return [{ type: "toolCall", name: part.name, args: part.arguments }];
-          return [];
-        }),
-  );
-}
-
 async function mapWithConcurrencyLimit<TIn, TOut>(
   items: TIn[],
   concurrency: number,
@@ -292,16 +300,10 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
   return results;
 }
 
-function piArgs(
-  agent: Agent,
-  defaults: DispatchDefaults,
-  task: string,
-  sessionId: string,
-): string[] {
+function piArgs(agent: Agent, defaults: DispatchDefaults, sessionId: string): string[] {
   const args = [
     "--mode",
-    "json",
-    "-p",
+    "rpc",
     "--session-dir",
     SESSION_DIR,
     "--session-id",
@@ -316,7 +318,7 @@ function piArgs(
   if (model) args.push("--model", model);
   if (thinkingLevel) args.push("--thinking", thinkingLevel);
   if (agent.tools) args.push("--tools", agent.tools.join(","));
-  args.push("--append-system-prompt", agent.prompt, `Task: ${task}`);
+  args.push("--append-system-prompt", agent.prompt);
   return args;
 }
 
@@ -339,41 +341,60 @@ async function runAgent(
   let aborted = false;
   result.exitCode = await new Promise<number>((resolve) => {
     // The same Pi as the parent: its script under the current Node runtime.
-    const args = [process.argv[1], ...piArgs(agent, defaults, run.task, result.sessionId)];
+    const args = [process.argv[1], ...piArgs(agent, defaults, result.sessionId)];
     const proc = spawn(process.execPath, args, {
       cwd,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
+    // RPC commands, one JSON object per line.
+    const send = (command: object) => {
+      if (proc.stdin.writable) proc.stdin.write(`${JSON.stringify(command)}\n`);
+    };
+    // The child shuts down once it is idle.
+    const close = () => proc.stdin.end();
+    // The child may exit before a write; its exit code reports the failure.
+    proc.stdin.on("error", () => undefined);
     let buffer = "";
 
-    // Collects finished messages and usage from the child's JSON event stream.
+    // Collects assistant messages and usage from the child's events, and closes the child
+    // when its run settles or the prompt is rejected.
     const processLine = (line: string) => {
       if (!line.trim()) return;
-      let event: { type?: string; message?: Message };
+      let event: {
+        type?: string;
+        message?: AssistantMessage;
+        success?: boolean;
+        error?: string;
+      };
       try {
         event = JSON.parse(line);
       } catch {
         return;
       }
-      const msg = event.message;
-      if (!msg || (event.type !== "message_end" && event.type !== "tool_result_end")) return;
-      result.messages.push(msg);
-      if (event.type === "message_end" && msg.role === "assistant") {
-        result.usage.turns++;
-        const usage = msg.usage;
-        if (usage) {
-          for (const key of TOKEN_KEYS) result.usage[key] += usage[key] || 0;
-          result.usage.cost += usage.cost?.total || 0;
-          result.usage.contextTokens = usage.totalTokens || 0;
-        }
-        if (!result.model && msg.model) result.model = msg.model;
-        if (msg.stopReason) result.stopReason = msg.stopReason;
-        if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+      if (event.type === "agent_settled") return close();
+      if (event.type === "response" && event.success === false) {
+        result.errorMessage = event.error;
+        result.stopReason = "error";
+        return close();
       }
+      const msg = event.message;
+      if (event.type !== "message_end" || msg?.role !== "assistant") return;
+      addMessage(result, msg);
+      result.usage.turns++;
+      const usage = msg.usage;
+      if (usage) {
+        for (const key of TOKEN_KEYS) result.usage[key] += usage[key] || 0;
+        result.usage.cost += usage.cost?.total || 0;
+        result.usage.contextTokens = usage.totalTokens || 0;
+      }
+      if (!result.model && msg.model) result.model = msg.model;
+      if (msg.stopReason) result.stopReason = msg.stopReason;
+      if (msg.errorMessage) result.errorMessage = msg.errorMessage;
       run.onProgress?.(result);
     };
 
+    // Splits on LF only, as the RPC framing requires.
     proc.stdout.on("data", (data) => {
       buffer += data.toString();
       const lines = buffer.split("\n");
@@ -381,7 +402,7 @@ async function runAgent(
       for (const line of lines) processLine(line);
     });
     proc.stderr.on("data", (data) => {
-      result.stderr += data.toString();
+      result.stderr = (result.stderr + data.toString()).slice(-STDERR_CAP);
     });
     proc.on("close", (code) => {
       if (buffer.trim()) processLine(buffer);
@@ -389,13 +410,16 @@ async function runAgent(
     });
     proc.on("error", () => resolve(1));
 
+    send({ type: "prompt", message: `Task: ${run.task}` });
+
     if (signal) {
       const kill = () => {
         aborted = true;
-        proc.kill("SIGTERM");
+        send({ type: "abort" });
+        close();
         setTimeout(() => {
-          if (!proc.killed) proc.kill("SIGKILL");
-        }, 5000);
+          if (proc.exitCode === null) proc.kill("SIGKILL");
+        }, KILL_DELAY_MS).unref();
       };
       if (signal.aborted) kill();
       else signal.addEventListener("abort", kill, { once: true });
@@ -477,8 +501,7 @@ export default function (pi: ExtensionAPI) {
         };
         const update = (mode: Mode, results: SingleResult[], text: string) =>
           onUpdate?.(reply(text, details(mode, results)));
-        const runningText = (current: SingleResult) =>
-          getFinalOutput(current.messages) || "(running...)";
+        const runningText = (current: SingleResult) => current.output || "(running...)";
 
         const modes = [params.tasks?.length, params.agent && params.task];
         if (modes.filter(Boolean).length !== 1) {
@@ -535,10 +558,7 @@ export default function (pi: ExtensionAPI) {
           const text = `Agent ${result.stopReason || "failed"}: ${getResultOutput(result)}`;
           return reply(text, details("single", [result]), true);
         }
-        return reply(
-          getFinalOutput(result.messages) || "(no output)",
-          details("single", [result]),
-        );
+        return reply(result.output || "(no output)", details("single", [result]));
       },
 
       renderCall(args, theme, _context) {
@@ -582,33 +602,31 @@ export default function (pi: ExtensionAPI) {
         // Collapsed: the error, or the last `limit` items, or a placeholder.
         const body = (r: SingleResult, limit: number) => {
           if (isFailedResult(r)) return fg("error", errorText(r));
-          const items = getDisplayItems(r.messages);
+          const items = r.items.slice(-limit);
           if (items.length === 0)
             return fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)");
-          const skipped = Math.max(0, items.length - limit);
+          const skipped = r.itemCount - items.length;
           const lines = skipped > 0 ? [fg("muted", `... ${skipped} earlier items`)] : [];
-          for (const item of items.slice(-limit)) {
-            lines.push(
-              item.type === "text"
-                ? fg("toolOutput", item.text.split("\n").slice(0, 3).join("\n"))
-                : toolLine(item),
-            );
+          for (const item of items) {
+            lines.push(item.type === "text" ? fg("toolOutput", item.text) : toolLine(item));
           }
           return lines.join("\n");
         };
 
-        // Expanded: the task, every tool call, and the final output as Markdown.
+        // Expanded: the task, the kept tool calls, and the final output as Markdown.
         const addExpanded = (container: Container, r: SingleResult, title: string) => {
           container.addChild(new Text(title, 0, 0));
           if (isFailedResult(r)) container.addChild(new Text(fg("error", errorText(r)), 0, 0));
           container.addChild(new Text(fg("muted", "Task: ") + fg("dim", r.task), 0, 0));
-          for (const item of getDisplayItems(r.messages)) {
+          const skipped = r.itemCount - r.items.length;
+          if (skipped > 0)
+            container.addChild(new Text(fg("muted", `... ${skipped} earlier items`), 0, 0));
+          for (const item of r.items) {
             if (item.type === "toolCall") container.addChild(new Text(toolLine(item), 0, 0));
           }
-          const output = getFinalOutput(r.messages);
-          if (output) {
+          if (r.output) {
             container.addChild(new Spacer(1));
-            container.addChild(new Markdown(output.trim(), 0, 0, mdTheme));
+            container.addChild(new Markdown(r.output.trim(), 0, 0, mdTheme));
           }
           const usage = formatUsageStats(r.usage, r.model);
           if (usage) container.addChild(new Text(fg("dim", usage), 0, 0));
@@ -625,7 +643,7 @@ export default function (pi: ExtensionAPI) {
             return container;
           }
           let text = `${header}\n${body(r, COLLAPSED_ITEM_COUNT)}`;
-          if (!isFailedResult(r) && getDisplayItems(r.messages).length > COLLAPSED_ITEM_COUNT)
+          if (!isFailedResult(r) && r.itemCount > COLLAPSED_ITEM_COUNT)
             text += `\n${fg("muted", "(Ctrl+O to expand)")}`;
           const usage = formatUsageStats(r.usage, r.model);
           if (usage) text += `\n${fg("dim", usage)}`;
