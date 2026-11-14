@@ -272,10 +272,7 @@ def session_of(header, calls, agent, entries):
                 consumed[name] += tokens
     compactions = [e for e in entries if e["type"] == "compaction"]
     for compaction in compactions:
-        usage = compaction.get("usage") or {}
-        consumed["conversation:compaction runs"] += sum(
-            usage.get(key, 0) for key in ("input", "cacheRead", "cacheWrite", "output")
-        )
+        consumed["conversation:compaction runs"] += run_tokens(compaction)
     peak = max(calls, key=lambda c: c["prompt"])
     messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
     return {
@@ -294,6 +291,7 @@ def session_of(header, calls, agent, entries):
             for e in compactions
         ],
         "cost": sum(c["cost"] for c in calls),
+        "compaction_list": [compaction_of(e, calls) for e in compactions],
         "notes": sum(
             1
             for m in messages
@@ -308,6 +306,29 @@ def session_of(header, calls, agent, entries):
         ),
         # Filled in by collect from the parent's records.
         "outcomes": Counter(),
+    }
+
+
+def run_tokens(compaction):
+    # Tokens of the compaction's own model request.
+    usage = compaction.get("usage") or {}
+    return sum(usage.get(key, 0) for key in ("input", "cacheRead", "cacheWrite", "output"))
+
+
+def compaction_of(entry, calls):
+    # One compaction: the context before it (Pi's count), the first request after it, and
+    # the summary's tokens in that request; after and summary are None when none followed.
+    after = next((c for c in calls if c["time"] > entry["timestamp"]), None)
+    details = entry.get("details") or {}
+    return {
+        "time": entry["timestamp"],
+        "request": after["index"] + 1 if after else None,
+        "before": entry.get("tokensBefore", 0),
+        "after": after["prompt"] if after else None,
+        "summary": after["parts"].get("conversation:compaction summary") if after else None,
+        "run": run_tokens(entry),
+        "read": len(details.get("readFiles") or []),
+        "modified": len(details.get("modifiedFiles") or []),
     }
 
 
@@ -731,6 +752,11 @@ def overview_tab(sessions, calls, skipped, theme):
             ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
             ("cache hit", f"{100 * sum(c['cache'] for c in calls) / prompt:.0f}%"),
             ("bytes/token", f"{ratio:.2f}"),
+            ("compactions", sum(len(s["compaction_list"]) for s in sessions)),
+            (
+                "compaction tokens",
+                num(sum(c["run"] for s in sessions for c in s["compaction_list"])),
+            ),
             ("skipped calls", skipped),
         ]
     )
@@ -1081,6 +1107,47 @@ def session_kpis(items, average):
     )
 
 
+def compactions_table(items, with_session):
+    # One row per compaction of the sessions, then their means when there are several.
+    rows = []
+    for session in items:
+        for c in session["compaction_list"]:
+            reduction = pct(1 - c["after"] / c["before"]) if c["after"] and c["before"] else "-"
+            cells = [
+                c["request"] or "-",
+                c["time"][:16].replace("T", " "),
+                num(c["before"]),
+                num(c["after"]) if c["after"] is not None else "-",
+                reduction,
+                num(c["summary"]) if c["summary"] is not None else "-",
+                num(c["run"]),
+                c["read"],
+                c["modified"],
+            ]
+            label = [f"{Path(session['cwd']).name} · {session['time'][:10]}"]
+            rows.append(((label if with_session else []) + cells, ""))
+    if not rows:
+        return ""
+    every = [c for s in items for c in s["compaction_list"]]
+    done = [c for c in every if c["after"] and c["before"]]
+    if len(every) > 1:
+        cells = [
+            "",
+            "mean",
+            num(statistics.mean(c["before"] for c in every)),
+            num(statistics.mean(c["after"] for c in done)) if done else "-",
+            pct(statistics.mean(1 - c["after"] / c["before"] for c in done)) if done else "-",
+            num(statistics.mean(c["summary"] for c in done)) if done else "-",
+            num(statistics.mean(c["run"] for c in every)),
+            f"{statistics.mean(c['read'] for c in every):.0f}",
+            f"{statistics.mean(c['modified'] for c in every):.0f}",
+        ]
+        rows.append((([""] if with_session else []) + cells, "group"))
+    headers = ["Request", "Time", "Before", "After", "Reduction", "Summary", "Run tokens"]
+    headers += ["Read", "Modified"]
+    return "<h2>Compactions</h2>" + table((["Session"] if with_session else []) + headers, rows)
+
+
 def session_average(items, theme):
     calls = [c for s in items for c in s["calls"]]
     consumed = defaultdict(float)
@@ -1120,6 +1187,7 @@ def session_average(items, theme):
         + session_table(
             theme, mean_shares(calls), shares(consumed), mean_sizes(calls), "Context"
         )
+        + compactions_table(items, with_session=True)
         + growth
     )
 
@@ -1145,6 +1213,7 @@ def session_single(session, theme):
             peak["sizes"],
             "Peak context",
         )
+        + compactions_table([session], with_session=False)
     )
 
 
