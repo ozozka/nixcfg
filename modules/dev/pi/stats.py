@@ -48,8 +48,8 @@ OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "
 GROWTH_MIN_SESSIONS = 3
 # Gaps before a prompt longer than this are breaks, not time spent on the session.
 BREAK_MS = 60 * 60 * 1000
-# Weight of each new day in the overview's moving averages: about a six-day memory.
-EMA_ALPHA = 1 / 6
+# Weight of each new day in the overview's moving averages: about a twelve-day memory.
+EMA_ALPHA = 1 / 12
 # Where a session's time goes, and the theme colors of the time bar.
 TIME_PARTS = {
     "model": "p",
@@ -941,10 +941,10 @@ def ema(values, carry=False):
 
 
 def daily_chart(theme, sessions, calls):
-    """Tokens per calendar day as columns, with moving averages of tokens, active hours, your
-    wait per turn, and the main model's output tokens per second.
+    """Tokens per calendar day as columns, with moving averages of tokens, active hours, and
+    your wait per turn.
 
-    Days without sessions count as zero tokens and hours; waits and speed carry over them.
+    Days without sessions count as zero tokens and hours; waits carry over them.
     A session's active time counts on the day it started; a wait on the day of its prompt.
     """
     tokens, active, waits = defaultdict(int), defaultdict(float), defaultdict(list)
@@ -955,12 +955,6 @@ def daily_chart(theme, sessions, calls):
         for stamp, wait in session["waits"]:
             day = datetime.fromtimestamp(stamp / 1000).date().isoformat()
             waits[day].append(wait / 60_000)
-    main = Counter(c["model"] for c in calls).most_common(1)[0][0]
-    output, seconds = defaultdict(int), defaultdict(float)
-    for call in calls:
-        if call["model"] == main and call["duration"]:
-            output[call["time"][:10]] += call["output"]
-            seconds[call["time"][:10]] += call["duration"] / 1000
     first, last = date.fromisoformat(min(tokens)), date.fromisoformat(max(tokens))
     days = [(first + timedelta(n)).isoformat() for n in range((last - first).days + 1)]
     daily = [tokens[d] for d in days]
@@ -977,12 +971,6 @@ def daily_chart(theme, sessions, calls):
                     [statistics.mean(waits[d]) if waits[d] else None for d in days], carry=True
                 ),
                 "s",
-                None,
-            ),
-            (
-                f"{main} tok/s EMA",
-                ema([output[d] / seconds[d] if seconds[d] else None for d in days], carry=True),
-                "f",
                 None,
             ),
         ],

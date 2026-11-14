@@ -94,8 +94,7 @@ tokens and cost, current tool call) until the next prompt after it ends, and
 the session files and writes `/tmp/pi-stats.html`, styled with the system theme, as one page:
 
 - The overview: totals, the subagent share of all tokens, and tokens per calendar day with
-  moving averages (weight 1/6) of tokens, active hours, your wait per turn, and the main model's
-  output tokens per second.
+  moving averages (weight 1/12) of tokens, active hours, and your wait per turn.
 - The sessions: one dropdown with an average per agent, then every session newest first, with
   the subagent runs it started nested under it, then subagent runs whose parent is missing.
 
