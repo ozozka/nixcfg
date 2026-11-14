@@ -393,10 +393,11 @@ def collect(since, project):
     main_files = sorted(AGENT_DIR.glob("sessions/*/*.jsonl"))
     child_files = sorted(AGENT_DIR.glob("subagent-sessions/*.jsonl"))
     sessions = [(*read_session(path), False) for path in main_files]
-    # Child session ID -> agent name and run endings, from the parents' subagent results and
-    # messages. A run's end is delivered once, in a wait result or a message.
-    agents, outcomes = {}, defaultdict(Counter)
-    for _, entries, _ in sessions:
+    # Child session ID -> agent name, parent session ID, task, and run endings, from the
+    # parents' subagent results and messages. A run's end is delivered once, in a wait result
+    # or a message.
+    agents, parents, tasks, outcomes = {}, {}, {}, defaultdict(Counter)
+    for header, entries, _ in sessions:
         for entry in entries:
             message = entry.get("message") or {}
             if message.get("toolName") == "subagent":
@@ -409,6 +410,8 @@ def collect(since, project):
             for result in details.get("results", []):
                 if result.get("sessionId"):
                     agents[result["sessionId"]] = result["agent"]
+                    parents[result["sessionId"]] = header.get("id")
+                    tasks.setdefault(result["sessionId"], result.get("task", ""))
                     if ends and result.get("state") in OUTCOMES:
                         outcomes[result["sessionId"]][result["state"]] += 1
     sessions += [(*read_session(path), True) for path in child_files]
@@ -428,6 +431,9 @@ def collect(since, project):
             continue
         found.append(session_of(header, calls, agent, entries))
         found[-1]["outcomes"] = outcomes.get(header.get("id"), Counter())
+        found[-1]["child"] = child
+        found[-1]["parent"] = parents.get(header.get("id")) if child else None
+        found[-1]["task"] = tasks.get(header.get("id"), "") if child else ""
         found[-1]["reports"] = [] if child else reports_of(entries, calls, uses)
         # Tool results, sized at the session's own bytes per token.
         ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
@@ -1333,8 +1339,12 @@ def session_tab(sessions, theme):
 
 
 def panels_tab(sessions, prefix, average, single, theme):
-    # One selector: an average per agent, then every session, newest first. Panel IDs carry the tab
-    # prefix; option keys do not, so choosing a session selects it in every tab.
+    """One selector: an average per agent, then every session newest first, each followed by
+    the subagent runs it started, then subagent runs whose parent is not in the report.
+
+    Panel IDs carry the tab prefix; option keys do not, so choosing an entry selects it in
+    every tab.
+    """
     by_agent = defaultdict(list)
     for session in sorted(sessions, key=lambda s: s["time"]):
         by_agent[session["agent"]].append(session)
@@ -1343,16 +1353,48 @@ def panels_tab(sessions, prefix, average, single, theme):
         for agent, items in sorted(by_agent.items(), key=lambda kv: (kv[0] != "main", kv[0]))
     ]
     newest = sorted(sessions, key=lambda s: s["time"], reverse=True)
-    singles = [(f"s-{s['id']}", session_label(s), single(s, theme)) for s in newest]
-    return selector(prefix, [("Averages", averages), ("Sessions", singles)])
+    ids = {s["id"] for s in sessions}
+    children = defaultdict(list)
+    for session in newest[::-1]:
+        if session["parent"] in ids:
+            children[session["parent"]].append(session)
+    entries = []
+    for session in newest:
+        if session["child"]:
+            continue
+        entries.append((f"s-{session['id']}", session_label(session, children), session))
+        entries += [
+            (f"s-{child['id']}", child_label(child), child) for child in children[session["id"]]
+        ]
+    unlinked = [s for s in newest if s["child"] and s["parent"] not in ids]
+    return selector(
+        prefix,
+        [
+            ("Averages", averages),
+            ("Sessions", [(key, label, single(s, theme)) for key, label, s in entries]),
+            (
+                "Unlinked subagents",
+                [(f"s-{s['id']}", session_label(s), single(s, theme)) for s in unlinked],
+            ),
+        ],
+    )
 
 
-def session_label(session):
+def session_label(session, children=None):
+    count = len((children or {}).get(session["id"], []))
+    runs = f" · {count} subagent{'s' if count > 1 else ''}" if count else ""
     return (
         f"{session['time'][:16].replace('T', ' ')} · {Path(session['cwd']).name}"
         f" · {session['agent']} · {len(session['calls'])} requests"
-        f" · peak {num(session['peak'])}"
+        f" · peak {num(session['peak'])}{runs}"
     )
+
+
+def child_label(session):
+    # Indented under its parent; option text keeps non-breaking spaces only.
+    task = session["task"].strip().split("\n")[0]
+    task = task[:PREVIEW] + ("…" if len(task) > PREVIEW else "")
+    return f"\u00a0\u00a0\u00a0└ {session['agent']} · {task} · {len(session['calls'])} requests"
 
 
 def selector(prefix, groups):
