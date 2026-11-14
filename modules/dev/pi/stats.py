@@ -1234,8 +1234,31 @@ def session_kpis(items, average):
             ("cost", f"${mean([s['cost'] for s in items]):.2f}"),
             ("compactions", f"{round(mean([s['compactions'] for s in items]), 1):g}"),
             ("active time", duration(mean([sum(s["spent"].values()) for s in items]))),
+            *startup_figures(items),
         ]
     )
+
+
+def startup_figures(items):
+    # The startup's tokens, KiB, and counts, or their means over several sessions.
+    starts = [startup_of(s) for s in items]
+    figures = [
+        ("startup tokens", num(statistics.mean(sum(t.values()) for t, _, _ in starts))),
+        ("startup KiB", kib(statistics.mean(sum(b.values()) for _, b, _ in starts))),
+    ]
+    for name in starts[0][2]:
+        value = statistics.mean(c[name] for _, _, c in starts)
+        figures.append((name, f"{round(value, 1):g}"))
+    return figures
+
+
+def startup_line(theme, items):
+    # The startup's parts as one bar; averaged part by part over several sessions.
+    tokens = defaultdict(float)
+    for session in items:
+        for name, value in startup_of(session)[0].items():
+            tokens[name] += value / len(items)
+    return startup_bar(theme, tokens)
 
 
 def compactions_summary(items):
@@ -1310,6 +1333,8 @@ def tools_table(items, average):
             if result["tool"] != "subagent":
                 results[result["tool"]].append(result)
     per = len(items) if average else 1
+    # Sessions that called each tool.
+    sessions = Counter(t for s in items for t in {r["tool"] for r in s["results"]})
     rows = []
     for tool, calls in sorted(results.items(), key=lambda kv: -sum(r["tokens"] for r in kv[1])):
         tokens = [r["tokens"] for r in calls]
@@ -1328,6 +1353,7 @@ def tools_table(items, average):
                     duration(sum(times) / per) if times else "-",
                     duration(statistics.mean(times)) if times else "-",
                     duration(max(times)) if times else "-",
+                    *([sessions[tool]] if average else []),
                 ],
                 "",
             )
@@ -1337,6 +1363,8 @@ def tools_table(items, average):
     each = "/session" if average else ""
     headers = ["Tool", f"Calls{each}", f"Errors{each}", f"Tokens{each}", "Avg tokens"]
     headers += ["Max tokens", f"Time{each}", "Avg time", "Max time"]
+    if average:
+        headers.append(f"Sessions/{len(items)}")
     return "<h2>Tools</h2>" + table(headers, rows)
 
 
@@ -1499,6 +1527,7 @@ def session_average(items, theme):
     return (
         session_kpis(items, average=True)
         + history
+        + startup_line(theme, items)
         + session_table(
             theme,
             mean_parts(calls, "parts"),
@@ -1529,6 +1558,7 @@ def session_single(session, theme):
     return (
         session_kpis([session], average=False)
         + tokens
+        + startup_line(theme, [session])
         + session_table(theme, peak["parts"], session["consumed"], peak["sizes"])
         + tools_table([session], average=False)
         + time_section(theme, [session])
