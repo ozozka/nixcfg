@@ -44,7 +44,6 @@ PARENT_MESSAGE = "Message from the parent:"
 NOTE_TOOL = "send_message"
 # Run endings in subagent.ts, as labeled in the report.
 OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "Stopped"}
-TOP_RESULTS = 15
 GROWTH_MIN_SESSIONS = 3
 # Gaps before a prompt longer than this are breaks, not time spent on the session.
 BREAK_MS = 30 * 60 * 1000
@@ -291,7 +290,7 @@ def session_of(header, calls, agent, entries):
         consumed["conversation:compaction runs"] += run_tokens(compaction)
     peak = max(calls, key=lambda c: c["prompt"])
     messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
-    spent, tool_times = timing(entries)
+    spent = timing(entries)
     return {
         "id": header.get("id"),
         "agent": agent,
@@ -310,7 +309,6 @@ def session_of(header, calls, agent, entries):
         "cost": sum(c["cost"] for c in calls),
         "compaction_list": [compaction_of(e, calls) for e in compactions],
         "spent": spent,
-        "tool_times": tool_times,
         "notes": sum(
             1
             for m in messages
@@ -333,7 +331,7 @@ def milliseconds(stamp):
 
 
 def timing(entries):
-    """Milliseconds per TIME_PARTS category, and each tool's call durations.
+    """Milliseconds per TIME_PARTS category.
 
     Model time is each response's durationMs; a turn's tool time is its longest tool result,
     since tools of one turn run in parallel, and counts as subagent waits when it includes a
@@ -341,7 +339,7 @@ def timing(entries):
     the previous run to the next prompt, without gaps longer than BREAK_MS, plus the time
     you take to answer the question tool.
     """
-    spent, tools, calls = defaultdict(float), defaultdict(list), {}
+    spent, calls = defaultdict(float), {}
     previous, turn, waited = None, 0.0, False
     for entry in entries:
         stamp = milliseconds(entry["timestamp"])
@@ -364,7 +362,6 @@ def timing(entries):
             name, args = calls.get(message.get("toolCallId"), (message.get("toolName"), {}))
             if name == "subagent" and args.get("action"):
                 name = f"subagent {args['action']}"
-            tools[name].append(duration)
             if name == "question":
                 spent["you"] += duration
             else:
@@ -372,7 +369,7 @@ def timing(entries):
                 waited |= name == "subagent wait"
         previous = stamp
     spent["subagent waits" if waited else "tools"] += turn
-    return dict(spent), dict(tools)
+    return dict(spent)
 
 
 def run_tokens(compaction):
@@ -422,7 +419,7 @@ def collect(since, project):
                         outcomes[result["sessionId"]][result["state"]] += 1
     sessions += [(*read_session(path), True) for path in child_files]
 
-    found, results, skipped = [], [], 0
+    found, skipped = [], 0
     for header, entries, child in sessions:
         if project and project not in header.get("cwd", ""):
             continue
@@ -438,33 +435,23 @@ def collect(since, project):
         found.append(session_of(header, calls, agent, entries))
         found[-1]["outcomes"] = outcomes.get(header.get("id"), Counter())
         found[-1]["reports"] = [] if child else reports_of(entries, calls, uses)
-        arguments = {
-            block["id"]: block["arguments"]
-            for e in entries
-            for block in (e.get("message") or {}).get("content") or []
-            if isinstance(block, dict) and block.get("type") == "toolCall"
-        }
-        for entry in entries:
-            message = entry.get("message") or {}
-            if message.get("role") != "toolResult":
-                continue
-            results.append(
-                {
-                    "agent": agent,
-                    "tool": message["toolName"],
-                    "bytes": text_size(message["content"]),
-                    "error": bool(message.get("isError")),
-                    "cwd": header.get("cwd", ""),
-                    "time": entry["timestamp"],
-                    "args": json.dumps(arguments.get(message.get("toolCallId"), {})),
-                    "duration": message.get("durationMs"),
-                }
-            )
+        # Tool results, sized at the session's own bytes per token.
+        ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
+        found[-1]["results"] = [
+            {
+                "tool": message["toolName"],
+                "tokens": text_size(message["content"]) / ratio,
+                "error": bool(message.get("isError")),
+                "duration": message.get("durationMs"),
+            }
+            for message in (e.get("message") or {} for e in entries)
+            if message.get("role") == "toolResult"
+        ]
     # Each parent's subagent runs, with the child sessions' own totals.
     children = {s["id"]: s for s in found if s["agent"] != "main"}
     for session in found:
         session["delegations"] = delegations_of(session["reports"], children)
-    return found, results, skipped
+    return found, skipped
 
 
 def reports_of(entries, calls, uses):
@@ -528,7 +515,7 @@ def delegations_of(reports, children):
 
 # Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
 
-TABS = {"overview": "Overview", "startup": "Startup", "session": "Session", "tools": "Tools"}
+TABS = {"overview": "Overview", "startup": "Startup", "session": "Session"}
 # Chart groups and their theme colors, in stacking order; parts map to them by prefix.
 CHART_GROUPS = {
     "tool results": "s",
@@ -614,10 +601,6 @@ def kib(value):
 
 def pct(value):
     return f"{100 * value:.1f}%"
-
-
-def p90(values):
-    return statistics.quantiles(values, n=10)[-1] if len(values) > 1 else values[0]
 
 
 def group_of(part):
@@ -756,14 +739,13 @@ def x_labels(axes, labels):
     axes.set_xlim(-BAR_WIDTH / 2, len(labels) - 1 + BAR_WIDTH / 2)
 
 
-def combo_chart(theme, labels, bars, lines, xlabel="", points=False, axis="own", marks=()):
+def combo_chart(theme, labels, bars, lines, xlabel="", axis="own", marks=()):
     """Overlay-colored columns on the left axis and lines over them.
 
     bars: (label, values); lines: (label, values, color key, axis label or None).
     axis: "own" gives each line its own zero-based axis, the first labeled one on the right
     and the others hidden; "bars" draws the lines on the columns' axis, for the same unit;
     "lines" puts every line on one right axis, for lines sharing a unit apart from the bars.
-    points draws unconnected markers instead, for categories rather than a sequence.
     marks: x positions drawn as dashed vertical rules.
     """
     colors = theme["colors"]
@@ -788,9 +770,8 @@ def combo_chart(theme, labels, bars, lines, xlabel="", points=False, axis="own",
         shown = False
         for label, values, color, axis_label in lines:
             axes = common or base.twinx()
-            line = {"linestyle": "none", "marker": "D"} if points else {}
             handles += axes.plot(
-                range(len(values)), values, color=f"#{colors[color]}", label=label, **line
+                range(len(values)), values, color=f"#{colors[color]}", label=label
             )
             if common is None:
                 axes.set_ylim(0, (max(values, default=0) or 1) * 1.05)
@@ -936,145 +917,6 @@ def overview_tab(sessions, calls, skipped, theme):
         )
     models_table = table(["Model", "Requests", "Input", "Output", "Cost", "Cache"], rows)
     return head + chart + models_table
-
-
-def delegation_summary(sessions):
-    # Per agent: the reports its runs returned and what the parents spent carrying them.
-    by_agent = defaultdict(list)
-    for session in sessions:
-        for row in session["delegations"]:
-            by_agent[row["agent"]].append(row)
-    rows = []
-    for agent, items in sorted(by_agent.items()):
-        runs = sum(r["runs"] for r in items)
-        ratios = [r["consumed"] / r["tokens"] for r in items if r["consumed"] and r["tokens"]]
-        rows.append(
-            (
-                [
-                    agent,
-                    len(items),
-                    runs,
-                    num(sum(r["tokens"] for r in items) / runs),
-                    f"{statistics.median(ratios):.0f}x" if ratios else "-",
-                    num(sum(r["resent"] for r in items)),
-                ],
-                "",
-            )
-        )
-    if not rows:
-        return ""
-    headers = ["Agent", "Children", "Runs", "Report/run", "Compression", "Parent re-send"]
-    return "<h2>Delegation</h2>" + table(headers, rows)
-
-
-def tools_tab(sessions, calls, results, theme):
-    ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
-    main_calls = [c for c in calls if c["agent"] == "main"]
-    by_tool = defaultdict(list)
-    for result in results:
-        by_tool[result["tool"]].append(result)
-    declared = set().union(*(c["tools"] for c in main_calls)) if main_calls else set()
-    order = sorted(
-        set(by_tool) | declared, key=lambda t: -sum(r["bytes"] for r in by_tool.get(t, []))
-    )
-    rows, totals, counts = [], [], []
-    for tool in order:
-        items = by_tool.get(tool, [])
-        sizes = [r["bytes"] / ratio for r in items] or [0]
-        times = [r["duration"] for r in items if r["duration"] is not None]
-        totals.append(sum(sizes))
-        counts.append(len(items))
-        rows.append(
-            (
-                [
-                    tool,
-                    len(items),
-                    sum(r["error"] for r in items),
-                    num(statistics.mean(sizes)),
-                    num(p90(sizes)),
-                    num(max(sizes)),
-                    num(sum(sizes)),
-                    kib(sum(r["bytes"] for r in items)),
-                    duration(sum(times)) if times else "-",
-                    duration(statistics.mean(times)) if times else "-",
-                ],
-                "" if items else "flag",
-            )
-        )
-    headers = ["Tool", "Calls", "Errors", "Avg", "P90", "Max", "Total", "KiB"]
-    tools = table([*headers, "Time", "Avg time"], rows)
-    chart = combo_chart(
-        theme,
-        order,
-        ("Result tokens", totals),
-        [("Calls", counts, "p", "Calls")],
-        "Tool",
-        points=True,
-    )
-
-    children = [s for s in sessions if s["agent"] != "main"]
-    agents = ""
-    if children:
-        runs = defaultdict(list)
-        for session in children:
-            runs[session["agent"]].append(session)
-        rows = []
-        for agent, items in sorted(runs.items()):
-            flat = [c for s in items for c in s["calls"]]
-            ends = sum((s["outcomes"] for s in items), Counter())
-            total = sum(ends.values())
-            rows.append(
-                (
-                    [
-                        agent,
-                        len(items),
-                        f"{len(flat) / len(items):.1f}",
-                        num(statistics.mean(s["calls"][0]["prompt"] for s in items)),
-                        num(sum(c["prompt"] for c in flat)),
-                        num(sum(c["output"] for c in flat)),
-                        f"${sum(s['cost'] for s in items):.2f}",
-                        sum(s["notes"] for s in items),
-                        sum(s["parent_messages"] for s in items),
-                        *(ends[state] for state in OUTCOMES),
-                        pct(ends["budget"] / total) if total else "",
-                    ],
-                    "",
-                )
-            )
-        headers = [
-            "Agent",
-            "Sessions",
-            "Requests/session",
-            "Startup",
-            "Input",
-            "Output",
-            "Cost",
-            "Notes",
-            "Parent messages",
-            *OUTCOMES.values(),
-            "Budget stops",
-        ]
-        agents = "<h2>Subagents</h2>" + table(headers, rows) + delegation_summary(sessions)
-
-    rows = [
-        (
-            [
-                r["tool"],
-                num(r["bytes"] / ratio),
-                kib(r["bytes"]),
-                r["agent"],
-                Path(r["cwd"]).name,
-                r["time"][:16].replace("T", " "),
-                r["args"][:PREVIEW],
-            ],
-            "",
-        )
-        for r in sorted(results, key=lambda r: -r["bytes"])[:TOP_RESULTS]
-    ]
-    largest = table(
-        ["Tool", "Tokens", "KiB", "Agent", "Project", "Time", "Arguments"], rows, "text"
-    )
-    return tools + chart + agents + "<h2>Largest tool results</h2>" + largest
 
 
 def startup_of(session):
@@ -1351,42 +1193,56 @@ def time_bar(theme, spent):
     return render(theme, draw, size=(16, 2))
 
 
-def time_section(theme, items, average):
-    # Time per category as a bar, then time per tool; averages show means per session.
-    def mean(values):
-        return sum(values) / len(items)
-
-    spent = {part: mean([s["spent"].get(part, 0) for s in items]) for part in TIME_PARTS}
+def time_section(theme, items):
+    # Time per category as a bar; averages show means per session.
+    spent = {
+        part: sum(s["spent"].get(part, 0) for s in items) / len(items) for part in TIME_PARTS
+    }
     if not any(spent.values()):
         return ""
-    names = {name for s in items for name in s["tool_times"]}
+    return "<h2>Time</h2>" + time_bar(theme, spent)
+
+
+def tools_table(items, average):
+    """One row per tool the sessions called: calls, errors, result tokens, and run time.
+
+    Averages show calls, totals, and errors per session; Avg and Max are per call. The
+    subagent tool is left out: its runs have their own section.
+    """
+    results = defaultdict(list)
+    for session in items:
+        for result in session["results"]:
+            if result["tool"] != "subagent":
+                results[result["tool"]].append(result)
+    per = len(items) if average else 1
     rows = []
-    for name in names:
-        every = [d for s in items for d in s["tool_times"].get(name, [])]
+    for tool, calls in sorted(results.items(), key=lambda kv: -sum(r["tokens"] for r in kv[1])):
+        tokens = [r["tokens"] for r in calls]
+        times = [r["duration"] for r in calls if r["duration"] is not None]
         rows.append(
             (
                 [
-                    name,
-                    f"{mean([len(s['tool_times'].get(name, [])) for s in items]):.1f}"
+                    tool,
+                    f"{len(calls) / per:.1f}" if average else len(calls),
+                    f"{sum(r['error'] for r in calls) / per:.1f}"
                     if average
-                    else len(every),
-                    duration(mean([sum(s["tool_times"].get(name, [])) for s in items])),
-                    duration(statistics.mean(every)) if every else "-",
-                    duration(max(every, default=0)),
+                    else sum(r["error"] for r in calls),
+                    num(sum(tokens) / per),
+                    num(statistics.mean(tokens)),
+                    num(max(tokens)),
+                    duration(sum(times) / per) if times else "-",
+                    duration(statistics.mean(times)) if times else "-",
+                    duration(max(times)) if times else "-",
                 ],
                 "",
             )
         )
-    rows.sort(
-        key=lambda row: -sum(d for s in items for d in s["tool_times"].get(row[0][0], []))
-    )
-    calls = "Calls/session" if average else "Calls"
-    spent_label = "Time/session" if average else "Time"
-    return (
-        "<h2>Time</h2>"
-        + time_bar(theme, spent)
-        + table(["Tool", calls, spent_label, "Avg", "Max"], rows)
-    )
+    if not rows:
+        return ""
+    each = "/session" if average else ""
+    headers = ["Tool", f"Calls{each}", f"Errors{each}", f"Tokens{each}", "Avg tokens"]
+    headers += ["Max tokens", f"Time{each}", "Avg time", "Max time"]
+    return "<h2>Tools</h2>" + table(headers, rows)
 
 
 def compression(row):
@@ -1463,8 +1319,9 @@ def session_average(items, theme):
         + session_table(
             theme, mean_shares(calls), shares(consumed), mean_sizes(calls), "Context"
         )
+        + tools_table(items, average=True)
+        + time_section(theme, items)
         + compactions_table(items, with_session=True)
-        + time_section(theme, items, average=True)
         + growth
     )
 
@@ -1490,8 +1347,9 @@ def session_single(session, theme):
             peak["sizes"],
             "Peak context",
         )
+        + tools_table([session], average=False)
+        + time_section(theme, [session])
         + compactions_table([session], with_session=False)
-        + time_section(theme, [session], average=False)
         + delegations_table(session)
     )
 
@@ -1543,13 +1401,12 @@ def selector(prefix, groups):
     return f"<div><select data-panels>{options}</select>{shown}</div>"
 
 
-def report(sessions, results, skipped, theme, title):
+def report(sessions, skipped, theme, title):
     calls = [call for session in sessions for call in session["calls"]]
     tabs = {
         "overview": overview_tab(sessions, calls, skipped, theme),
         "startup": startup_tab(sessions, theme),
         "session": session_tab(sessions, theme),
-        "tools": tools_tab(sessions, calls, results, theme),
     }
     links = "".join(f'<a href="#{key}">{esc(TABS[key])}</a>' for key in tabs)
     body = "".join(f'<section id="{key}">{content}</section>' for key, content in tabs.items())
@@ -1567,12 +1424,12 @@ def main():
     args = parser.parse_args()
 
     theme = json.loads(args.theme.read_text())
-    sessions, results, skipped = collect(args.since, args.project)
+    sessions, skipped = collect(args.since, args.project)
     if not sessions:
         raise SystemExit("No sessions found.")
     filters = " ".join(f for f in [args.project, args.since and f"since {args.since}"] if f)
     title = f"Pi stats {filters}".strip()
-    args.out.write_text(report(sessions, results, skipped, theme, title))
+    args.out.write_text(report(sessions, skipped, theme, title))
     print(args.out)
 
 
