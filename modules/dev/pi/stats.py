@@ -316,6 +316,9 @@ def session_of(header, calls, agent, entries):
         "calls": calls,
         "peak": peak["prompt"],
         "consumed": dict(consumed),
+        "total": sum(consumed.values()),
+        # Bytes per token of the session's requests, for parts measured only in bytes.
+        "ratio": statistics.median(c["bytes"] / c["prompt"] for c in calls),
         "compactions": len(compactions),
         # The first call after each compaction.
         "marks": [
@@ -329,6 +332,7 @@ def session_of(header, calls, agent, entries):
             if e["type"] == "compaction"
         ],
         "spent": spent,
+        "active": sum(spent.values()),
         "waits": waits,
         # Wall-clock span, for the parallelism of a parent's subagent runs.
         "start": milliseconds(entries[0]["timestamp"]),
@@ -435,6 +439,16 @@ def compaction_time(previous, entry):
     return gap if gap <= COMPACTION_MAX_MS else None
 
 
+def subagent_records(entries):
+    # The subagent tool's results and messages in a session, as (entry, details, content).
+    for entry in entries:
+        message = entry.get("message") or {}
+        if message.get("toolName") == "subagent":
+            yield entry, message.get("details") or {}, message.get("content")
+        elif entry.get("customType") == "subagent":
+            yield entry, entry.get("details") or {}, entry.get("content")
+
+
 def collect(since, project):
     main_files = sorted(AGENT_DIR.glob("sessions/*/*.jsonl"))
     child_files = sorted(AGENT_DIR.glob("subagent-sessions/*.jsonl"))
@@ -444,14 +458,7 @@ def collect(since, project):
     # or a message.
     agents, parents, tasks, outcomes = {}, {}, {}, defaultdict(Counter)
     for header, entries, _ in sessions:
-        for entry in entries:
-            message = entry.get("message") or {}
-            if message.get("toolName") == "subagent":
-                details = message.get("details") or {}
-            elif entry.get("customType") == "subagent":
-                details = entry.get("details") or {}
-            else:
-                continue
+        for _, details, _ in subagent_records(entries):
             ends = details.get("action") in ("wait", "event") and details.get("note") is None
             for result in details.get("results", []):
                 if result.get("sessionId"):
@@ -478,7 +485,7 @@ def collect(since, project):
         found[-1]["task"] = tasks.get(header.get("id"), "") if child else ""
         # Set below for a child whose parent's reports include it.
         found[-1]["delegation"] = None
-        found[-1]["reports"] = [] if child else reports_of(entries, calls, uses)
+        found[-1]["reports"] = [] if child else reports_of(entries, found[-1]["ratio"], uses)
         found[-1]["counts"], once = occurrences(found[-1], entries)
         # The tool results the session read, each counted once, for delegation's kept out.
         found[-1]["material"] = sum(t for n, t in once.items() if n.startswith("result:"))
@@ -500,7 +507,7 @@ def occurrences(session, entries):
     resend it; each compaction run counts once; startup parts count 1. Tokens are bytes at the
     session's own bytes per token.
     """
-    ratio = statistics.median(c["bytes"] / c["prompt"] for c in session["calls"])
+    ratio = session["ratio"]
     counts, once = Counter(), defaultdict(float)
     for entry in entries:
         for name, length in message_parts(entry):
@@ -513,23 +520,15 @@ def occurrences(session, entries):
     return +counts, once
 
 
-def reports_of(entries, calls, uses):
+def reports_of(entries, ratio, uses):
     """The reports subagents returned to this parent: one record per ended child run.
 
     A report is a subagent wait result or message; its tokens are its bytes at the parent's
     bytes per token, split evenly when one wait returned several runs, and its re-sent
     tokens count every later request that carried it.
     """
-    ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
     reports = []
-    for entry in entries:
-        message = entry.get("message") or {}
-        if message.get("toolName") == "subagent":
-            details, content = message.get("details") or {}, message.get("content")
-        elif entry.get("customType") == "subagent":
-            details, content = entry.get("details") or {}, entry.get("content")
-        else:
-            continue
+    for entry, details, content in subagent_records(entries):
         # Older results have no action; notes are not reports.
         if details.get("action") not in (None, "wait", "event") or details.get("note"):
             continue
@@ -569,8 +568,8 @@ def delegations_of(reports, children):
         child = children.get(row["child"])
         row["session"] = child
         row["requests"] = len(child["calls"]) if child else None
-        row["consumed"] = sum(child["consumed"].values()) if child else None
-        row["active"] = sum(child["spent"].values()) if child else None
+        row["consumed"] = child["total"] if child else None
+        row["active"] = child["active"] if child else None
         # The fixed price of an agent: its startup tokens, sent with every request.
         startup = sum(startup_of(child).values()) if child else 0
         row["overhead"] = (
@@ -640,6 +639,12 @@ document.querySelectorAll("select[data-panels]").forEach(select => {
   });
 });
 """
+
+
+def preview(task):
+    # A task's first line, cut to PREVIEW.
+    line = task.strip().split("\n")[0]
+    return line[:PREVIEW] + ("…" if len(line) > PREVIEW else "")
 
 
 def esc(value):
@@ -811,6 +816,18 @@ def x_labels(axes, labels):
     axes.set_xlim(-BAR_WIDTH / 2, len(labels) - 1 + BAR_WIDTH / 2)
 
 
+def corner_legend(figure, axes, handles):
+    # A legend in the top left corner of the axes, outside the layout.
+    legend = figure.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(0, 1),
+        bbox_transform=axes.transAxes,
+        framealpha=1,
+    )
+    legend.set_in_layout(False)
+
+
 def combo_chart(theme, labels, bars, lines, xlabel="", axis="own"):
     """Overlay-colored columns on the left axis and lines over them.
 
@@ -860,14 +877,7 @@ def combo_chart(theme, labels, bars, lines, xlabel="", axis="own"):
             common.set_ylim(bottom=0)
         x_labels(base, labels)
         base.set_xlabel(xlabel)
-        legend = figure.legend(
-            handles=handles,
-            loc="upper left",
-            bbox_to_anchor=(0, 1),
-            bbox_transform=base.transAxes,
-            framealpha=1,
-        )
-        legend.set_in_layout(False)
+        corner_legend(figure, base, handles)
 
     return render(theme, draw)
 
@@ -912,14 +922,7 @@ def stacked_chart(theme, labels, columns, ylabel, xlabel, marks=()):
             axes.axvline(mark, color=f"#{colors['f']}", linestyle="--", linewidth=1)
         x_labels(axes, labels)
         axes.set_xlabel(xlabel)
-        legend = figure.legend(
-            handles=handles[::-1],
-            loc="upper left",
-            bbox_to_anchor=(0, 1),
-            bbox_transform=axes.transAxes,
-            framealpha=1,
-        )
-        legend.set_in_layout(False)
+        corner_legend(figure, axes, handles[::-1])
 
     return render(theme, draw)
 
@@ -962,7 +965,7 @@ def daily_chart(theme, sessions, calls):
     for call in calls:
         tokens[call["time"][:10]] += call["prompt"] + call["output"]
     for session in sessions:
-        active[session["time"][:10]] += sum(session["spent"].values()) / 3_600_000
+        active[session["time"][:10]] += session["active"] / 3_600_000
         for stamp, wait in session["waits"]:
             day = datetime.fromtimestamp(stamp / 1000).date().isoformat()
             waits[day].append(wait / 60_000)
@@ -999,7 +1002,7 @@ def overview(sessions, calls, theme):
             ("input", num(prompt)),
             ("output", num(sum(c["output"] for c in calls))),
             ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
-            ("active time", duration(sum(sum(s["spent"].values()) for s in sessions))),
+            ("active time", duration(sum(s["active"] for s in sessions))),
             ("wait/turn", wait_per_turn(sessions)),
         ]
     )
@@ -1042,36 +1045,50 @@ def startup_of(session):
     return {n: v for n, v in parts.items() if n.split(":")[0] in STARTUP_GROUPS}
 
 
-def startup_bar(theme, values):
-    # One horizontal bar split into every part, colored by group.
+def hbar(theme, segments, xlabel, size, legend=False):
+    """One horizontal bar of segments (value, theme color key, label) from the left.
+
+    With legend, the segments are labeled below the bar and touch; without it, thin lines in
+    the background color separate them and the axis counts tokens.
+    """
     colors = theme["colors"]
 
     def draw(figure):
         axes = figure.subplots()
-        left = 0
-        for key, (_, color) in STARTUP_GROUPS.items():
-            items = sorted(
-                (t for n, t in values.items() if n.split(":")[0] == key), reverse=True
+        left, handles = 0, []
+        for value, key, label in segments:
+            edge = (
+                {"linewidth": 0} if legend else {"edgecolor": f"#{colors['b']}", "linewidth": 1}
             )
-            for tokens in items:
+            handles.append(
                 axes.barh(
-                    0,
-                    tokens,
-                    height=1,
-                    left=left,
-                    color=f"#{colors[color]}",
-                    edgecolor=f"#{colors['b']}",
-                    linewidth=1,
+                    0, value, height=1, left=left, color=f"#{colors[key]}", label=label, **edge
                 )
-                left += tokens
+            )
+            left += value
         axes.set_xlim(0, left or 1)
         axes.set_yticks([])
         axes.set_ylim(-0.5, 0.5)
-        compact_ticks(axes)
-        axes.xaxis.set_major_formatter(axes.yaxis.get_major_formatter())
-        axes.set_xlabel("Tokens")
+        if not legend:
+            compact_ticks(axes)
+            axes.xaxis.set_major_formatter(axes.yaxis.get_major_formatter())
+        axes.set_xlabel(xlabel)
+        if legend:
+            figure.legend(handles=handles, loc="outside lower center", ncols=len(handles))
 
-    return render(theme, draw, size=(16, 1.6))
+    return render(theme, draw, size=size)
+
+
+def startup_bar(theme, values):
+    # One horizontal bar split into every part, colored by group, largest first per group.
+    segments = [
+        (tokens, color, None)
+        for key, (_, color) in STARTUP_GROUPS.items()
+        for tokens in sorted(
+            (t for n, t in values.items() if n.split(":")[0] == key), reverse=True
+        )
+    ]
+    return hbar(theme, segments, "Tokens", (16, 1.6))
 
 
 def mean_shares(calls):
@@ -1084,12 +1101,12 @@ def mean_shares(calls):
     return totals
 
 
-def mean_parts(calls, key):
-    # Each part's value in calls[key], averaged over the calls (0 where it is missing).
+def mean_dict(dicts):
+    # Each key's value averaged over the dicts (0 where it is missing).
     totals = defaultdict(float)
-    for call in calls:
-        for name, value in call[key].items():
-            totals[name] += value / len(calls)
+    for values in dicts:
+        for name, value in values.items():
+            totals[name] += value / len(dicts)
     return totals
 
 
@@ -1185,11 +1202,11 @@ def session_kpis(items, average):
         [
             ("requests", f"{mean([len(s['calls']) for s in items]):.0f}"),
             ("peak context", num(mean([s["peak"] for s in items]))),
-            ("consumed", num(mean([sum(s["consumed"].values()) for s in items]))),
+            ("consumed", num(mean([s["total"] for s in items]))),
             ("cache hit", cache_hit(items)),
             ("output", num(mean([sum(c["output"] for c in s["calls"]) for s in items]))),
             ("cost", f"${mean([s['cost'] for s in items]):.2f}"),
-            ("active time", duration(mean([sum(s["spent"].values()) for s in items]))),
+            ("active time", duration(mean([s["active"] for s in items]))),
             ("wait/turn", wait_per_turn(items)),
             *startup_figures(items),
             ("subagents", f"{round(mean([len(s['delegations']) for s in items]), 1):g}"),
@@ -1201,7 +1218,7 @@ def session_kpis(items, average):
 def subagent_share(items):
     # The subagent runs' share of the tokens of the sessions and their runs together.
     children = sum(r["consumed"] or 0 for s in items for r in s["delegations"])
-    own = sum(sum(s["consumed"].values()) for s in items)
+    own = sum(s["total"] for s in items)
     return pct(children / (own + children)) if children else "-"
 
 
@@ -1262,33 +1279,9 @@ def compactions_summary(items):
 
 
 def time_bar(theme, spent):
-    # One horizontal bar of the TIME_PARTS categories, in milliseconds, with a legend.
-    colors = theme["colors"]
-
-    def draw(figure):
-        axes = figure.subplots()
-        left, handles = 0, []
-        for part, key in TIME_PARTS.items():
-            value = spent.get(part, 0) / 60000
-            handles.append(
-                axes.barh(
-                    0,
-                    value,
-                    height=1,
-                    left=left,
-                    color=f"#{colors[key]}",
-                    linewidth=0,
-                    label=part,
-                )
-            )
-            left += value
-        axes.set_xlim(0, left or 1)
-        axes.set_yticks([])
-        axes.set_ylim(-0.5, 0.5)
-        axes.set_xlabel("Minutes")
-        figure.legend(handles=handles, loc="outside lower center", ncols=len(handles))
-
-    return render(theme, draw, size=(16, 2))
+    # One horizontal bar of the TIME_PARTS categories, in minutes, with a legend.
+    segments = [(spent.get(part, 0) / 60000, key, part) for part, key in TIME_PARTS.items()]
+    return hbar(theme, segments, "Minutes", (16, 2), legend=True)
 
 
 def time_section(theme, items):
@@ -1318,7 +1311,7 @@ def parallelism(rows):
     span = max((s["end"] for s in sessions), default=0) - min(
         (s["start"] for s in sessions), default=0
     )
-    active = sum(sum(s["spent"].values()) for s in sessions)
+    active = sum(s["active"] for s in sessions)
     return f"{active / span:.1f}x" if span > 0 else "-"
 
 
@@ -1335,30 +1328,28 @@ def delegations_section(session):
             ("parallelism", parallelism(rows)),
         ]
     )
-    lines = []
-    for row in sorted(rows, key=lambda r: -(r["consumed"] or 0)):
-        task = row["task"].strip().split("\n")[0]
-        lines.append(
-            (
-                [
-                    row["agent"],
-                    task[:PREVIEW] + ("…" if len(task) > PREVIEW else ""),
-                    row["runs"],
-                    maybe(row["requests"], str),
-                    maybe(row["consumed"], num),
-                    maybe(row["active"], duration),
-                    maybe(row["overhead"], pct),
-                    num(row["tokens"]),
-                    compression(row),
-                    maybe(row["kept"], num),
-                    num(row["resent"]),
-                    maybe(row["corrections"], str),
-                    maybe(row["notes"], str),
-                    OUTCOMES.get(row["state"], "-"),
-                ],
-                "",
-            )
+    lines = [
+        (
+            [
+                row["agent"],
+                preview(row["task"]),
+                row["runs"],
+                maybe(row["requests"], str),
+                maybe(row["consumed"], num),
+                maybe(row["active"], duration),
+                maybe(row["overhead"], pct),
+                num(row["tokens"]),
+                compression(row),
+                maybe(row["kept"], num),
+                num(row["resent"]),
+                maybe(row["corrections"], str),
+                maybe(row["notes"], str),
+                OUTCOMES.get(row["state"], "-"),
+            ],
+            "",
         )
+        for row in sorted(rows, key=lambda r: -(r["consumed"] or 0))
+    ]
     headers = ["Agent", "Task", "Runs", "Requests", "Consumed", "Active", "Overhead"]
     headers += [
         "Report",
@@ -1460,9 +1451,9 @@ def session_average(items, theme):
         + startup_line(theme, items)
         + session_table(
             theme,
-            mean_parts(calls, "parts"),
+            mean_dict([c["parts"] for c in calls]),
             {name: tokens / len(items) for name, tokens in consumed.items()},
-            mean_parts(calls, "sizes"),
+            mean_dict([c["sizes"] for c in calls]),
             {
                 n: c / len(items)
                 for n, c in sum((s["counts"] for s in items), Counter()).items()
@@ -1555,8 +1546,7 @@ def session_label(session, children=None):
 
 def child_label(session):
     # Indented under its parent; option text keeps non-breaking spaces only.
-    task = session["task"].strip().split("\n")[0]
-    task = task[:PREVIEW] + ("…" if len(task) > PREVIEW else "")
+    task = preview(session["task"])
     return f"\u00a0\u00a0\u00a0└ {session['agent']} · {task} · {len(session['calls'])} requests"
 
 
