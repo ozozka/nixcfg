@@ -92,10 +92,14 @@ interface Saved {
   thinkingLevel: ThinkingLevel;
 }
 
-// Recorded in the session; `saved` holds the settings to restore when leaving the mode.
+// Recorded in the session; `saved` holds the settings to restore when leaving the mode, and
+// `left` the settings restored when a mode was left. Pi saves tool changes only with the next
+// model request, so a session reopened after leaving a mode would otherwise get the mode's
+// tools back.
 interface ModeState {
   name?: string;
   saved?: Saved;
+  left?: Saved;
 }
 
 // Asks the user to pick one of the labeled values; undefined when cancelled.
@@ -133,16 +137,18 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  // Applies a target state: the mode's settings, or the saved ones when leaving a mode.
+  // Applies a target state: the mode's settings, or the saved ones when leaving a mode (the
+  // current mode's, or the recorded `left` ones when restoring a session).
   function apply(next: ModeState) {
     const mode = next.name ? modes.get(next.name) : undefined;
+    const restored = state.saved ?? next.left;
     if (mode && next.saved) {
       const tools = next.saved.tools.filter((tool) => !mode.excludeTools.includes(tool));
       pi.setActiveTools(tools);
       pi.setThinkingLevel(mode.thinkingLevel ?? next.saved.thinkingLevel);
-    } else if (state.saved) {
-      pi.setActiveTools(state.saved.tools);
-      pi.setThinkingLevel(state.saved.thinkingLevel);
+    } else if (restored) {
+      pi.setActiveTools(restored.tools);
+      pi.setThinkingLevel(restored.thinkingLevel);
     }
     state = mode ? next : {};
     updateStatus();
@@ -156,7 +162,7 @@ export default function (pi: ExtensionAPI) {
       thinkingLevel: pi.getThinkingLevel(),
     };
     apply(name ? { name, saved } : {});
-    pi.appendEntry(MODE_ENTRY, state);
+    pi.appendEntry(MODE_ENTRY, name ? state : { left: saved });
     ctx.ui.notify(`Mode: ${name ?? FREE}`, "info");
   }
 
@@ -164,8 +170,7 @@ export default function (pi: ExtensionAPI) {
     const recorded = lastEntry<ModeState>(ctx, MODE_ENTRY) ?? {};
     // A mode removed since it was recorded counts as free.
     if (isModeName(recorded.name) && recorded.saved) apply(recorded);
-    else if (state.name) apply({});
-    else updateStatus();
+    else apply({ left: recorded.left ?? recorded.saved });
   }
 
   pi.on("session_start", (_event, ctx) => {
