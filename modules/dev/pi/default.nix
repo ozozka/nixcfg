@@ -34,7 +34,8 @@ in
 
   environment.systemPackages = [
     pkgs.pi-coding-agent
-    # Pi with the personal workflow appended to its system prompt and the project docs loaded.
+    # Pi with the personal workflow appended to its system prompt and the project docs loaded;
+    # `wpi --subagents` also enables subagents.
     (pkgs.writeShellScriptBin "wpi" ''exec ${pkgs.pi-coding-agent}/bin/pi --append-system-prompt ${agents.workflow} --docs "$@"'')
     # HTML report of what Pi's model calls contained, styled with the system theme.
     (pkgs.writeShellScriptBin "pi-stats" ''exec ${statsPython}/bin/python3 ${./stats.py} ${statsTheme} "$@"'')

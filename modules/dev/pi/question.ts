@@ -72,6 +72,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "question",
     label: "Question",
+    // Only the model asks: codemode scripts cannot open the dialog.
+    exposure: "model-only",
     description:
       "Ask one or more questions with selectable answers and optional custom input. One question uses a list; multiple questions use tabs.",
     parameters: QuestionParams,
