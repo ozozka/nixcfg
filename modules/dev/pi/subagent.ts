@@ -23,9 +23,9 @@
  * CHILD_EXCLUDED_TOOLS, since they have no user to ask. They inherit the parent's
  * FORWARDED_FLAGS, so a `wpi` child loads the project docs too. Each child keeps its session in
  * subagent-sessions/ under Pi's agent directory; result details record its session ID with
- * only the final output and the last COLLAPSED_ITEM_COUNT items of its transcript. While
- * children run, their count is shown in the status line (status.ts). Vendored from the Pi
- * subagent example.
+ * only the final output and the last COLLAPSED_ITEM_COUNT items of its transcript. A widget
+ * below the editor shows one line per run, until the next user prompt after it ends. Vendored
+ * from the Pi subagent example.
  */
 
 import { spawn } from "node:child_process";
@@ -35,16 +35,18 @@ import { join } from "node:path";
 import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
+  type ExtensionContext,
   formatReadLineRange,
   getAgentDir,
   getMarkdownTheme,
   parseFrontmatter,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   assistantText,
+  formatDuration,
   formatTokens,
   loadDefinitions,
   optionalList,
@@ -52,7 +54,6 @@ import {
   rejectUnknown,
   reply,
   requiredText,
-  sendStatus,
   type ThemeColor,
   type ThinkingLevel,
 } from "./lib/shared.ts";
@@ -67,6 +68,9 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const MESSAGE_TYPE = "subagent";
+const WIDGET = "subagents";
+// Characters of a task shown in the widget.
+const TASK_PREVIEW = 40;
 // The end of a child's stderr kept for error reports.
 const STDERR_CAP = 4096;
 // Lines of an assistant text item kept for display.
@@ -427,6 +431,10 @@ interface Job {
   id: string;
   result: SingleResult;
   started: boolean;
+  startedAt?: number;
+  endedAt?: number;
+  // Ended jobs leave the widget at the next user prompt.
+  hidden: boolean;
   controller: AbortController;
   // Starts the child; set when the job is created.
   launch: () => Promise<void>;
@@ -529,30 +537,46 @@ export default function (pi: ExtensionAPI) {
   const jobList = () => [...jobs.values()];
   const runningCount = () => jobList().filter((job) => jobState(job) === "running").length;
 
-  // The count of running children in the status line.
-  function sendRunning() {
-    const count = runningCount();
-    sendStatus(pi, {
-      key: "subagents",
-      render:
-        count > 0
-          ? (theme: Theme) => theme.fg("accent", `${count} ${count === 1 ? "agent" : "agents"}`)
-          : undefined,
-    });
+  // The widget below the editor: one line per shown job, redrawn every second while one runs.
+  let ui: ExtensionContext["ui"] | undefined;
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  function updateWidget() {
+    // The session's UI is gone once it shuts down.
+    if (shutDown) return;
+    const shown = jobList().filter((job) => !job.hidden);
+    const running = shown.some(isActive);
+    if (running && !ticker) ticker = setInterval(updateWidget, 1000);
+    if (!running && ticker) {
+      clearInterval(ticker);
+      ticker = undefined;
+    }
+    ui?.setWidget(
+      WIDGET,
+      shown.length > 0
+        ? (_tui, theme) => ({
+            render: (width: number) =>
+              shown.map((job) => truncateToWidth(widgetLine(job, theme), width)),
+            invalidate: () => undefined,
+          })
+        : undefined,
+      { placement: "belowEditor" },
+    );
   }
 
   // Starts queued jobs while slots are free.
   function pump() {
     for (const job of jobList()) {
-      if (runningCount() >= MAX_CONCURRENCY) return;
+      if (runningCount() >= MAX_CONCURRENCY) break;
       if (job.started) continue;
       job.started = true;
+      job.startedAt = Date.now();
       job.launch().then(() => finish(job));
     }
-    sendRunning();
+    updateWidget();
   }
 
   function finish(job: Job) {
+    job.endedAt = Date.now();
     pump();
     for (const waiter of waiters) waiter.progress?.();
     if (!shutDown) deliver(job);
@@ -628,6 +652,7 @@ export default function (pi: ExtensionAPI) {
   // The flag's value is known only once the session starts; each session gets a new instance.
   pi.on("session_start", (_event, ctx) => {
     if (pi.getFlag(FLAG) !== true) return;
+    if (ctx.hasUI) ui = ctx.ui;
     if (errors.length > 0) ctx.ui.notify(`Subagents: ${errors.join("; ")}`, "warning");
     registerTool();
   });
@@ -635,8 +660,15 @@ export default function (pi: ExtensionAPI) {
   // Quitting and switching sessions end the runs, so none reports to the wrong session.
   pi.on("session_shutdown", () => {
     shutDown = true;
+    if (ticker) clearInterval(ticker);
     for (const job of jobList()) job.controller.abort();
     for (const waiter of waiters) waiter.done();
+  });
+
+  // A user prompt clears ended runs from the widget.
+  pi.on("input", () => {
+    for (const job of jobList()) if (!isActive(job)) job.hidden = true;
+    updateWidget();
   });
 
   // Print mode exits when the parent settles, so it waits for its runs and takes their reports
@@ -693,9 +725,11 @@ export default function (pi: ExtensionAPI) {
             id,
             result: newResult(params.agent, params.task),
             started: false,
+            hidden: false,
             controller: new AbortController(),
             launch: () =>
               runAgent(ctx.cwd, defaults, agent, job.result, job.controller.signal, () => {
+                updateWidget();
                 for (const waiter of waiters) if (waiter.ids.has(id)) waiter.progress?.();
               }),
           };
@@ -770,6 +804,44 @@ export default function (pi: ExtensionAPI) {
       return renderJobs(data, expanded, theme);
     });
   }
+}
+
+const WIDGET_MARKS: Record<JobState, [string, ThemeColor]> = {
+  queued: ["⧗", "muted"],
+  running: ["◆", "accent"],
+  idle: ["✔", "success"],
+  budget: ["◐", "warning"],
+  failed: ["✖", "error"],
+  aborted: ["✖", "error"],
+};
+
+// A widget line: mark, ID and agent, task, turns over the limit, elapsed time, usage, last call.
+function widgetLine(job: Job, theme: Theme): string {
+  const r = job.result;
+  const state = jobState(job);
+  const [mark, color] = WIDGET_MARKS[state];
+  const firstLine = r.task.trim().split("\n")[0];
+  const task =
+    firstLine.length > TASK_PREVIEW ? `${firstLine.slice(0, TASK_PREVIEW - 1)}…` : firstLine;
+  const parts = [
+    theme.fg(color, `${mark} #${job.id} ${r.agent}`),
+    task,
+    theme.fg("muted", state === "budget" ? `${r.limit} limit` : state),
+  ];
+  if (job.startedAt) {
+    parts.push(
+      theme.fg("muted", `${r.usage.turns}/${TURN_LIMIT}`),
+      theme.fg("muted", formatDuration((job.endedAt ?? Date.now()) - job.startedAt)),
+      theme.fg(
+        "dim",
+        `↑${formatTokens(r.usage.input + r.usage.cacheRead)} ↓${formatTokens(r.usage.output)} $${r.usage.cost.toFixed(2)}`,
+      ),
+    );
+  }
+  const last = r.items.findLast((item) => item.type === "toolCall");
+  if (state === "running" && last?.type === "toolCall")
+    parts.push(formatToolCall(last.name, last.args, theme));
+  return parts.join("  ");
 }
 
 // One section per job: state, recent items or error, usage; expanded adds the task and report.

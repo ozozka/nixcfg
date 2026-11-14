@@ -72,6 +72,15 @@ export function reply<T>(text: string, details: T, isError = false) {
 
 const TRAILING_ZERO = /\.0$/;
 
+export function formatDuration(milliseconds: number): string {
+  const seconds = Math.floor(Math.max(0, milliseconds) / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  if (hours > 0) return `${hours}h${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m${seconds % 60}s`;
+  return `${seconds}s`;
+}
+
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count);
   if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;

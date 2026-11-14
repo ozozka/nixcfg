@@ -23,7 +23,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { formatTokens, onStatus, type ThemeColor } from "./lib/shared.ts";
+import { formatDuration, formatTokens, onStatus, type ThemeColor } from "./lib/shared.ts";
 
 // Without a segment's color, the working spinner uses this one.
 const SPINNER_COLOR = "accent";
@@ -42,15 +42,6 @@ type UsageWindow = {
   resetAt: number;
   observedAt: number;
 };
-
-function formatDuration(milliseconds: number): string {
-  const seconds = Math.floor(Math.max(0, milliseconds) / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  if (hours > 0) return `${hours}h${minutes % 60}m`;
-  if (minutes > 0) return `${minutes}m${seconds % 60}s`;
-  return `${seconds}s`;
-}
 
 function readNumber(value: unknown): number | undefined {
   if (typeof value !== "number" && typeof value !== "string") return;
