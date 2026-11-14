@@ -188,7 +188,8 @@ def system_parts(state, cwd):
     return parts
 
 
-def calls_of(header, entries, agent):
+def calls_of(header, entries, agent, uses=None):
+    # uses, when given, counts for each entry ID the requests whose context included it.
     # One record per assistant message with real usage.
     by_id = {e["id"]: e for e in entries}
     # Each entry is measured once; later calls share it.
@@ -231,7 +232,7 @@ def calls_of(header, entries, agent):
                 ]
                 + path[index + 1 :]
             )
-        conversation = []
+        conversation, included = [], []
         for item in path:
             item_message = item.get("message") or {}
             if item_message.get("role") == "system":
@@ -239,13 +240,17 @@ def calls_of(header, entries, agent):
             elif item["id"] in edits:
                 if edits[item["id"]] is not None:
                     conversation += message_parts(item, edits[item["id"]])
+                    included.append(item["id"])
             else:
                 if item["id"] not in measured:
                     measured[item["id"]] = message_parts(item)
                 conversation += measured[item["id"]]
+                included.append(item["id"])
         if not state["sections"]:
             yield {"skipped": True}
             continue
+        if uses is not None:
+            uses.update(included)
 
         parts = defaultdict(int)
         for name, length in system_parts(state, header.get("cwd")) + conversation:
@@ -422,8 +427,8 @@ def collect(since, project):
         if project and project not in header.get("cwd", ""):
             continue
         agent = agents.get(header.get("id"), "subagent") if child else "main"
-        calls = []
-        for call in calls_of(header, entries, agent):
+        calls, uses = [], Counter()
+        for call in calls_of(header, entries, agent, uses):
             if call["skipped"]:
                 skipped += 1
             else:
@@ -432,6 +437,7 @@ def collect(since, project):
             continue
         found.append(session_of(header, calls, agent, entries))
         found[-1]["outcomes"] = outcomes.get(header.get("id"), Counter())
+        found[-1]["reports"] = [] if child else reports_of(entries, calls, uses)
         arguments = {
             block["id"]: block["arguments"]
             for e in entries
@@ -454,7 +460,70 @@ def collect(since, project):
                     "duration": message.get("durationMs"),
                 }
             )
+    # Each parent's subagent runs, with the child sessions' own totals.
+    children = {s["id"]: s for s in found if s["agent"] != "main"}
+    for session in found:
+        session["delegations"] = delegations_of(session["reports"], children)
     return found, results, skipped
+
+
+def reports_of(entries, calls, uses):
+    """The reports subagents returned to this parent: one record per ended child run.
+
+    A report is a subagent wait result or message; its tokens are its bytes at the parent's
+    bytes per token, split evenly when one wait returned several runs, and its re-sent
+    tokens count every later request that carried it.
+    """
+    ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
+    reports = []
+    for entry in entries:
+        message = entry.get("message") or {}
+        if message.get("toolName") == "subagent":
+            details, content = message.get("details") or {}, message.get("content")
+        elif entry.get("customType") == "subagent":
+            details, content = entry.get("details") or {}, entry.get("content")
+        else:
+            continue
+        # Older results have no action; notes are not reports.
+        if details.get("action") not in (None, "wait", "event") or details.get("note"):
+            continue
+        ended = [
+            r
+            for r in details.get("results", [])
+            if r.get("sessionId") and r.get("state") not in ("queued", "running")
+        ]
+        for result in ended:
+            tokens = text_size(content or []) / ratio / len(ended)
+            reports.append(
+                {
+                    "child": result["sessionId"],
+                    "agent": result["agent"],
+                    "task": result.get("task", ""),
+                    "state": result.get("state"),
+                    "tokens": tokens,
+                    "resent": tokens * uses[entry["id"]],
+                }
+            )
+    return reports
+
+
+def delegations_of(reports, children):
+    # One row per child session: its runs' reports summed, with the child's own totals.
+    rows = {}
+    for report in reports:
+        row = rows.setdefault(
+            report["child"],
+            {**report, "runs": 0, "tokens": 0.0, "resent": 0.0},
+        )
+        row["runs"] += 1
+        row["tokens"] += report["tokens"]
+        row["resent"] += report["resent"]
+        row["state"] = report["state"]
+    for row in rows.values():
+        child = children.get(row["child"])
+        row["requests"] = len(child["calls"]) if child else None
+        row["consumed"] = sum(child["consumed"].values()) if child else None
+    return list(rows.values())
 
 
 # Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
@@ -869,6 +938,35 @@ def overview_tab(sessions, calls, skipped, theme):
     return head + chart + models_table
 
 
+def delegation_summary(sessions):
+    # Per agent: the reports its runs returned and what the parents spent carrying them.
+    by_agent = defaultdict(list)
+    for session in sessions:
+        for row in session["delegations"]:
+            by_agent[row["agent"]].append(row)
+    rows = []
+    for agent, items in sorted(by_agent.items()):
+        runs = sum(r["runs"] for r in items)
+        ratios = [r["consumed"] / r["tokens"] for r in items if r["consumed"] and r["tokens"]]
+        rows.append(
+            (
+                [
+                    agent,
+                    len(items),
+                    runs,
+                    num(sum(r["tokens"] for r in items) / runs),
+                    f"{statistics.median(ratios):.0f}x" if ratios else "-",
+                    num(sum(r["resent"] for r in items)),
+                ],
+                "",
+            )
+        )
+    if not rows:
+        return ""
+    headers = ["Agent", "Children", "Runs", "Report/run", "Compression", "Parent re-send"]
+    return "<h2>Delegation</h2>" + table(headers, rows)
+
+
 def tools_tab(sessions, calls, results, theme):
     ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
     main_calls = [c for c in calls if c["agent"] == "main"]
@@ -956,7 +1054,7 @@ def tools_tab(sessions, calls, results, theme):
             *OUTCOMES.values(),
             "Budget stops",
         ]
-        agents = "<h2>Subagents</h2>" + table(headers, rows)
+        agents = "<h2>Subagents</h2>" + table(headers, rows) + delegation_summary(sessions)
 
     rows = [
         (
@@ -1291,6 +1389,41 @@ def time_section(theme, items, average):
     )
 
 
+def compression(row):
+    # Tokens of the child's work per token of report, when both are known.
+    if not (row["consumed"] and row["tokens"]):
+        return "-"
+    return f"{row['consumed'] / row['tokens']:.0f}x"
+
+
+def delegations_table(session):
+    # The subagent runs this session started, with what they cost and what came back.
+    rows = []
+    for row in sorted(session["delegations"], key=lambda r: -(r["consumed"] or 0)):
+        task = row["task"].strip().split("\n")[0]
+        rows.append(
+            (
+                [
+                    row["agent"],
+                    task[:PREVIEW] + ("…" if len(task) > PREVIEW else ""),
+                    row["runs"],
+                    row["requests"] if row["requests"] is not None else "-",
+                    num(row["consumed"]) if row["consumed"] is not None else "-",
+                    num(row["tokens"]),
+                    compression(row),
+                    num(row["resent"]),
+                    OUTCOMES.get(row["state"], "-"),
+                ],
+                "",
+            )
+        )
+    if not rows:
+        return ""
+    headers = ["Agent", "Task", "Runs", "Requests", "Consumed", "Report", "Compression"]
+    headers += ["Parent re-send", "Ending"]
+    return "<h2>Subagents</h2>" + table(headers, rows)
+
+
 def session_average(items, theme):
     calls = [c for s in items for c in s["calls"]]
     consumed = defaultdict(float)
@@ -1359,6 +1492,7 @@ def session_single(session, theme):
         )
         + compactions_table([session], with_session=False)
         + time_section(theme, [session], average=False)
+        + delegations_table(session)
     )
 
 
