@@ -309,6 +309,9 @@ def session_of(header, calls, agent, entries):
         "cost": sum(c["cost"] for c in calls),
         "compaction_list": [compaction_of(e, calls) for e in compactions],
         "spent": spent,
+        # Wall-clock span, for the parallelism of a parent's subagent runs.
+        "start": milliseconds(entries[0]["timestamp"]),
+        "end": milliseconds(entries[-1]["timestamp"]),
         "notes": sum(
             1
             for m in messages
@@ -434,6 +437,8 @@ def collect(since, project):
         found[-1]["child"] = child
         found[-1]["parent"] = parents.get(header.get("id")) if child else None
         found[-1]["task"] = tasks.get(header.get("id"), "") if child else ""
+        # Set below for a child whose parent's reports include it.
+        found[-1]["delegation"] = None
         found[-1]["reports"] = [] if child else reports_of(entries, calls, uses)
         # Tool results, sized at the session's own bytes per token.
         ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
@@ -447,10 +452,14 @@ def collect(since, project):
             for message in (e.get("message") or {} for e in entries)
             if message.get("role") == "toolResult"
         ]
-    # Each parent's subagent runs, with the child sessions' own totals.
-    children = {s["id"]: s for s in found if s["agent"] != "main"}
+    # Each parent's subagent runs, with the child sessions' own totals; each child keeps its
+    # row and parent.
+    children = {s["id"]: s for s in found if s["child"]}
     for session in found:
         session["delegations"] = delegations_of(session["reports"], children)
+        for row in session["delegations"]:
+            if row["child"] in children:
+                children[row["child"]]["delegation"] = {**row, "parent": session}
     return found, skipped
 
 
@@ -508,8 +517,22 @@ def delegations_of(reports, children):
         row["state"] = report["state"]
     for row in rows.values():
         child = children.get(row["child"])
+        row["session"] = child
         row["requests"] = len(child["calls"]) if child else None
         row["consumed"] = sum(child["consumed"].values()) if child else None
+        row["active"] = sum(child["spent"].values()) if child else None
+        # The fixed price of an agent: its startup tokens, sent with every request.
+        startup = sum(startup_of(child)[0].values()) if child else 0
+        row["overhead"] = (
+            startup * len(child["calls"]) / row["consumed"]
+            if child and row["consumed"]
+            else None
+        )
+        # What the parent never had to hold: the child's tool results, less the report.
+        material = sum(r["tokens"] for r in child["results"]) if child else None
+        row["kept"] = max(0, material - row["tokens"]) if material is not None else None
+        row["corrections"] = child["parent_messages"] if child else None
+        row["notes"] = child["notes"] if child else None
     return list(rows.values())
 
 
@@ -859,6 +882,13 @@ def grouped(parts):
 # Tabs
 
 
+def subagent_share(sessions):
+    # Child sessions' share of all consumed tokens.
+    total = sum(sum(s["consumed"].values()) for s in sessions)
+    children = sum(sum(s["consumed"].values()) for s in sessions if s["child"])
+    return pct(children / total) if total else "-"
+
+
 def overview_tab(sessions, calls, skipped, theme):
     prompt = sum(c["prompt"] for c in calls)
     main = [s for s in sessions if s["agent"] == "main"]
@@ -867,6 +897,7 @@ def overview_tab(sessions, calls, skipped, theme):
         [
             ("sessions", len(main)),
             ("subagent runs", len(sessions) - len(main)),
+            ("subagent share", subagent_share(sessions)),
             ("requests", len(calls)),
             ("input", num(prompt)),
             ("output", num(sum(c["output"] for c in calls))),
@@ -1232,32 +1263,120 @@ def compression(row):
     return f"{row['consumed'] / row['tokens']:.0f}x"
 
 
-def delegations_table(session):
-    # The subagent runs this session started, with what they cost and what came back.
-    rows = []
-    for row in sorted(session["delegations"], key=lambda r: -(r["consumed"] or 0)):
+def maybe(value, show):
+    return show(value) if value is not None else "-"
+
+
+def parallelism(rows):
+    # The children's summed active time over the wall-clock span they covered.
+    sessions = [r["session"] for r in rows if r["session"]]
+    span = max((s["end"] for s in sessions), default=0) - min(
+        (s["start"] for s in sessions), default=0
+    )
+    active = sum(sum(s["spent"].values()) for s in sessions)
+    return f"{active / span:.1f}x" if span > 0 else "-"
+
+
+def delegations_section(session):
+    # A parent's subagent runs: figures for all of them, then one row per run.
+    rows = session["delegations"]
+    if not rows:
+        return ""
+    consumed = sum(r["consumed"] or 0 for r in rows)
+    own = sum(session["consumed"].values())
+    head = kpis(
+        [
+            ("subagents", len(rows)),
+            ("subagent share", pct(consumed / (own + consumed)) if consumed else "-"),
+            ("kept out", num(sum(r["kept"] or 0 for r in rows))),
+            ("parent re-send", num(sum(r["resent"] for r in rows))),
+            ("parallelism", parallelism(rows)),
+        ]
+    )
+    lines = []
+    for row in sorted(rows, key=lambda r: -(r["consumed"] or 0)):
         task = row["task"].strip().split("\n")[0]
-        rows.append(
+        lines.append(
             (
                 [
                     row["agent"],
                     task[:PREVIEW] + ("…" if len(task) > PREVIEW else ""),
                     row["runs"],
-                    row["requests"] if row["requests"] is not None else "-",
-                    num(row["consumed"]) if row["consumed"] is not None else "-",
+                    maybe(row["requests"], str),
+                    maybe(row["consumed"], num),
+                    maybe(row["active"], duration),
+                    maybe(row["overhead"], pct),
                     num(row["tokens"]),
                     compression(row),
+                    maybe(row["kept"], num),
                     num(row["resent"]),
+                    maybe(row["corrections"], str),
+                    maybe(row["notes"], str),
                     OUTCOMES.get(row["state"], "-"),
                 ],
                 "",
             )
         )
+    headers = ["Agent", "Task", "Runs", "Requests", "Consumed", "Active", "Overhead"]
+    headers += [
+        "Report",
+        "Compression",
+        "Kept out",
+        "Re-send",
+        "Corrections",
+        "Notes",
+        "Ending",
+    ]
+    return "<h2>Subagents</h2>" + head + table(headers, lines)
+
+
+def delegation_section(session):
+    # A child's run as its parent saw it: who started it, what it returned, how it ended.
+    row = session["delegation"]
+    if not row:
+        return ""
+    parent = row["parent"]
+    task = row["task"].strip().split("\n")[0]
+    return (
+        "<h2>Delegation</h2>"
+        + f"<p>{esc(session_label(parent))}<br>{esc(task)}</p>"
+        + kpis(
+            [
+                ("runs", row["runs"]),
+                ("report", num(row["tokens"])),
+                ("compression", compression(row)),
+                ("kept out", maybe(row["kept"], num)),
+                ("parent re-send", num(row["resent"])),
+                ("overhead", maybe(row["overhead"], pct)),
+                ("corrections", maybe(row["corrections"], str)),
+                ("notes", maybe(row["notes"], str)),
+                ("ending", OUTCOMES.get(row["state"], "-")),
+            ]
+        )
+    )
+
+
+def efficiency_section(items):
+    # An agent type's runs: how much each returned token stands for, and how runs went.
+    rows = [s["delegation"] for s in items if s["delegation"]]
     if not rows:
         return ""
-    headers = ["Agent", "Task", "Runs", "Requests", "Consumed", "Report", "Compression"]
-    headers += ["Parent re-send", "Ending"]
-    return "<h2>Subagents</h2>" + table(headers, rows)
+    ratios = [r["consumed"] / r["tokens"] for r in rows if r["consumed"] and r["tokens"]]
+    overheads = [r["overhead"] for r in rows if r["overhead"] is not None]
+    kept = [r["kept"] for r in rows if r["kept"] is not None]
+    ends = sum((s["outcomes"] for s in items), Counter())
+    runs = sum(r["runs"] for r in rows)
+    return "<h2>Efficiency</h2>" + kpis(
+        [
+            ("linked runs", runs),
+            ("compression", f"{statistics.median(ratios):.0f}x" if ratios else "-"),
+            ("overhead", pct(statistics.mean(overheads)) if overheads else "-"),
+            ("kept out/run", num(sum(kept) / runs) if kept else "-"),
+            ("budget stops", pct(ends["budget"] / sum(ends.values())) if ends else "-"),
+            ("corrections/run", f"{sum(r['corrections'] or 0 for r in rows) / runs:.1f}"),
+            ("notes/run", f"{sum(r['notes'] or 0 for r in rows) / runs:.1f}"),
+        ]
+    )
 
 
 def session_average(items, theme):
@@ -1302,6 +1421,7 @@ def session_average(items, theme):
         + tools_table(items, average=True)
         + time_section(theme, items)
         + compactions_summary(items)
+        + efficiency_section(items)
         + growth
     )
 
@@ -1330,7 +1450,8 @@ def session_single(session, theme):
         + tools_table([session], average=False)
         + time_section(theme, [session])
         + compactions_summary([session])
-        + delegations_table(session)
+        + delegations_section(session)
+        + delegation_section(session)
     )
 
 
