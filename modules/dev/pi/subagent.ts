@@ -67,7 +67,9 @@ const CHILD_EXCLUDED_TOOLS = ["question"];
 const SESSION_DIR = join(getAgentDir(), "subagent-sessions");
 // Flags owned by other extensions that children take from the parent's command line.
 const FORWARDED_FLAGS = ["--docs"];
-const MAX_CONCURRENCY = 4;
+const MAX_CONCURRENCY = 6;
+// Parallel runs the guidelines advise; more cost tokens and attention for little gain.
+const ADVISED_PARALLEL = "2-3";
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const MESSAGE_TYPE = "subagent";
@@ -793,7 +795,7 @@ export default function (pi: ExtensionAPI) {
       exposure: "model-only",
       description: [
         "Delegate tasks to subagents: separate agents with isolated contexts that see only their task, not this conversation. Every subagent runs in the background.",
-        "- start { agent, task }: starts one subagent and returns its ID at once. For parallel work, call start several times in one turn.",
+        `- start { agent, task }: starts one subagent and returns its ID at once. For parallel work, call start several times in one turn; at most ${MAX_CONCURRENCY} run at once and the rest wait in a queue.`,
         "- send { to, text }: messages a subagent. A running one sees it before its next model call; one that ended its turn continues its session with it.",
         '- wait { ids?, until? }: waits for subagents (default: all running) and returns their reports; until "any" (default) returns at the first ended run, "all" when every one has ended. A note from a subagent always ends the wait.',
         "- stop { ids? }: stops subagents (default: all running); each returns its last report.",
@@ -801,6 +803,7 @@ export default function (pi: ExtensionAPI) {
         `Agents:\n${[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`).join("\n")}`,
       ].join("\n"),
       promptGuidelines: [
+        `Run ${ADVISED_PARALLEL} subagents at a time, each with a distinct, independent task; split work further only when the parts are truly independent.`,
         "Write each subagent task as a complete brief, since the subagent has not seen this conversation: the goal, the relevant files, the decisions already made, and what to report back.",
         "After subagent start, call subagent wait when your next step needs the result; otherwise continue with independent work or end your turn, since each report arrives by itself. Never redo work you delegated.",
         "Answer a subagent note with subagent send only to override the decision it reports.",
