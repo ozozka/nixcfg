@@ -390,8 +390,6 @@ TABS = {"overview": "Overview", "startup": "Startup", "session": "Session", "too
 SESSION_LIMIT = 30
 # Parts listed per group in session tables, by consumption.
 SESSION_PARTS = 8
-# Parts compared in the context vs consumption chart, by consumption.
-TOP_PAIRS = 15
 # Chart groups and their theme colors, in stacking order; parts map to them by prefix.
 CHART_GROUPS = {
     "tool results": "s",
@@ -414,6 +412,8 @@ STARTUP_GROUPS = {
     "system": ("system prompt", "m"),
 }
 BAR_WIDTH = 0.72
+# Above this many columns, stacked bars touch, so dense sessions read as a stepped area.
+DENSE_COLUMNS = 60
 TICK_COUNT = 8
 
 # Tabs follow the URL hash; a select shows the panel named by its value.
@@ -653,6 +653,57 @@ def combo_chart(theme, labels, bars, lines, xlabel="", points=False, axis="own",
             loc="upper left",
             bbox_to_anchor=(0, 1),
             bbox_transform=base.transAxes,
+            framealpha=1,
+        )
+        legend.set_in_layout(False)
+
+    return render(theme, draw)
+
+
+def stacked_chart(theme, labels, columns, ylabel, xlabel, marks=(), groups=CHART_GROUPS):
+    """Columns stacked by group, in group order from the bottom: each column's height is its
+    total, each color a group's tokens, and a group's colored area over all columns its sum.
+
+    columns: group name -> tokens, one per label; groups: group name -> theme color key.
+    marks: x positions drawn as dashed vertical rules.
+    """
+    colors = theme["colors"]
+
+    def draw(figure):
+        axes = figure.subplots()
+        positions = range(len(columns))
+        dense = len(columns) > DENSE_COLUMNS
+        width = 1 if dense else BAR_WIDTH
+        bottom = [0.0] * len(columns)
+        handles = []
+        for group, key in groups.items():
+            values = [column.get(group, 0) for column in columns]
+            handles.append(
+                axes.bar(
+                    positions,
+                    values,
+                    width=width,
+                    bottom=bottom,
+                    color=f"#{colors[key]}",
+                    # A hairline edge in the bar's color closes the seams between dense bars.
+                    edgecolor=f"#{colors[key]}" if dense else "none",
+                    linewidth=0.5 if dense else 0,
+                    label=group,
+                )
+            )
+            bottom = [low + value for low, value in zip(bottom, values, strict=True)]
+        axes.set_ylim(bottom=0)
+        axes.set_ylabel(ylabel)
+        compact_ticks(axes)
+        for mark in marks:
+            axes.axvline(mark, color=f"#{colors['f']}", linestyle="--", linewidth=1)
+        x_labels(axes, labels)
+        axes.set_xlabel(xlabel)
+        legend = figure.legend(
+            handles=handles[::-1],
+            loc="upper left",
+            bbox_to_anchor=(0, 1),
+            bbox_transform=axes.transAxes,
             framealpha=1,
         )
         legend.set_in_layout(False)
@@ -1092,36 +1143,6 @@ def session_table(theme, context, consumption, sizes, context_label):
     return table(["Part", context_label, "Consumption", "Ratio", "KiB"], rows)
 
 
-def pairs_chart(theme, context, consumption):
-    # Context share against consumption share for the most consumed parts.
-    colors = theme["colors"]
-    names = sorted(consumption, key=lambda n: -consumption[n])[:TOP_PAIRS][::-1]
-
-    def draw(figure):
-        axes = figure.subplots()
-        rows = range(len(names))
-        height = BAR_WIDTH / 2
-        axes.barh(
-            [r + height / 2 for r in rows],
-            [100 * context.get(n, 0) for n in names],
-            height=height,
-            color=f"#{colors['m']}",
-            label="Context %",
-        )
-        axes.barh(
-            [r - height / 2 for r in rows],
-            [100 * consumption[n] for n in names],
-            height=height,
-            color=f"#{colors['p']}",
-            label="Consumption %",
-        )
-        axes.set_yticks(list(rows), [n.replace(":", " ") for n in names])
-        axes.set_xlabel("Share %")
-        axes.legend(loc="lower right", framealpha=1)
-
-    return render(theme, draw, size=(16, 0.4 * len(names) + 1))
-
-
 def session_tab(sessions, theme):
     ordered = sorted(sessions, key=lambda s: s["time"])
     by_agent = defaultdict(list)
@@ -1146,16 +1167,11 @@ def session_tab(sessions, theme):
                 ("avg cost", f"${statistics.mean(s['cost'] for s in items):.2f}"),
             ]
         )
-        columns = [grouped(s["consumed"]) for s in items]
-        labels = [s["time"][:10] for s in items]
-        history = combo_chart(
+        history = stacked_chart(
             theme,
-            labels,
-            ("Consumed tokens", [sum(s["consumed"].values()) for s in items]),
-            [
-                ("Peak context", [s["peak"] for s in items], "s", "Peak context"),
-                ("Requests", [len(s["calls"]) for s in items], "p", None),
-            ],
+            [s["time"][:10] for s in items],
+            [grouped(s["consumed"]) for s in items],
+            "Consumed tokens",
             "Session",
         )
         # Context size at each call number, averaged over the sessions that reached it.
@@ -1183,7 +1199,7 @@ def session_tab(sessions, theme):
                 f"sessions-{agent}",
                 f"{agent} · {len(items)} sessions",
                 head
-                + '<div class="split">'
+                + history
                 + session_table(
                     theme,
                     mean_shares(calls),
@@ -1191,9 +1207,6 @@ def session_tab(sessions, theme):
                     mean_sizes(calls),
                     "Context",
                 )
-                + composition_chart(theme, columns)
-                + "</div>"
-                + history
                 + growth,
             )
         )
@@ -1216,17 +1229,12 @@ def session_tab(sessions, theme):
                 ("compactions", session["compactions"]),
             ]
         )
-        per_call = [grouped(c["parts"]) for c in calls]
-        tokens = combo_chart(
+        tokens = stacked_chart(
             theme,
             [str(c["index"] + 1) for c in calls],
-            ("Context tokens", [c["prompt"] for c in calls]),
-            [
-                (group, [column.get(group, 0) for column in per_call], color, None)
-                for group, color in CHART_GROUPS.items()
-            ],
+            [grouped(c["parts"]) for c in calls],
+            "Context tokens",
             "Request",
-            axis="bars",
             marks=session["marks"],
         )
         label = (
@@ -1238,14 +1246,10 @@ def session_tab(sessions, theme):
                 f"session-{session['id']}",
                 label,
                 head
-                + '<div class="split">'
+                + tokens
                 + session_table(
                     theme, context, consumption, merged(peak["sizes"]), "Peak context"
-                )
-                + composition_chart(theme, per_call)
-                + "</div>"
-                + tokens
-                + pairs_chart(theme, context, consumption),
+                ),
             )
         )
     return "<h2>Average</h2>" + average + "<h2>Selected</h2>" + selector(panels)
