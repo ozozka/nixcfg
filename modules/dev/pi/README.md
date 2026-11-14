@@ -93,8 +93,13 @@ tokens and cost, current tool call) until the next prompt after it ends, and
 `pi-stats [--since YYYY-MM-DD] [--project TEXT] [--out FILE]` rebuilds every model request from
 the session files and writes `/tmp/pi-stats.html`, styled with the system theme. Tabs:
 
-- Overview: totals.
-- Startup: what a new session loads, per part, averaged and for the latest sessions.
-- Session: what consumes tokens over whole sessions, comparing context share with consumption.
-- Tools: tool results and calls, the largest results, and per subagent its requests, cost,
-  notes, parent messages, and how runs ended, with the budget-stop rate.
+- Overview: totals, the subagent share of all tokens, and tokens per day.
+- Startup: what a new session loads, per part.
+- Session: context and consumption per part, tools (calls, errors, result tokens, run time),
+  where time goes, and compaction summaries.
+
+Startup and Session share one dropdown, synced between them: an average per agent, then every
+session newest first with the subagent runs it started nested under it, then subagent runs whose
+parent is missing. A parent shows its runs (cost, report, compression, kept out, parent re-send,
+ending, parallelism), a run shows its delegation, and an agent's average shows its efficiency
+(median compression, startup overhead, budget stops).
