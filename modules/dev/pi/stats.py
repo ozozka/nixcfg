@@ -283,6 +283,9 @@ def calls_of(header, entries, agent, uses=None):
             "bytes": total,
             "sizes": dict(parts),
             "output": usage.get("output", 0),
+            # Pi's time for the whole response, from sending the request; None before Pi
+            # recorded it.
+            "duration": message.get("durationMs"),
             "cache": usage.get("cacheRead", 0),
             "cost": (usage.get("cost") or {}).get("total", 0),
             "tools": set(state["tools"]),
@@ -944,6 +947,11 @@ def overview(sessions, calls, skipped, theme):
     rows = []
     for model, items in sorted(models.items(), key=lambda m: -len(m[1])):
         tokens = sum(c["prompt"] for c in items)
+        # Output tokens over response time, for the responses with a duration; it includes
+        # the time before the first token, so it compares models rather than measuring raw
+        # generation speed.
+        timed = [c for c in items if c["duration"]]
+        seconds = sum(c["duration"] for c in timed) / 1000
         rows.append(
             (
                 [
@@ -953,11 +961,13 @@ def overview(sessions, calls, skipped, theme):
                     num(sum(c["output"] for c in items)),
                     f"${sum(c['cost'] for c in items):.2f}",
                     f"{100 * sum(c['cache'] for c in items) / tokens:.0f}%",
+                    f"{sum(c['output'] for c in timed) / seconds:.1f}" if seconds else "-",
                 ],
                 "",
             )
         )
-    models_table = table(["Model", "Requests", "Input", "Output", "Cost", "Cache"], rows)
+    headers = ["Model", "Requests", "Input", "Output", "Cost", "Cache", "Tok/s"]
+    models_table = table(headers, rows)
     return head + chart + models_table
 
 
