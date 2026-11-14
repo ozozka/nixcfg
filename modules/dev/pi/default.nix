@@ -61,7 +61,7 @@ in
         };
 
       "settings.json" = settingsFormat.generate "settings.json" {
-        lastChangelogVersion = "1.5.0";
+        lastChangelogVersion = "1.5.2";
 
         defaultProvider = "openai-codex";
         defaultModel = "gpt-6.1-sol";
