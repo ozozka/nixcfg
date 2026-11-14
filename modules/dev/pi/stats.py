@@ -12,7 +12,10 @@ Output tokens are split over the response's own text, thinking, and tool calls t
 reported reasoning tokens go to thinking. A session's consumption is the sum of its calls'
 prompt and output parts, so a part sent with every call weighs more than its context share.
 
-Subagent sessions live in subagent-sessions/; parent tool results record their session IDs.
+Subagent sessions live in subagent-sessions/; the parent's subagent results and messages
+record their session IDs, and how each run of a child ended. A child's notes are its
+send_message calls; parent messages (steers and continuations) are its prompts that start
+with PARENT_MESSAGE.
 THEME is a JSON file of colors, fonts, and sizes supplied by Nix.
 """
 
@@ -23,7 +26,7 @@ import json
 import os
 import re
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
 from functools import cache
 from pathlib import Path
 
@@ -35,6 +38,11 @@ CONTEXT_FILE = re.compile(
 )
 # Context files Pi loads itself; the rest of project_context is added by docs.ts.
 PI_CONTEXT_FILES = {"AGENTS.md", "CLAUDE.md"}
+# How subagent.ts marks the parent's messages to a child, and the child's note tool.
+PARENT_MESSAGE = "Message from the parent:"
+NOTE_TOOL = "send_message"
+# Run endings in subagent.ts, as labeled in the report.
+OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "Stopped"}
 TOP_PARTS = 15
 TOP_RESULTS = 15
 GROWTH_MIN_SESSIONS = 3
@@ -74,6 +82,12 @@ def text_size(content):
         IMAGE_BYTES if block.get("type") == "image" else size(block.get("text", ""))
         for block in content
     )
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    return "".join(block.get("text", "") for block in content or [])
 
 
 def message_parts(entry, content=None):
@@ -272,6 +286,7 @@ def session_of(header, calls, agent, entries):
             usage.get(key, 0) for key in ("input", "cacheRead", "cacheWrite", "output")
         )
     peak = max(calls, key=lambda c: c["prompt"])
+    messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
     return {
         "id": header.get("id"),
         "agent": agent,
@@ -288,6 +303,20 @@ def session_of(header, calls, agent, entries):
             for e in compactions
         ],
         "cost": sum(c["cost"] for c in calls),
+        "notes": sum(
+            1
+            for m in messages
+            if m.get("role") == "assistant"
+            for block in m.get("content") or []
+            if block.get("type") == "toolCall" and block.get("name") == NOTE_TOOL
+        ),
+        "parent_messages": sum(
+            1
+            for m in messages
+            if m.get("role") == "user" and text_of(m.get("content")).startswith(PARENT_MESSAGE)
+        ),
+        # Filled in by collect from the parent's records.
+        "outcomes": Counter(),
     }
 
 
@@ -295,15 +324,24 @@ def collect(since, project):
     main_files = sorted(AGENT_DIR.glob("sessions/*/*.jsonl"))
     child_files = sorted(AGENT_DIR.glob("subagent-sessions/*.jsonl"))
     sessions = [(*read_session(path), False) for path in main_files]
-    # Child session ID -> agent name, from the parents' subagent results.
-    agents = {}
+    # Child session ID -> agent name and run endings, from the parents' subagent results and
+    # messages. A run's end is delivered once, in a wait result or a message.
+    agents, outcomes = {}, defaultdict(Counter)
     for _, entries, _ in sessions:
         for entry in entries:
             message = entry.get("message") or {}
             if message.get("toolName") == "subagent":
-                for result in (message.get("details") or {}).get("results", []):
-                    if result.get("sessionId"):
-                        agents[result["sessionId"]] = result["agent"]
+                details = message.get("details") or {}
+            elif entry.get("customType") == "subagent":
+                details = entry.get("details") or {}
+            else:
+                continue
+            ends = details.get("action") in ("wait", "event") and details.get("note") is None
+            for result in details.get("results", []):
+                if result.get("sessionId"):
+                    agents[result["sessionId"]] = result["agent"]
+                    if ends and result.get("state") in OUTCOMES:
+                        outcomes[result["sessionId"]][result["state"]] += 1
     sessions += [(*read_session(path), True) for path in child_files]
 
     found, results, skipped = [], [], 0
@@ -320,6 +358,7 @@ def collect(since, project):
         if not calls or (since and calls[0]["time"] < since):
             continue
         found.append(session_of(header, calls, agent, entries))
+        found[-1]["outcomes"] = outcomes.get(header.get("id"), Counter())
         arguments = {
             block["id"]: block["arguments"]
             for e in entries
@@ -768,6 +807,8 @@ def tools_tab(sessions, calls, results, theme):
         rows = []
         for agent, items in sorted(runs.items()):
             flat = [c for s in items for c in s["calls"]]
+            ends = sum((s["outcomes"] for s in items), Counter())
+            total = sum(ends.values())
             rows.append(
                 (
                     [
@@ -778,11 +819,27 @@ def tools_tab(sessions, calls, results, theme):
                         num(sum(c["prompt"] for c in flat)),
                         num(sum(c["output"] for c in flat)),
                         f"${sum(s['cost'] for s in items):.2f}",
+                        sum(s["notes"] for s in items),
+                        sum(s["parent_messages"] for s in items),
+                        *(ends[state] for state in OUTCOMES),
+                        pct(ends["budget"] / total) if total else "",
                     ],
                     "",
                 )
             )
-        headers = ["Agent", "Runs", "Requests/run", "Startup", "Input", "Output", "Cost"]
+        headers = [
+            "Agent",
+            "Sessions",
+            "Requests/session",
+            "Startup",
+            "Input",
+            "Output",
+            "Cost",
+            "Notes",
+            "Parent messages",
+            *OUTCOMES.values(),
+            "Budget stops",
+        ]
         agents = "<h2>Subagents</h2>" + table(headers, rows)
 
     rows = [
