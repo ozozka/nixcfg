@@ -27,6 +27,7 @@ import os
 import re
 import statistics
 from collections import Counter, defaultdict
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 
@@ -45,6 +46,16 @@ NOTE_TOOL = "send_message"
 OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "Stopped"}
 TOP_RESULTS = 15
 GROWTH_MIN_SESSIONS = 3
+# Gaps before a prompt longer than this are breaks, not time spent on the session.
+BREAK_MS = 30 * 60 * 1000
+# Where a session's time goes, and the theme colors of the time bar.
+TIME_PARTS = {
+    "model": "p",
+    "tools": "s",
+    "subagent waits": "f",
+    "compaction": "m",
+    "you": "o",
+}
 PREVIEW = 80
 # Part groups in display order, by the prefix of their part names.
 GROUPS = {
@@ -275,6 +286,7 @@ def session_of(header, calls, agent, entries):
         consumed["conversation:compaction runs"] += run_tokens(compaction)
     peak = max(calls, key=lambda c: c["prompt"])
     messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
+    spent, tool_times = timing(entries)
     return {
         "id": header.get("id"),
         "agent": agent,
@@ -292,6 +304,8 @@ def session_of(header, calls, agent, entries):
         ],
         "cost": sum(c["cost"] for c in calls),
         "compaction_list": [compaction_of(e, calls) for e in compactions],
+        "spent": spent,
+        "tool_times": tool_times,
         "notes": sum(
             1
             for m in messages
@@ -307,6 +321,53 @@ def session_of(header, calls, agent, entries):
         # Filled in by collect from the parent's records.
         "outcomes": Counter(),
     }
+
+
+def milliseconds(stamp):
+    return datetime.fromisoformat(stamp).timestamp() * 1000
+
+
+def timing(entries):
+    """Milliseconds per TIME_PARTS category, and each tool's call durations.
+
+    Model time is each response's durationMs; a turn's tool time is its longest tool result,
+    since tools of one turn run in parallel, and counts as subagent waits when it includes a
+    subagent wait. Compaction runs from the entry before it; your time runs from the end of
+    the previous run to the next prompt, without gaps longer than BREAK_MS, plus the time
+    you take to answer the question tool.
+    """
+    spent, tools, calls = defaultdict(float), defaultdict(list), {}
+    previous, turn, waited = None, 0.0, False
+    for entry in entries:
+        stamp = milliseconds(entry["timestamp"])
+        message = entry.get("message") or {}
+        role = message.get("role")
+        if role in ("user", "assistant"):
+            spent["subagent waits" if waited else "tools"] += turn
+            turn, waited = 0.0, False
+        if entry["type"] == "compaction" and previous is not None:
+            spent["compaction"] += stamp - previous
+        elif role == "user" and previous is not None and stamp - previous <= BREAK_MS:
+            spent["you"] += stamp - previous
+        elif role == "assistant":
+            spent["model"] += message.get("durationMs") or 0
+            for block in message.get("content") or []:
+                if block.get("type") == "toolCall":
+                    calls[block["id"]] = (block["name"], block.get("arguments") or {})
+        elif role == "toolResult":
+            duration = message.get("durationMs") or 0
+            name, args = calls.get(message.get("toolCallId"), (message.get("toolName"), {}))
+            if name == "subagent" and args.get("action"):
+                name = f"subagent {args['action']}"
+            tools[name].append(duration)
+            if name == "question":
+                spent["you"] += duration
+            else:
+                turn = max(turn, duration)
+                waited |= name == "subagent wait"
+        previous = stamp
+    spent["subagent waits" if waited else "tools"] += turn
+    return dict(spent), dict(tools)
 
 
 def run_tokens(compaction):
@@ -390,6 +451,7 @@ def collect(since, project):
                     "cwd": header.get("cwd", ""),
                     "time": entry["timestamp"],
                     "args": json.dumps(arguments.get(message.get("toolCallId"), {})),
+                    "duration": message.get("durationMs"),
                 }
             )
     return found, results, skipped
@@ -466,6 +528,15 @@ def num(value):
     if value >= 1e4:
         return f"{value / 1e3:.0f}k"
     return f"{value:,.0f}"
+
+
+def duration(ms):
+    seconds = ms / 1000
+    if seconds >= 3600:
+        return f"{seconds // 3600:.0f}h{seconds % 3600 // 60:02.0f}m"
+    if seconds >= 60:
+        return f"{seconds // 60:.0f}m{seconds % 60:02.0f}s"
+    return f"{seconds:.1f}s"
 
 
 def kib(value):
@@ -812,6 +883,7 @@ def tools_tab(sessions, calls, results, theme):
     for tool in order:
         items = by_tool.get(tool, [])
         sizes = [r["bytes"] / ratio for r in items] or [0]
+        times = [r["duration"] for r in items if r["duration"] is not None]
         totals.append(sum(sizes))
         counts.append(len(items))
         rows.append(
@@ -825,11 +897,14 @@ def tools_tab(sessions, calls, results, theme):
                     num(max(sizes)),
                     num(sum(sizes)),
                     kib(sum(r["bytes"] for r in items)),
+                    duration(sum(times)) if times else "-",
+                    duration(statistics.mean(times)) if times else "-",
                 ],
                 "" if items else "flag",
             )
         )
-    tools = table(["Tool", "Calls", "Errors", "Avg", "P90", "Max", "Total", "KiB"], rows)
+    headers = ["Tool", "Calls", "Errors", "Avg", "P90", "Max", "Total", "KiB"]
+    tools = table([*headers, "Time", "Avg time"], rows)
     chart = combo_chart(
         theme,
         order,
@@ -1103,6 +1178,7 @@ def session_kpis(items, average):
             ("output", num(mean([sum(c["output"] for c in s["calls"]) for s in items]))),
             ("cost", f"${mean([s['cost'] for s in items]):.2f}"),
             ("compactions", f"{round(mean([s['compactions'] for s in items]), 1):g}"),
+            ("active time", duration(mean([sum(s["spent"].values()) for s in items]))),
         ]
     )
 
@@ -1148,6 +1224,73 @@ def compactions_table(items, with_session):
     return "<h2>Compactions</h2>" + table((["Session"] if with_session else []) + headers, rows)
 
 
+def time_bar(theme, spent):
+    # One horizontal bar of the TIME_PARTS categories, in milliseconds, with a legend.
+    colors = theme["colors"]
+
+    def draw(figure):
+        axes = figure.subplots()
+        left, handles = 0, []
+        for part, key in TIME_PARTS.items():
+            value = spent.get(part, 0) / 60000
+            handles.append(
+                axes.barh(
+                    0,
+                    value,
+                    left=left,
+                    color=f"#{colors[key]}",
+                    edgecolor=f"#{colors['m']}",
+                    linewidth=1,
+                    label=part,
+                )
+            )
+            left += value
+        axes.set_xlim(0, left or 1)
+        axes.set_yticks([])
+        axes.set_xlabel("Minutes")
+        figure.legend(handles=handles, loc="outside lower center", ncols=len(handles))
+
+    return render(theme, draw, size=(16, 2))
+
+
+def time_section(theme, items, average):
+    # Time per category as a bar, then time per tool; averages show means per session.
+    def mean(values):
+        return sum(values) / len(items)
+
+    spent = {part: mean([s["spent"].get(part, 0) for s in items]) for part in TIME_PARTS}
+    if not any(spent.values()):
+        return ""
+    names = {name for s in items for name in s["tool_times"]}
+    rows = []
+    for name in names:
+        every = [d for s in items for d in s["tool_times"].get(name, [])]
+        rows.append(
+            (
+                [
+                    name,
+                    f"{mean([len(s['tool_times'].get(name, [])) for s in items]):.1f}"
+                    if average
+                    else len(every),
+                    duration(mean([sum(s["tool_times"].get(name, [])) for s in items])),
+                    duration(statistics.mean(every)) if every else "-",
+                    duration(max(every, default=0)),
+                ],
+                "",
+            )
+        )
+    rows.sort(
+        key=lambda row: -sum(d for s in items for d in s["tool_times"].get(row[0][0], []))
+    )
+    calls = "Calls/session" if average else "Calls"
+    spent_label = "Time/session" if average else "Time"
+    return (
+        "<h2>Time</h2>"
+        + time_bar(theme, spent)
+        + table(["Tool", calls, spent_label, "Avg", "Max"], rows)
+    )
+
+
 def session_average(items, theme):
     calls = [c for s in items for c in s["calls"]]
     consumed = defaultdict(float)
@@ -1188,6 +1331,7 @@ def session_average(items, theme):
             theme, mean_shares(calls), shares(consumed), mean_sizes(calls), "Context"
         )
         + compactions_table(items, with_session=True)
+        + time_section(theme, items, average=True)
         + growth
     )
 
@@ -1214,6 +1358,7 @@ def session_single(session, theme):
             "Peak context",
         )
         + compactions_table([session], with_session=False)
+        + time_section(theme, [session], average=False)
     )
 
 
