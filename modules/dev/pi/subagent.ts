@@ -7,10 +7,10 @@
  * system prompt. Without a model, an agent inherits the session's model and thinking level;
  * without tools, it gets the default tools. Project-local agents are not loaded.
  *
- * Children run with PI_SUBAGENT set to their agent name and do not get this tool, so delegation
- * stays one level deep. Each child keeps its session in subagent-sessions/ under Pi's agent
- * directory; the result details record its session ID, linking it to the parent's tool call.
- * Children inherit the parent's FORWARDED_FLAGS, so a `wpi` child loads the project docs too.
+ * Children run without CHILD_EXCLUDED_TOOLS: they have no user to ask, and delegation stays one
+ * level deep. Each child keeps its session in subagent-sessions/ under Pi's agent directory;
+ * the result details record its session ID, linking it to the parent's tool call. Children
+ * inherit the parent's FORWARDED_FLAGS, so a `wpi` child loads the project docs too.
  * While children run, their count is shown in the status line (status.ts). Vendored from the
  * Pi subagent example.
  */
@@ -44,7 +44,8 @@ import {
   type ThinkingLevel,
 } from "./lib/shared.ts";
 
-const CHILD_ENV = "PI_SUBAGENT";
+// Tools a child never gets: it has no user to ask, and delegation stays one level deep.
+const CHILD_EXCLUDED_TOOLS = ["question", "subagent"];
 const SESSION_DIR = join(getAgentDir(), "subagent-sessions");
 // Flags owned by other extensions that children take from the parent's command line.
 const FORWARDED_FLAGS = ["--docs"];
@@ -302,6 +303,8 @@ function piArgs(
     SESSION_DIR,
     "--session-id",
     sessionId,
+    "--exclude-tools",
+    CHILD_EXCLUDED_TOOLS.join(","),
     ...FORWARDED_FLAGS.filter((flag) => process.argv.includes(flag)),
   ];
   const model = agent.model ?? defaults.model;
@@ -336,7 +339,6 @@ async function runAgent(
     const args = [process.argv[1], ...piArgs(agent, defaults, run.task, result.sessionId)];
     const proc = spawn(process.execPath, args, {
       cwd,
-      env: { ...process.env, [CHILD_ENV]: run.agent },
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -417,8 +419,6 @@ const SubagentParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
-  if (process.env[CHILD_ENV]) return;
-
   const { definitions: agents, errors } = loadDefinitions("agents", parseAgent);
   // Children running now, across parallel tasks and concurrent tool calls.
   let runningChildren = 0;
