@@ -30,8 +30,12 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from functools import cache
-from itertools import pairwise
+from itertools import count, pairwise
 from pathlib import Path
+
+from matplotlib import cycler, rc_context
+from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter
 
 AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
 # Image blocks carry base64 data; count each as a fixed size instead.
@@ -349,8 +353,6 @@ def session_of(header, calls, agent, entries):
             for m in messages
             if m.get("role") == "user" and text_of(m.get("content")).startswith(PARENT_MESSAGE)
         ),
-        # Filled in by collect from the parent's records.
-        "outcomes": Counter(),
     }
 
 
@@ -478,17 +480,22 @@ def collect(since, project):
         calls = list(calls_of(header, entries, uses))
         if not calls or (since and calls[0]["time"] < since):
             continue
-        found.append(session_of(header, calls, agent, entries))
-        found[-1]["outcomes"] = outcomes.get(header.get("id"), Counter())
-        found[-1]["child"] = child
-        found[-1]["parent"] = parents.get(header.get("id")) if child else None
-        found[-1]["task"] = tasks.get(header.get("id"), "") if child else ""
-        # Set below for a child whose parent's reports include it.
-        found[-1]["delegation"] = None
-        found[-1]["reports"] = [] if child else reports_of(entries, found[-1]["ratio"], uses)
-        found[-1]["counts"], once = occurrences(found[-1], entries)
+        session = session_of(header, calls, agent, entries)
+        session_id = header.get("id")
+        session.update(
+            # How its runs ended, as its parent recorded them.
+            outcomes=outcomes.get(session_id, Counter()),
+            child=child,
+            parent=parents.get(session_id) if child else None,
+            task=tasks.get(session_id, "") if child else "",
+            # Set below for a child whose parent's reports include it.
+            delegation=None,
+            reports=[] if child else reports_of(entries, session["ratio"], uses),
+        )
+        session["counts"], once = occurrences(session, entries)
         # The tool results the session read, each counted once, for delegation's kept out.
-        found[-1]["material"] = sum(t for n, t in once.items() if n.startswith("result:"))
+        session["material"] = sum(t for n, t in once.items() if n.startswith("result:"))
+        found.append(session)
     # Each parent's subagent runs, with the child sessions' own totals; each child keeps its
     # row and parent.
     children = {s["id"]: s for s in found if s["child"]}
@@ -676,8 +683,8 @@ def pct(value):
     return f"{100 * value:.1f}%"
 
 
-def group_of(part):
-    return section_of(part)[0]
+class Markup(str):
+    pass
 
 
 def swatch(color_key, theme):
@@ -700,10 +707,6 @@ def table(headers, rows, cls=""):
         for row in rows
     )
     return f'<table class="{cls}"><tr>{head}</tr>{body}</table>'
-
-
-class Markup(str):
-    pass
 
 
 def cell_html(value):
@@ -756,8 +759,6 @@ select {{ background:var(--o); color:var(--f); border:0; padding:{dim["t"] * 2}p
 
 
 def chart_style(theme):
-    from matplotlib import cycler
-
     c = {key: f"#{value}" for key, value in theme["colors"].items()}
     small = theme["fontSize"]["s"]
     return {
@@ -786,9 +787,6 @@ def chart_style(theme):
 
 def render(theme, draw, size=None):
     # Runs draw(figure) under the theme style and returns the SVG markup.
-    from matplotlib import rc_context
-    from matplotlib.figure import Figure
-
     with rc_context(chart_style(theme)):
         figure = Figure(layout="constrained", figsize=size)
         draw(figure)
@@ -802,8 +800,6 @@ def render(theme, draw, size=None):
 
 
 def compact_ticks(axes):
-    from matplotlib.ticker import FuncFormatter
-
     axes.yaxis.set_major_formatter(FuncFormatter(lambda value, _: num(value)))
 
 
@@ -931,7 +927,7 @@ def grouped(parts):
     # Part tokens summed per chart group.
     totals = defaultdict(float)
     for name, tokens in parts.items():
-        totals[group_of(name)] += tokens
+        totals[section_of(name)[0]] += tokens
     return totals
 
 
@@ -1114,7 +1110,7 @@ def ratio(consumption, context):
     return f"{consumption / context:.1f}x" if context else "-"
 
 
-TABLE_IDS = iter(range(1, 1_000_000))
+TABLE_IDS = count(1)
 
 
 def session_table(theme, context, consumed, sizes, counts, sessions=None, context_shares=None):
