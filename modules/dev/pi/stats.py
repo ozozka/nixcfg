@@ -554,7 +554,7 @@ def delegations_of(reports, children):
 
 # Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
 
-TABS = {"overview": "Overview", "startup": "Startup", "session": "Session"}
+TABS = {"overview": "Overview", "session": "Session"}
 # Chart groups and their theme colors, in stacking order; parts map to them by prefix.
 # The parts table SECTIONS as the chart stacks them, bottom to top, with their theme colors.
 CHART_GROUPS = {
@@ -606,20 +606,11 @@ const show = () => {
 };
 addEventListener("hashchange", show);
 show();
-// Choosing an average or a session in one tab chooses it in the others too.
-const choose = (select, value) => {
-  select.value = value;
-  select.parentElement.querySelectorAll(":scope > .panel").forEach(panel => {
-    panel.hidden = panel.id !== value;
-  });
-};
-const selects = document.querySelectorAll("select[data-panels]");
-selects.forEach(select => {
+// A select shows the panel named by its value.
+document.querySelectorAll("select[data-panels]").forEach(select => {
   select.addEventListener("change", () => {
-    const key = select.selectedOptions[0].dataset.key;
-    selects.forEach(other => {
-      const option = [...other.options].find(o => o.dataset.key === key);
-      if (option) choose(other, option.value);
+    select.parentElement.querySelectorAll(":scope > .panel").forEach(panel => {
+      panel.hidden = panel.id !== select.value;
     });
   });
 });
@@ -1001,49 +992,6 @@ def startup_of(session):
     return fixed(call["parts"]), fixed(call["sizes"]), counts
 
 
-def startup_kpis(tokens, sizes, counts):
-    # Totals of a startup, or averages over several; counts averaged keep one decimal.
-    return kpis(
-        [
-            ("startup tokens", num(sum(tokens.values()))),
-            ("startup KiB", kib(sum(sizes.values()))),
-            *[(name, f"{round(value, 1):g}") for name, value in counts.items()],
-        ]
-    )
-
-
-def startup_table(theme, values, sizes, extra=None):
-    # Every part, by group. values: part -> tokens; sizes: part -> bytes;
-    # extra: part -> one more cell (sessions seen), when given.
-    total = sum(values.values()) or 1
-    rows = []
-    for key, (label, color) in STARTUP_GROUPS.items():
-        items = sorted(
-            ((name, tokens) for name, tokens in values.items() if name.split(":")[0] == key),
-            key=lambda item: -item[1],
-        )
-        if not items:
-            continue
-        subtotal = sum(tokens for _, tokens in items)
-        cells = [
-            Markup(swatch(color, theme) + esc(label)),
-            num(subtotal),
-            pct(subtotal / total),
-            kib(sum(sizes.get(name, 0) for name, _ in items)),
-        ]
-        rows.append(([*cells, ""] if extra else cells, "group"))
-        for name, tokens in items:
-            cells = [
-                name.split(":", 1)[1],
-                num(tokens),
-                pct(tokens / total),
-                kib(sizes.get(name, 0)),
-            ]
-            rows.append(([*cells, extra[name]] if extra else cells, "part"))
-    headers = ["Part", "Tokens", "Share", "KiB"] + (["Sessions"] if extra else [])
-    return table(headers, rows)
-
-
 def startup_bar(theme, values):
     # One horizontal bar split into every part, colored by group.
     colors = theme["colors"]
@@ -1072,51 +1020,6 @@ def startup_bar(theme, values):
         axes.set_xlabel("Tokens")
 
     return render(theme, draw, size=(16, 1.6))
-
-
-def startup_average(items, theme):
-    # Every session start of one agent, averaged; a part missing from a start counts as 0.
-    starts = list(map(startup_of, items))
-    totals, seen, size_totals = defaultdict(float), defaultdict(int), defaultdict(float)
-    for fixed, sizes, _ in starts:
-        for name, tokens in fixed.items():
-            totals[name] += tokens / len(starts)
-            size_totals[name] += sizes.get(name, 0) / len(starts)
-            seen[name] += 1
-    counts = {name: statistics.mean(c[name] for _, _, c in starts) for name in starts[0][2]}
-    # Stacked from the bottom in prompt order, labeled with the group names.
-    history = stacked_chart(
-        theme,
-        [s["time"][:10] for s in items],
-        [
-            {
-                label: sum(t for n, t in fixed.items() if n.split(":")[0] == key)
-                for key, (label, _) in STARTUP_GROUPS.items()
-            }
-            for fixed, _, _ in starts
-        ],
-        "Startup tokens",
-        "Session",
-        groups=dict(STARTUP_GROUPS.values()),
-    )
-    return (
-        startup_kpis(totals, size_totals, counts)
-        + history
-        + startup_table(theme, totals, size_totals, seen)
-    )
-
-
-def startup_single(session, theme):
-    fixed, sizes, counts = startup_of(session)
-    return (
-        startup_kpis(fixed, sizes, counts)
-        + startup_bar(theme, fixed)
-        + startup_table(theme, fixed, sizes)
-    )
-
-
-def startup_tab(sessions, theme):
-    return panels_tab(sessions, "startup", startup_average, startup_single, theme)
 
 
 def mean_shares(calls):
@@ -1575,9 +1478,6 @@ def session_tab(sessions, theme):
 def panels_tab(sessions, prefix, average, single, theme):
     """One selector: an average per agent, then every session newest first, each followed by
     the subagent runs it started, then subagent runs whose parent is not in the report.
-
-    Panel IDs carry the tab prefix; option keys do not, so choosing an entry selects it in
-    every tab.
     """
     by_agent = defaultdict(list)
     for session in sorted(sessions, key=lambda s: s["time"]):
@@ -1637,7 +1537,7 @@ def selector(prefix, groups):
     options = "".join(
         f'<optgroup label="{esc(group)}">'
         + "".join(
-            f'<option value="{esc(prefix)}-{esc(key)}" data-key="{esc(key)}">{esc(label)}</option>'
+            f'<option value="{esc(prefix)}-{esc(key)}">{esc(label)}</option>'
             for key, label, _ in items
         )
         + "</optgroup>"
@@ -1655,7 +1555,6 @@ def report(sessions, skipped, theme, title):
     calls = [call for session in sessions for call in session["calls"]]
     tabs = {
         "overview": overview_tab(sessions, calls, skipped, theme),
-        "startup": startup_tab(sessions, theme),
         "session": session_tab(sessions, theme),
     }
     links = "".join(f'<a href="#{key}">{esc(TABS[key])}</a>' for key in tabs)
