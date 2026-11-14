@@ -600,6 +600,8 @@ STARTUP_GROUPS = {
     "context": ("context files", "s"),
 }
 BAR_WIDTH = 0.72
+# Figures per line; more continue on the next line in the same columns.
+KPI_COLUMNS = 12
 # Above this many columns, stacked bars touch, so dense sessions read as a stepped area.
 DENSE_COLUMNS = 60
 TICK_COUNT = 8
@@ -713,7 +715,7 @@ body {{ background:var(--b); color:var(--f); font:{px(size["m"])}px "{fonts["san
 main {{ padding:{dim["m"]}px; }}
 h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   border-bottom:1px solid var(--o); margin:{dim["m"]}px 0 {dim["s"]}px; }}
-.kpis {{ display:grid; grid-template-columns:repeat(auto-fit, minmax({dim["x"]}px, 1fr));
+.kpis {{ display:grid; grid-template-columns:repeat({KPI_COLUMNS}, minmax(0, 1fr));
   text-align:center; margin-bottom:{dim["s"]}px; }}
 .kpis span {{ display:block; color:var(--m); font-size:{px(size["s"])}px; }}
 .kpis b {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
@@ -1281,8 +1283,7 @@ def time_bar(theme, spent):
                     value,
                     left=left,
                     color=f"#{colors[key]}",
-                    edgecolor=f"#{colors['m']}",
-                    linewidth=1,
+                    linewidth=0,
                     label=part,
                 )
             )
