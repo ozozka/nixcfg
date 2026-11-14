@@ -453,17 +453,13 @@ def collect(since, project):
                         outcomes[result["sessionId"]][result["state"]] += 1
     sessions += [(*read_session(path), True) for path in child_files]
 
-    found, skipped = [], 0
+    found = []
     for header, entries, child in sessions:
         if project and project not in header.get("cwd", ""):
             continue
         agent = agents.get(header.get("id"), "subagent") if child else "main"
-        calls, uses = [], Counter()
-        for call in calls_of(header, entries, agent, uses):
-            if call["skipped"]:
-                skipped += 1
-            else:
-                calls.append(call)
+        uses = Counter()
+        calls = [c for c in calls_of(header, entries, agent, uses) if not c["skipped"]]
         if not calls or (since and calls[0]["time"] < since):
             continue
         found.append(session_of(header, calls, agent, entries))
@@ -485,7 +481,7 @@ def collect(since, project):
         for row in session["delegations"]:
             if row["child"] in children:
                 children[row["child"]]["delegation"] = {**row, "parent": session}
-    return found, skipped
+    return found
 
 
 def occurrences(session, entries):
@@ -601,7 +597,7 @@ STARTUP_GROUPS = {
 }
 BAR_WIDTH = 0.72
 # Figures per line; more continue on the next line in the same columns.
-KPI_COLUMNS = 12
+KPI_COLUMNS = 6
 # Above this many columns, stacked bars touch, so dense sessions read as a stepped area.
 DENSE_COLUMNS = 60
 TICK_COUNT = 8
@@ -717,7 +713,7 @@ h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   border-bottom:1px solid var(--o); margin:{dim["m"]}px 0 {dim["s"]}px; }}
 .kpis {{ display:grid; grid-template-columns:repeat({KPI_COLUMNS}, minmax(0, 1fr));
   text-align:center; margin-bottom:{dim["s"]}px; }}
-.kpis span {{ display:block; color:var(--m); font-size:{px(size["s"])}px; }}
+.kpis span {{ display:block; color:var(--m); font-size:{px(size["m"])}px; }}
 .kpis b {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
 table {{ border-collapse:collapse; width:100%; font:{px(size["l"])}px "{fonts["mono"]}";
   margin-bottom:{dim["s"]}px; }}
@@ -991,10 +987,10 @@ def daily_chart(theme, sessions, calls):
     )
 
 
-def overview(sessions, calls, skipped, theme):
+def overview(sessions, calls, theme):
+    # Your usage of Pi over every session: volume, delegation, efficiency, time, and rhythm.
     prompt = sum(c["prompt"] for c in calls)
     main = [s for s in sessions if s["agent"] == "main"]
-    ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
     head = kpis(
         [
             ("sessions", len(main)),
@@ -1005,14 +1001,8 @@ def overview(sessions, calls, skipped, theme):
             ("output", num(sum(c["output"] for c in calls))),
             ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
             ("cache hit", f"{100 * sum(c['cache'] for c in calls) / prompt:.0f}%"),
-            ("bytes/token", f"{ratio:.2f}"),
-            ("compactions", sum(len(s["compaction_list"]) for s in sessions)),
-            (
-                "compaction tokens",
-                num(sum(c["run"] for s in sessions for c in s["compaction_list"])),
-            ),
+            ("active time", duration(sum(sum(s["spent"].values()) for s in sessions))),
             ("wait/turn", wait_per_turn(sessions)),
-            ("skipped calls", skipped),
         ]
     )
 
@@ -1226,16 +1216,14 @@ def wait_per_turn(items):
 
 
 def startup_figures(items):
-    # The startup's tokens, KiB, and counts, or their means over several sessions.
+    # The startup's tokens and skills, or their means over several sessions; its other
+    # sizes and counts are in the parts table's startup rows.
     starts = [startup_of(s) for s in items]
-    figures = [
+    skills = statistics.mean(c["skills"] for _, _, c in starts)
+    return [
         ("startup tokens", num(statistics.mean(sum(t.values()) for t, _, _ in starts))),
-        ("startup KiB", kib(statistics.mean(sum(b.values()) for _, b, _ in starts))),
+        ("skills", f"{round(skills, 1):g}"),
     ]
-    for name in starts[0][2]:
-        value = statistics.mean(c[name] for _, _, c in starts)
-        figures.append((name, f"{round(value, 1):g}"))
-    return figures
 
 
 def startup_line(theme, items):
@@ -1590,10 +1578,10 @@ def selector(prefix, groups):
     return f"<div><select data-panels>{options}</select>{shown}</div>"
 
 
-def report(sessions, skipped, theme, title):
+def report(sessions, theme, title):
     # One page: the overview, then the session dropdown and its panels.
     calls = [call for session in sessions for call in session["calls"]]
-    body = overview(sessions, calls, skipped, theme) + session_panels(sessions, theme)
+    body = overview(sessions, calls, theme) + session_panels(sessions, theme)
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>{esc(title)}</title>
 <style>{style(theme)}</style></head><body><main>{body}</main><script>{SCRIPT}</script>
 </body></html>"""
@@ -1608,12 +1596,12 @@ def main():
     args = parser.parse_args()
 
     theme = json.loads(args.theme.read_text())
-    sessions, skipped = collect(args.since, args.project)
+    sessions = collect(args.since, args.project)
     if not sessions:
         raise SystemExit("No sessions found.")
     filters = " ".join(f for f in [args.project, args.since and f"since {args.since}"] if f)
     title = f"Pi stats {filters}".strip()
-    args.out.write_text(report(sessions, skipped, theme, title))
+    args.out.write_text(report(sessions, theme, title))
     print(args.out)
 
 
