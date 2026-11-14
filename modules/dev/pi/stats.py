@@ -552,10 +552,9 @@ def delegations_of(reports, children):
     return list(rows.values())
 
 
-# Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
+# Rendering: one HTML page, the overview then the sessions; charts are matplotlib SVG in the
+# theme's colors.
 
-TABS = {"overview": "Overview", "session": "Session"}
-# Chart groups and their theme colors, in stacking order; parts map to them by prefix.
 # The parts table SECTIONS as the chart stacks them, bottom to top, with their theme colors.
 CHART_GROUPS = {
     "startup": "o",
@@ -597,15 +596,6 @@ const toggle = row => {
 document.querySelectorAll("table.nested tr[data-id]").forEach(row => {
   row.addEventListener("click", () => toggle(row));
 });
-const show = () => {
-  const id = location.hash.slice(1) || document.querySelector("main > section").id;
-  document.querySelectorAll("main > section").forEach(tab => { tab.hidden = tab.id !== id; });
-  document.querySelectorAll("nav a").forEach(link => {
-    link.toggleAttribute("aria-current", link.hash === "#" + id);
-  });
-};
-addEventListener("hashchange", show);
-show();
 // A select shows the panel named by its value.
 document.querySelectorAll("select[data-panels]").forEach(select => {
   select.addEventListener("change", () => {
@@ -691,10 +681,6 @@ def style(theme):
   --b:#{c["b"]}; }}
 body {{ background:var(--b); color:var(--f); font:{px(size["m"])}px "{fonts["sans"]}";
   margin:0; }}
-nav {{ display:flex; align-items:center; gap:{dim["s"]}px; padding:0 {dim["m"]}px; }}
-nav b {{ font-size:{px(size["x"])}px; margin-right:{dim["m"]}px; }}
-nav a {{ color:var(--f); text-decoration:none; padding:{dim["s"]}px; }}
-nav a[aria-current] {{ background:var(--o); }}
 main {{ padding:{dim["m"]}px; }}
 h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   border-bottom:1px solid var(--o); margin:{dim["m"]}px 0 {dim["s"]}px; }}
@@ -914,7 +900,7 @@ def subagent_share(sessions):
     return pct(children / total) if total else "-"
 
 
-def overview_tab(sessions, calls, skipped, theme):
+def overview(sessions, calls, skipped, theme):
     prompt = sum(c["prompt"] for c in calls)
     main = [s for s in sessions if s["agent"] == "main"]
     ratio = statistics.median(c["bytes"] / c["prompt"] for c in calls)
@@ -1471,7 +1457,7 @@ def session_single(session, theme):
     )
 
 
-def session_tab(sessions, theme):
+def session_panels(sessions, theme):
     return panels_tab(sessions, "session", session_average, session_single, theme)
 
 
@@ -1552,16 +1538,12 @@ def selector(prefix, groups):
 
 
 def report(sessions, skipped, theme, title):
+    # One page: the overview, then the session dropdown and its panels.
     calls = [call for session in sessions for call in session["calls"]]
-    tabs = {
-        "overview": overview_tab(sessions, calls, skipped, theme),
-        "session": session_tab(sessions, theme),
-    }
-    links = "".join(f'<a href="#{key}">{esc(TABS[key])}</a>' for key in tabs)
-    body = "".join(f'<section id="{key}">{content}</section>' for key, content in tabs.items())
+    body = overview(sessions, calls, skipped, theme) + session_panels(sessions, theme)
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>{esc(title)}</title>
-<style>{style(theme)}</style></head><body><nav><b>{esc(title)}</b>{links}</nav>
-<main>{body}</main><script>{SCRIPT}</script></body></html>"""
+<style>{style(theme)}</style></head><body><main>{body}</main><script>{SCRIPT}</script>
+</body></html>"""
 
 
 def main():
