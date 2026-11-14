@@ -556,19 +556,13 @@ def delegations_of(reports, children):
 
 TABS = {"overview": "Overview", "startup": "Startup", "session": "Session"}
 # Chart groups and their theme colors, in stacking order; parts map to them by prefix.
+# The parts table SECTIONS as the chart stacks them, bottom to top, with their theme colors.
 CHART_GROUPS = {
-    "tool results": "s",
+    "startup": "o",
+    "conversation": "m",
     "tool calls": "p",
-    "fixed": "m",
-    "conversation": "f",
-}
-CHART_GROUP = {
-    "system": "fixed",
-    "context": "fixed",
-    "tool": "fixed",
-    "conversation": "conversation",
-    "call": "tool calls",
-    "result": "tool results",
+    "tool results": "s",
+    "other": "f",
 }
 # Startup groups: the parts of a call before any conversation, and their theme colors, in
 # the order the prompt is put together.
@@ -662,11 +656,7 @@ def pct(value):
 
 
 def group_of(part):
-    return CHART_GROUP[part.split(":", 1)[0]]
-
-
-def square(part, theme):
-    return swatch(CHART_GROUPS[group_of(part)], theme)
+    return section_of(part)[0]
 
 
 def swatch(color_key, theme):
@@ -1155,7 +1145,7 @@ def ratio(consumption, context):
 TABLE_IDS = iter(range(1, 1_000_000))
 
 
-def session_table(context, consumed, sizes, sessions=None, context_shares=None):
+def session_table(theme, context, consumed, sizes, sessions=None, context_shares=None):
     """Every part, nested in SECTIONS (startup in STARTUP_SECTIONS), collapsed to the
     section rows until opened.
 
@@ -1200,7 +1190,9 @@ def session_table(context, consumed, sizes, sessions=None, context_shares=None):
             return
         node = f"p{next(TABLE_IDS)}"
         attrs = f' data-id="{node}"' + (f' data-parent="{parent}" hidden' if parent else "")
-        rows.append((cells(Markup(f"<b>{esc(label)}</b>"), members), f"level-{depth}", attrs))
+        mark = swatch(CHART_GROUPS[label], theme) if depth == 0 else ""
+        title = Markup(f"{mark}<b>{esc(label)}</b>")
+        rows.append((cells(title, members), f"level-{depth}", attrs))
         if children:
             for child_label, child_members, child_fixed in children:
                 nest(child_label, child_members, node, depth + 1, child_fixed)
@@ -1508,6 +1500,7 @@ def session_average(items, theme):
         session_kpis(items, average=True)
         + history
         + session_table(
+            theme,
             mean_parts(calls, "parts"),
             {name: tokens / len(items) for name, tokens in consumed.items()},
             mean_parts(calls, "sizes"),
@@ -1536,7 +1529,7 @@ def session_single(session, theme):
     return (
         session_kpis([session], average=False)
         + tokens
-        + session_table(peak["parts"], session["consumed"], peak["sizes"])
+        + session_table(theme, peak["parts"], session["consumed"], peak["sizes"])
         + tools_table([session], average=False)
         + time_section(theme, [session])
         + compactions_summary([session])
