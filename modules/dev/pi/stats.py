@@ -699,7 +699,7 @@ def style(theme):
   --b:#{c["b"]}; }}
 body {{ background:var(--b); color:var(--f); font:{px(size["m"])}px "{fonts["sans"]}";
   margin:0; }}
-main {{ padding:{dim["m"]}px calc(100% / 6); }}
+main {{ padding:{dim["m"]}px; }}
 h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   border-bottom:1px solid var(--o); margin:{dim["m"]}px 0 {dim["s"]}px; }}
 .kpis {{ display:grid; grid-template-columns:repeat(auto-fit, minmax({dim["x"]}px, 1fr));
