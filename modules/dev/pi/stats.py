@@ -523,9 +523,6 @@ h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   text-align:center; margin-bottom:{dim["s"]}px; }}
 .kpis span {{ display:block; color:var(--m); font-size:{px(size["s"])}px; }}
 .kpis b {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
-.split {{ display:grid; grid-template-columns:max-content minmax(0, 1fr);
-  gap:{dim["m"]}px; align-items:start; }}
-@media (max-width:{dim["h"] * 3}px) {{ .split {{ grid-template-columns:1fr; }} }}
 table {{ border-collapse:collapse; width:100%; font:{px(size["l"])}px "{fonts["mono"]}";
   margin-bottom:{dim["s"]}px; }}
 th {{ font-family:"{fonts["sans"]}"; color:var(--m); text-align:right; }}
@@ -714,33 +711,6 @@ def stacked_chart(theme, labels, columns, ylabel, xlabel, marks=(), groups=CHART
         legend.set_in_layout(False)
 
     return render(theme, draw)
-
-
-def composition_chart(theme, columns, groups=CHART_GROUPS):
-    # 100% stacked areas of the groups per column, without axes; tables carry the legend.
-    # groups: group name -> theme color key, in stacking order.
-    colors = theme["colors"]
-
-    def draw(figure):
-        axes = figure.subplots()
-        totals = [sum(column.values()) or 1 for column in columns]
-        axes.stackplot(
-            range(len(columns)),
-            *[
-                [
-                    100 * column.get(group, 0) / total
-                    for column, total in zip(columns, totals, strict=True)
-                ]
-                for group in groups
-            ],
-            colors=[f"#{colors[key]}" for key in groups.values()],
-            step="mid",
-        )
-        axes.set_ylim(0, 100)
-        axes.set_xlim(-0.5, len(columns) - 0.5)
-        axes.set_axis_off()
-
-    return render(theme, draw, size=(8, 4))
 
 
 def grouped(parts):
@@ -1048,29 +1018,22 @@ def startup_tab(sessions, theme):
             }
             for fixed, _, _ in starts
         ]
-        groups = {key: color for key, (_, color) in STARTUP_GROUPS.items()}
-        labels = [s["time"][:10] for s in items]
-        history = combo_chart(
+        # Stacked from the bottom in prompt order, labeled with the group names.
+        history = stacked_chart(
             theme,
-            labels,
-            ("Startup tokens", [sum(f.values()) for f, _, _ in starts]),
-            [
-                (label, [c[key] for c in columns], color, None)
-                for key, (label, color) in STARTUP_GROUPS.items()
-            ],
+            [s["time"][:10] for s in items],
+            [{STARTUP_GROUPS[key][0]: c[key] for key in c} for c in columns],
+            "Startup tokens",
             "Session",
-            axis="bars",
+            groups={label: color for label, color in STARTUP_GROUPS.values()},
         )
         panels.append(
             (
                 f"average-{agent}",
                 f"{agent} · {len(items)} sessions",
                 startup_kpis(totals, size_totals, counts)
-                + '<div class="split">'
-                + startup_table(theme, totals, size_totals, seen)
-                + composition_chart(theme, columns, groups)
-                + "</div>"
-                + history,
+                + history
+                + startup_table(theme, totals, size_totals, seen),
             )
         )
     average = selector(panels)
