@@ -1,8 +1,18 @@
 /**
  * Subagent tool: delegates tasks to agents, each in its own `pi` process in RPC mode with an
- * isolated context window: the task is sent as a prompt on stdin, the child's events are read
- * from stdout, and closing stdin ends the child once its run settles. Modes: single ({ agent, task }) and parallel ({ tasks }). Off by default:
- * the --subagents flag registers the tool for the session (`wpi --subagents`).
+ * isolated context window. Off by default: the --subagents flag registers the tool for the
+ * session (`wpi --subagents`). The tool is model-only, so codemode scripts cannot call it.
+ *
+ * Every run is a background job: `start` returns its ID at once, at most MAX_CONCURRENCY run
+ * at a time and the rest wait in a queue, and `wait` waits for them. Each ended run is
+ * delivered once: to a `wait` watching it, otherwise as a steer message that starts a turn
+ * when the parent is idle. In print mode the parent waits for its runs before it settles.
+ * Runs are aborted when the session shuts down (quit, /new, /resume, /reload).
+ *
+ * A child gets its task as a prompt on stdin, its events are read from stdout, and closing
+ * stdin ends it once its run settles. Budgets: at TURN_LIMIT turns or after TIME_LIMIT_MS it
+ * is told to stop and report, and it is aborted after TURN_GRACE more turns or TIME_GRACE_MS;
+ * either way its last text is returned as a partial report.
  *
  * Agents are Markdown files in agents/ under Pi's agent directory, loaded at startup: the
  * file name is the agent name, the frontmatter its settings, and the body is appended to its
@@ -10,22 +20,19 @@
  * without tools, it gets the default tools. Project-local agents are not loaded.
  *
  * Children never get the flag, so delegation stays one level deep, and run without
- * CHILD_EXCLUDED_TOOLS, since they have no user to ask. The tool is model-only: codemode scripts
- * cannot call it. Each child keeps its session in subagent-sessions/ under Pi's agent directory;
- * the result details record its session ID, linking it to the parent's tool call, with only
- * the final output and the last COLLAPSED_ITEM_COUNT items of the transcript. Children
- * Budgets: at TURN_LIMIT turns or TIME_LIMIT_MS a child is told to stop and report, and it is
- * aborted after TURN_GRACE more turns or TIME_GRACE_MS; either way its last text is returned
- * as a partial report. Children inherit the parent's FORWARDED_FLAGS, so a `wpi` child loads the project docs too.
- * While children run, their count is shown in the status line (status.ts). Vendored from the
- * Pi subagent example.
+ * CHILD_EXCLUDED_TOOLS, since they have no user to ask. They inherit the parent's
+ * FORWARDED_FLAGS, so a `wpi` child loads the project docs too. Each child keeps its session in
+ * subagent-sessions/ under Pi's agent directory; result details record its session ID with
+ * only the final output and the last COLLAPSED_ITEM_COUNT items of its transcript. While
+ * children run, their count is shown in the status line (status.ts). Vendored from the Pi
+ * subagent example.
  */
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   formatReadLineRange,
@@ -56,10 +63,10 @@ const CHILD_EXCLUDED_TOOLS = ["question"];
 const SESSION_DIR = join(getAgentDir(), "subagent-sessions");
 // Flags owned by other extensions that children take from the parent's command line.
 const FORWARDED_FLAGS = ["--docs"];
-const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
+const MESSAGE_TYPE = "subagent";
 // The end of a child's stderr kept for error reports.
 const STDERR_CAP = 4096;
 // Lines of an assistant text item kept for display.
@@ -140,13 +147,6 @@ interface SingleResult {
   limit?: Limit;
 }
 
-type Mode = "single" | "parallel";
-
-interface SubagentDetails {
-  mode: Mode;
-  results: SingleResult[];
-}
-
 type DisplayItem =
   | { type: "text"; text: string }
   | { type: "toolCall"; name: string; args: Record<string, unknown> };
@@ -154,13 +154,6 @@ type DisplayItem =
 interface DispatchDefaults {
   model?: string;
   thinkingLevel?: ThinkingLevel;
-}
-
-// One child run; onProgress gets the result again after each message.
-interface Run {
-  agent: string;
-  task: string;
-  onProgress?: (result: SingleResult) => void;
 }
 
 const emptyUsage = (): UsageStats => ({
@@ -186,8 +179,6 @@ const newResult = (agent: string, task: string): SingleResult => ({
   usage: emptyUsage(),
 });
 
-const details = (mode: Mode, results: SingleResult[]): SubagentDetails => ({ mode, results });
-
 function formatUsageStats(usage: UsageStats, model?: string): string {
   const parts: string[] = [];
   if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
@@ -199,14 +190,6 @@ function formatUsageStats(usage: UsageStats, model?: string): string {
   if (usage.contextTokens) parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
   if (model) parts.push(model);
   return parts.join(" ");
-}
-
-function aggregateUsage(results: SingleResult[]): UsageStats {
-  const total = emptyUsage();
-  for (const result of results) {
-    for (const key of SUMMED_KEYS) total[key] += result.usage[key];
-  }
-  return total;
 }
 
 // Mimics the built-in tools' call lines.
@@ -274,14 +257,6 @@ function isFailedResult(result: SingleResult): boolean {
   );
 }
 
-// The run's status for the parent, before its report.
-function statusText(result: SingleResult): string {
-  if (result.limit) return `stopped at the ${result.limit} limit (partial report)`;
-  if (isFailedResult(result))
-    return `failed${result.stopReason && result.stopReason !== "stop" ? ` (${result.stopReason})` : ""}`;
-  return "completed";
-}
-
 function getResultOutput(result: SingleResult): string {
   const output = result.output;
   if (isFailedResult(result))
@@ -303,25 +278,6 @@ function truncateOutput(output: string): string {
   }
   const omitted = byteLength - Buffer.byteLength(truncated, "utf8");
   return `${truncated}\n\n[Output truncated: ${omitted} bytes omitted. Full output preserved in tool details.]`;
-}
-
-async function mapWithConcurrencyLimit<TIn, TOut>(
-  items: TIn[],
-  concurrency: number,
-  fn: (item: TIn, index: number) => Promise<TOut>,
-): Promise<TOut[]> {
-  const results: TOut[] = new Array(items.length);
-  let nextIndex = 0;
-  const limit = Math.max(1, Math.min(concurrency, items.length));
-  const workers = Array.from({ length: limit }, async () => {
-    while (nextIndex < items.length) {
-      const current = nextIndex++;
-      // biome-ignore lint/performance/noAwaitInLoops: each worker runs its share in sequence.
-      results[current] = await fn(items[current], current);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function piArgs(agent: Agent, defaults: DispatchDefaults, sessionId: string): string[] {
@@ -346,22 +302,16 @@ function piArgs(agent: Agent, defaults: DispatchDefaults, sessionId: string): st
   return args;
 }
 
+// Runs one child to the end of its turn, filling in its result; onProgress follows each message.
 async function runAgent(
   cwd: string,
   defaults: DispatchDefaults,
-  agents: Map<string, Agent>,
-  run: Run,
-  signal: AbortSignal | undefined,
-): Promise<SingleResult> {
-  const result = newResult(run.agent, run.task);
-  const agent = agents.get(run.agent);
-  if (!agent) {
-    result.exitCode = 1;
-    result.stderr = `Unknown agent "${run.agent}". Available: ${[...agents.keys()].join(", ")}.`;
-    return result;
-  }
+  agent: Agent,
+  result: SingleResult,
+  signal: AbortSignal,
+  onProgress: () => void,
+) {
   result.model = agent.model ?? defaults.model;
-
   let aborted = false;
   result.exitCode = await new Promise<number>((resolve) => {
     // The same Pi as the parent: its script under the current Node runtime.
@@ -433,7 +383,7 @@ async function runAgent(
       if (msg.errorMessage) result.errorMessage = msg.errorMessage;
       if (result.usage.turns >= TURN_LIMIT + TURN_GRACE) overLimit("turn");
       else if (result.usage.turns >= TURN_LIMIT) reachLimit("turn");
-      run.onProgress?.(result);
+      onProgress();
     };
 
     // Splits on LF only, as the RPC framing requires.
@@ -453,37 +403,112 @@ async function runAgent(
     });
     proc.on("error", () => resolve(1));
 
-    send({ type: "prompt", message: `Task: ${run.task}` });
+    send({ type: "prompt", message: `Task: ${result.task}` });
 
-    if (signal) {
-      const kill = () => {
-        aborted = true;
-        send({ type: "abort" });
-        close();
-        setTimeout(() => {
-          if (proc.exitCode === null) proc.kill("SIGKILL");
-        }, KILL_DELAY_MS).unref();
-      };
-      if (signal.aborted) kill();
-      else signal.addEventListener("abort", kill, { once: true });
-    }
+    const kill = () => {
+      aborted = true;
+      send({ type: "abort" });
+      close();
+      setTimeout(() => {
+        if (proc.exitCode === null) proc.kill("SIGKILL");
+      }, KILL_DELAY_MS).unref();
+    };
+    if (signal.aborted) kill();
+    else signal.addEventListener("abort", kill, { once: true });
   });
-
-  if (aborted) throw new Error("Subagent was aborted");
-  return result;
+  if (aborted && !result.limit) result.stopReason = "aborted";
 }
 
-const TaskItem = Type.Object({
-  agent: Type.String({ description: "Name of the agent to invoke" }),
-  task: Type.String({ description: "Task to delegate to the agent" }),
+// Jobs
+
+type JobState = "queued" | "running" | "idle" | "budget" | "failed" | "aborted";
+
+interface Job {
+  id: string;
+  result: SingleResult;
+  started: boolean;
+  controller: AbortController;
+  // Starts the child; set when the job is created.
+  launch: () => Promise<void>;
+}
+
+function jobState(job: Job): JobState {
+  const r = job.result;
+  if (!job.started) return "queued";
+  if (r.exitCode === -1) return "running";
+  if (r.limit) return "budget";
+  if (r.stopReason === "aborted") return "aborted";
+  if (isFailedResult(r)) return "failed";
+  return "idle";
+}
+
+const isActive = (job: Job) => ["queued", "running"].includes(jobState(job));
+
+// A job as plain data for result details.
+type JobView = SingleResult & { id: string; state: JobState };
+
+const view = (job: Job): JobView => ({ ...job.result, id: job.id, state: jobState(job) });
+
+interface SubagentDetails {
+  action: "start" | "wait" | "event";
+  // `results` keeps the session IDs pi-stats reads.
+  results: JobView[];
+}
+
+const details = (action: SubagentDetails["action"], jobs: Job[]): SubagentDetails => ({
+  action,
+  results: jobs.map(view),
 });
 
+// What the parent reads when a run ends.
+function eventText(job: Job): string {
+  const r = job.result;
+  const label = `[subagent #${job.id} ${r.agent}]`;
+  const report = truncateOutput(r.output || "(no output)");
+  switch (jobState(job)) {
+    case "budget":
+      return `${label} stopped at the ${r.limit} limit. Partial report:\n\n${report}`;
+    case "aborted":
+      return `${label} was stopped. Last report:\n\n${report}`;
+    case "failed":
+      return `${label} failed: ${getResultOutput(r)}`;
+    default:
+      return `${label} ended its turn:\n\n${report}`;
+  }
+}
+
+// A one-line summary of a job for wait results.
+function jobLine(job: Job): string {
+  const state = jobState(job);
+  const turns = state === "running" ? `, turn ${job.result.usage.turns}` : "";
+  return `#${job.id} ${job.result.agent}: ${state}${turns}`;
+}
+
+type Until = "any" | "all";
+
+// A pending `wait`: the jobs it watches and the ended runs delivered to it.
+interface Waiter {
+  ids: Set<string>;
+  until: Until;
+  ended: Job[];
+  done: () => void;
+  progress?: () => void;
+}
+
 const SubagentParams = Type.Object({
-  agent: Type.Optional(Type.String({ description: "Agent to invoke (single mode)" })),
-  task: Type.Optional(Type.String({ description: "Task to delegate (single mode)" })),
-  tasks: Type.Optional(
-    Type.Array(TaskItem, {
-      description: `Tasks to run in parallel (at most ${MAX_PARALLEL_TASKS})`,
+  action: StringEnum(["start", "wait"] as const, {
+    description: "start: run a task in a new subagent; wait: wait for running subagents",
+  }),
+  agent: Type.Optional(Type.String({ description: "start: the agent to run" })),
+  task: Type.Optional(
+    Type.String({ description: "start: the task, the only context the subagent gets" }),
+  ),
+  ids: Type.Optional(
+    Type.Array(Type.String(), { description: "wait: subagent IDs (default: all running)" }),
+  ),
+  until: Type.Optional(
+    StringEnum(["any", "all"] as const, {
+      description: "wait: return at the first ended run (any, default) or when all have ended",
     }),
   ),
 });
@@ -496,10 +521,17 @@ export default function (pi: ExtensionAPI) {
   });
 
   const { definitions: agents, errors } = loadDefinitions("agents", parseAgent);
-  // Children running now, across parallel tasks and concurrent tool calls.
-  let runningChildren = 0;
+  const jobs = new Map<string, Job>();
+  const waiters = new Set<Waiter>();
+  let nextId = 1;
+  let shutDown = false;
+
+  const jobList = () => [...jobs.values()];
+  const runningCount = () => jobList().filter((job) => jobState(job) === "running").length;
+
+  // The count of running children in the status line.
   function sendRunning() {
-    const count = runningChildren;
+    const count = runningCount();
     sendStatus(pi, {
       key: "subagents",
       render:
@@ -508,11 +540,127 @@ export default function (pi: ExtensionAPI) {
           : undefined,
     });
   }
+
+  // Starts queued jobs while slots are free.
+  function pump() {
+    for (const job of jobList()) {
+      if (runningCount() >= MAX_CONCURRENCY) return;
+      if (job.started) continue;
+      job.started = true;
+      job.launch().then(() => finish(job));
+    }
+    sendRunning();
+  }
+
+  function finish(job: Job) {
+    pump();
+    for (const waiter of waiters) waiter.progress?.();
+    if (!shutDown) deliver(job);
+  }
+
+  // An ended run goes to the wait watching it, otherwise to the parent as a steer message.
+  function deliver(job: Job) {
+    const waiter = [...waiters].find((w) => w.ids.has(job.id));
+    if (waiter) {
+      waiter.ended.push(job);
+      check(waiter);
+      return;
+    }
+    pi.sendMessage(
+      {
+        customType: MESSAGE_TYPE,
+        content: eventText(job),
+        display: true,
+        details: details("event", [job]),
+      },
+      { deliverAs: "steer", triggerTurn: true },
+    );
+  }
+
+  function check(waiter: Waiter) {
+    const watched = [...waiter.ids].flatMap((id) => jobs.get(id) ?? []);
+    const allEnded = watched.every((job) => !isActive(job));
+    if (allEnded || (waiter.until === "any" && waiter.ended.length > 0)) waiter.done();
+  }
+
+  // Waits for the given jobs; ended runs are returned instead of delivered as messages. On
+  // abort, the runs already delivered to it are queued for the parent's next turn.
+  function waitFor(
+    ids: string[],
+    until: Until,
+    signal?: AbortSignal,
+    progress?: () => void,
+  ): Promise<Job[]> {
+    return new Promise((resolve) => {
+      const waiter: Waiter = {
+        ids: new Set(ids),
+        until,
+        ended: [],
+        done: () => end(false),
+        progress,
+      };
+      const end = (aborted: boolean) => {
+        waiters.delete(waiter);
+        signal?.removeEventListener("abort", onAbort);
+        if (aborted) {
+          for (const job of waiter.ended) {
+            pi.sendMessage(
+              {
+                customType: MESSAGE_TYPE,
+                content: eventText(job),
+                display: true,
+                details: details("event", [job]),
+              },
+              { deliverAs: "nextTurn" },
+            );
+          }
+        }
+        resolve(aborted ? [] : waiter.ended);
+      };
+      const onAbort = () => end(true);
+      waiters.add(waiter);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+      else check(waiter);
+    });
+  }
+
   // The flag's value is known only once the session starts; each session gets a new instance.
   pi.on("session_start", (_event, ctx) => {
     if (pi.getFlag(FLAG) !== true) return;
     if (errors.length > 0) ctx.ui.notify(`Subagents: ${errors.join("; ")}`, "warning");
     registerTool();
+  });
+
+  // Quitting and switching sessions end the runs, so none reports to the wrong session.
+  pi.on("session_shutdown", () => {
+    shutDown = true;
+    for (const job of jobList()) job.controller.abort();
+    for (const waiter of waiters) waiter.done();
+  });
+
+  // Print mode exits when the parent settles, so it waits for its runs and takes their reports
+  // into one more turn.
+  pi.on("agent_before_settle", async (event, ctx) => {
+    if (ctx.mode === "tui" || ctx.mode === "rpc") return;
+    const active = jobList().filter(isActive);
+    if (active.length === 0) return;
+    const ended = await waitFor(
+      active.map((job) => job.id),
+      "all",
+    );
+    return {
+      entries: [
+        ...event.entries,
+        ...ended.map((job) => ({
+          type: "custom_message" as const,
+          customType: MESSAGE_TYPE,
+          content: eventText(job),
+          display: true,
+        })),
+      ],
+      continue: true,
+    };
   });
 
   function registerTool() {
@@ -521,107 +669,84 @@ export default function (pi: ExtensionAPI) {
       label: "Subagent",
       exposure: "model-only",
       description: [
-        "Run tasks in subagents with isolated contexts. Each subagent receives its task, not the parent conversation.",
-        "Modes: single (agent + task) or parallel (tasks array).",
+        "Delegate tasks to subagents: separate agents with isolated contexts that see only their task, not this conversation. Every subagent runs in the background.",
+        "- start { agent, task }: starts one subagent and returns its ID at once. For parallel work, call start several times in one turn.",
+        '- wait { ids?, until? }: waits for subagents (default: all running) and returns their reports; until "any" (default) returns at the first ended run, "all" when every one has ended.',
+        "A run that ends while you are not waiting arrives as a message.",
         `Agents:\n${[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`).join("\n")}`,
-      ].join("\n\n"),
+      ].join("\n"),
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, signal, onUpdate, ctx) {
-        const defaults: DispatchDefaults = {
-          model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
-          thinkingLevel: pi.getThinkingLevel(),
-        };
-        const run = async (job: Run) => {
-          runningChildren++;
-          sendRunning();
-          try {
-            return await runAgent(ctx.cwd, defaults, agents, job, signal);
-          } finally {
-            runningChildren--;
-            sendRunning();
+        if (params.action === "start") {
+          const agent = params.agent ? agents.get(params.agent) : undefined;
+          if (!(agent && params.agent && params.task)) {
+            const text = `start needs an agent and a task. Agents: ${[...agents.keys()].join(", ")}`;
+            return reply(text, details("start", []), true);
           }
-        };
-        const update = (mode: Mode, results: SingleResult[], text: string) =>
-          onUpdate?.(reply(text, details(mode, results)));
-        const runningText = (current: SingleResult) => current.output || "(running...)";
-
-        const modes = [params.tasks?.length, params.agent && params.task];
-        if (modes.filter(Boolean).length !== 1) {
-          const text = `Invalid parameters: provide exactly one mode.\nAgents: ${[...agents.keys()].join(", ")}`;
-          return reply(text, details("single", []), true);
-        }
-
-        if (params.tasks?.length) {
-          const { tasks } = params;
-          if (tasks.length > MAX_PARALLEL_TASKS) {
-            const text = `Too many parallel tasks (${tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`;
-            return reply(text, details("parallel", []), true);
-          }
-          const all = tasks.map((t) => newResult(t.agent, t.task));
-          const progress = () => {
-            const done = all.filter((r) => r.exitCode !== -1).length;
-            const text = `Parallel: ${done}/${all.length} done, ${all.length - done} running...`;
-            update("parallel", [...all], text);
+          const defaults: DispatchDefaults = {
+            model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+            thinkingLevel: pi.getThinkingLevel(),
           };
-          const results = await mapWithConcurrencyLimit(
-            tasks,
-            MAX_CONCURRENCY,
-            async (t, i) => {
-              all[i] = await run({
-                agent: t.agent,
-                task: t.task,
-                onProgress: (current) => {
-                  all[i] = current;
-                  progress();
-                },
-              });
-              progress();
-              return all[i];
-            },
-          );
-
-          const succeeded = results.filter((r) => !isFailedResult(r)).length;
-          const summaries = results.map((r) => {
-            return `### [${r.agent}] ${statusText(r)}\n\n${truncateOutput(getResultOutput(r))}`;
-          });
-          const text = `Parallel: ${succeeded}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`;
-          return reply(text, details("parallel", results));
+          const id = String(nextId++);
+          const job: Job = {
+            id,
+            result: newResult(params.agent, params.task),
+            started: false,
+            controller: new AbortController(),
+            launch: () =>
+              runAgent(ctx.cwd, defaults, agent, job.result, job.controller.signal, () => {
+                for (const waiter of waiters) if (waiter.ids.has(id)) waiter.progress?.();
+              }),
+          };
+          jobs.set(id, job);
+          pump();
+          const queued = jobState(job) === "queued" ? ", queued until a slot is free" : "";
+          const text = `Started subagent #${id} (${params.agent})${queued}. Its report arrives as a message when it ends its turn, or use wait.`;
+          return reply(text, details("start", [job]));
         }
 
-        const result = await run({
-          agent: params.agent ?? "",
-          task: params.task ?? "",
-          onProgress: (current) => update("single", [current], runningText(current)),
-        });
-        if (isFailedResult(result)) {
-          const text = `Agent ${result.stopReason || "failed"}: ${getResultOutput(result)}`;
-          return reply(text, details("single", [result]), true);
+        const unknown = (params.ids ?? []).filter((id) => !jobs.has(id));
+        if (unknown.length > 0) {
+          const text = `Unknown subagent IDs: ${unknown.join(", ")}. Known: ${[...jobs.keys()].join(", ") || "none"}`;
+          return reply(text, details("wait", []), true);
         }
-        if (result.limit)
-          return reply(
-            `Agent ${statusText(result)}:\n\n${getResultOutput(result)}`,
-            details("single", [result]),
-          );
-        return reply(result.output || "(no output)", details("single", [result]));
+        const watched = params.ids?.length
+          ? params.ids.flatMap((id) => jobs.get(id) ?? [])
+          : jobList().filter(isActive);
+        if (!watched.some(isActive)) {
+          const states = watched.map(jobLine).join("\n");
+          const text = `No watched subagent is running.${states ? `\n${states}` : ""}`;
+          return reply(text, details("wait", watched));
+        }
+        const progress = () =>
+          onUpdate?.(reply(watched.map(jobLine).join("\n"), details("wait", watched)));
+        progress();
+        const ended = await waitFor(
+          watched.map((job) => job.id),
+          params.until ?? "any",
+          signal,
+          progress,
+        );
+        const stillActive = watched.filter(isActive);
+        const parts = ended.map(eventText);
+        if (stillActive.length > 0)
+          parts.push(`Still running: ${stillActive.map(jobLine).join("; ")}`);
+        return reply(parts.join("\n\n---\n\n"), details("wait", [...ended, ...stillActive]));
       },
 
       renderCall(args, theme, _context) {
-        const title = theme.fg("toolTitle", theme.bold("subagent "));
-        const preview = (task: string, max: number) => {
-          const clean = task.trim();
-          return clean.length > max ? `${clean.slice(0, max)}...` : clean;
-        };
-        if (args.tasks && args.tasks.length > 0) {
-          const { tasks } = args;
-          let text = theme.fg("accent", `parallel (${tasks.length} tasks)`);
-          for (const t of tasks.slice(0, 3))
-            text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview(t.task, 40)}`)}`;
-          if (tasks.length > 3)
-            text += `\n  ${theme.fg("muted", `... +${tasks.length - 3} more`)}`;
-          return new Text(title + text, 0, 0);
+        const title = theme.fg("toolTitle", theme.bold(`subagent ${args.action ?? ""} `));
+        if (args.action === "wait") {
+          const ids = args.ids?.length ? args.ids.map((id) => `#${id}`).join(" ") : "all";
+          return new Text(
+            title + theme.fg("accent", ids) + theme.fg("dim", ` (${args.until ?? "any"})`),
+            0,
+            0,
+          );
         }
-        const shown = args.task ? preview(args.task, 60) : "...";
+        const task = (args.task ?? "...").trim();
+        const shown = task.length > 60 ? `${task.slice(0, 60)}...` : task;
         return new Text(
           `${title}${theme.fg("accent", args.agent || "...")}\n  ${theme.fg("dim", shown)}`,
           0,
@@ -635,105 +760,57 @@ export default function (pi: ExtensionAPI) {
           const text = result.content[0];
           return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
         }
-
-        const mdTheme = getMarkdownTheme();
-        const fg = (color: ThemeColor, value: string) => theme.fg(color, value);
-        const icon = (busy: boolean, failed: boolean) =>
-          busy ? fg("warning", "⏳") : failed ? fg("error", "✗") : fg("success", "✓");
-        const statusIcon = (r: SingleResult) => icon(r.exitCode === -1, isFailedResult(r));
-        const toolLine = (item: DisplayItem & { type: "toolCall" }) =>
-          fg("muted", "→ ") + formatToolCall(item.name, item.args, theme);
-
-        // Collapsed: the error, or the last `limit` items, or a placeholder.
-        const body = (r: SingleResult, limit: number) => {
-          if (isFailedResult(r)) return fg("error", errorText(r));
-          const items = r.items.slice(-limit);
-          if (items.length === 0)
-            return fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)");
-          const skipped = r.itemCount - items.length;
-          const lines = skipped > 0 ? [fg("muted", `... ${skipped} earlier items`)] : [];
-          for (const item of items) {
-            lines.push(item.type === "text" ? fg("toolOutput", item.text) : toolLine(item));
-          }
-          return lines.join("\n");
-        };
-
-        // Expanded: the task, the kept tool calls, and the final output as Markdown.
-        const addExpanded = (container: Container, r: SingleResult, title: string) => {
-          container.addChild(new Text(title, 0, 0));
-          if (isFailedResult(r)) container.addChild(new Text(fg("error", errorText(r)), 0, 0));
-          container.addChild(new Text(fg("muted", "Task: ") + fg("dim", r.task), 0, 0));
-          const skipped = r.itemCount - r.items.length;
-          if (skipped > 0)
-            container.addChild(new Text(fg("muted", `... ${skipped} earlier items`), 0, 0));
-          for (const item of r.items) {
-            if (item.type === "toolCall") container.addChild(new Text(toolLine(item), 0, 0));
-          }
-          if (r.output) {
-            container.addChild(new Spacer(1));
-            container.addChild(new Markdown(r.output.trim(), 0, 0, mdTheme));
-          }
-          const usage = formatUsageStats(r.usage, r.model);
-          if (usage) container.addChild(new Text(fg("dim", usage), 0, 0));
-        };
-
-        if (data.mode === "single") {
-          const r = data.results[0];
-          const header = `${statusIcon(r)} ${fg("toolTitle", theme.bold(r.agent))}${
-            isFailedResult(r) && r.stopReason
-              ? ` ${fg("error", `[${r.stopReason}]`)}`
-              : r.limit
-                ? ` ${fg("warning", `[${r.limit} limit]`)}`
-                : ""
-          }`;
-          if (expanded) {
-            const container = new Container();
-            addExpanded(container, r, header);
-            return container;
-          }
-          let text = `${header}\n${body(r, COLLAPSED_ITEM_COUNT)}`;
-          if (!isFailedResult(r) && r.itemCount > COLLAPSED_ITEM_COUNT)
-            text += `\n${fg("muted", "(Ctrl+O to expand)")}`;
-          const usage = formatUsageStats(r.usage, r.model);
-          if (usage) text += `\n${fg("dim", usage)}`;
-          return new Text(text, 0, 0);
-        }
-
-        // Parallel: one section per task.
-        const running = data.results.filter((r) => r.exitCode === -1).length;
-        const succeeded = data.results.filter(
-          (r) => r.exitCode !== -1 && !isFailedResult(r),
-        ).length;
-        const total = data.results.length;
-        const status =
-          running > 0
-            ? `${total - running}/${total} done, ${running} running`
-            : `${succeeded}/${total} tasks`;
-        const header = `${icon(running > 0, succeeded < total)} ${fg("toolTitle", theme.bold(`${data.mode} `))}${fg("accent", status)}`;
-        const label = (r: SingleResult) =>
-          `${fg("muted", "─── ")}${fg("accent", r.agent)} ${statusIcon(r)}`;
-        const totalUsage = running > 0 ? "" : formatUsageStats(aggregateUsage(data.results));
-
-        if (expanded && running === 0) {
-          const container = new Container();
-          container.addChild(new Text(header, 0, 0));
-          for (const r of data.results) {
-            container.addChild(new Spacer(1));
-            addExpanded(container, r, label(r));
-          }
-          if (totalUsage) {
-            container.addChild(new Spacer(1));
-            container.addChild(new Text(fg("dim", `Total: ${totalUsage}`), 0, 0));
-          }
-          return container;
-        }
-
-        let text = header;
-        for (const r of data.results) text += `\n\n${label(r)}\n${body(r, 5)}`;
-        if (totalUsage) text += `\n\n${fg("dim", `Total: ${totalUsage}`)}`;
-        if (!expanded) text += `\n${fg("muted", "(Ctrl+O to expand)")}`;
-        return new Text(text, 0, 0);
+        return renderJobs(data, expanded, theme);
       },
     });
+
+    pi.registerMessageRenderer(MESSAGE_TYPE, (message, { expanded }, theme) => {
+      const data = message.details as SubagentDetails | undefined;
+      if (!data) return undefined;
+      return renderJobs(data, expanded, theme);
+    });
   }
+}
+
+// One section per job: state, recent items or error, usage; expanded adds the task and report.
+function renderJobs(data: SubagentDetails, expanded: boolean, theme: Theme) {
+  const mdTheme = getMarkdownTheme();
+  const fg = (color: ThemeColor, value: string) => theme.fg(color, value);
+  const marks: Record<JobState, string> = {
+    queued: fg("muted", "…"),
+    running: fg("warning", "⏳"),
+    idle: fg("success", "✓"),
+    budget: fg("warning", "◐"),
+    failed: fg("error", "✗"),
+    aborted: fg("error", "✗"),
+  };
+  const toolLine = (item: DisplayItem & { type: "toolCall" }) =>
+    fg("muted", "→ ") + formatToolCall(item.name, item.args, theme);
+  const header = (r: JobView) =>
+    `${marks[r.state]} ${fg("toolTitle", theme.bold(`#${r.id} ${r.agent}`))} ${fg("muted", r.state === "budget" ? `${r.limit} limit` : r.state)}`;
+
+  const container = new Container();
+  for (const [index, r] of data.results.entries()) {
+    if (index > 0) container.addChild(new Spacer(1));
+    container.addChild(new Text(header(r), 0, 0));
+    if (r.state === "failed") container.addChild(new Text(fg("error", errorText(r)), 0, 0));
+    if (data.action === "start" && !expanded) continue;
+    if (expanded) container.addChild(new Text(fg("muted", "Task: ") + fg("dim", r.task), 0, 0));
+    const items = expanded ? r.items : r.items.slice(-(data.results.length > 1 ? 3 : 5));
+    const skipped = r.itemCount - items.length;
+    if (skipped > 0)
+      container.addChild(new Text(fg("muted", `... ${skipped} earlier items`), 0, 0));
+    for (const item of items) {
+      const line = item.type === "text" ? fg("toolOutput", item.text) : toolLine(item);
+      if (expanded && item.type === "text") continue;
+      container.addChild(new Text(line, 0, 0));
+    }
+    if (expanded && r.output && r.state !== "running") {
+      container.addChild(new Spacer(1));
+      container.addChild(new Markdown(r.output.trim(), 0, 0, mdTheme));
+    }
+    const usage = formatUsageStats(r.usage, r.model);
+    if (usage) container.addChild(new Text(fg("dim", usage), 0, 0));
+  }
+  return container;
 }
