@@ -713,7 +713,7 @@ h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   border-bottom:1px solid var(--o); margin:{dim["m"]}px 0 {dim["s"]}px; }}
 .kpis {{ display:grid; grid-template-columns:repeat({KPI_COLUMNS}, minmax(0, 1fr));
   text-align:center; margin-bottom:{dim["s"]}px; }}
-.kpis span {{ display:block; color:var(--m); font-size:{px(size["m"])}px; }}
+.kpis span {{ display:block; color:var(--m); font-size:{px(size["s"])}px; }}
 .kpis b {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
 table {{ border-collapse:collapse; width:100%; font:{px(size["l"])}px "{fonts["mono"]}";
   margin-bottom:{dim["s"]}px; }}
@@ -981,7 +981,7 @@ def daily_chart(theme, sessions, calls):
 
 
 def overview(sessions, calls, theme):
-    # Your usage of Pi over every session: volume, efficiency, time, and rhythm.
+    # Your usage of Pi over every session: volume, cost, time, and rhythm.
     prompt = sum(c["prompt"] for c in calls)
     main = [s for s in sessions if s["agent"] == "main"]
     head = kpis(
@@ -990,7 +990,6 @@ def overview(sessions, calls, theme):
             ("input", num(prompt)),
             ("output", num(sum(c["output"] for c in calls))),
             ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
-            ("cache hit", f"{100 * sum(c['cache'] for c in calls) / prompt:.0f}%"),
             ("active time", duration(sum(sum(s["spent"].values()) for s in sessions))),
             ("wait/turn", wait_per_turn(sessions)),
         ]
@@ -1182,13 +1181,12 @@ def session_kpis(items, average):
     def mean(values):
         return statistics.mean(values) if average else values[0]
 
-    head = [("sessions", len(items))] if average else []
     return kpis(
         [
-            *head,
             ("requests", f"{mean([len(s['calls']) for s in items]):.0f}"),
             ("peak context", num(mean([s["peak"] for s in items]))),
             ("consumed", num(mean([sum(s["consumed"].values()) for s in items]))),
+            ("cache hit", cache_hit(items)),
             ("output", num(mean([sum(c["output"] for c in s["calls"]) for s in items]))),
             ("cost", f"${mean([s['cost'] for s in items]):.2f}"),
             ("compactions", f"{round(mean([s['compactions'] for s in items]), 1):g}"),
@@ -1197,6 +1195,13 @@ def session_kpis(items, average):
             *startup_figures(items),
         ]
     )
+
+
+def cache_hit(items):
+    # The share of the sessions' input read from the provider's cache, over all requests.
+    calls = [c for s in items for c in s["calls"]]
+    prompt = sum(c["prompt"] for c in calls)
+    return pct(sum(c["cache"] for c in calls) / prompt) if prompt else "-"
 
 
 def wait_per_turn(items):
