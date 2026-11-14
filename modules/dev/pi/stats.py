@@ -46,7 +46,7 @@ NOTE_TOOL = "send_message"
 OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "Stopped"}
 GROWTH_MIN_SESSIONS = 3
 # Gaps before a prompt longer than this are breaks, not time spent on the session.
-BREAK_MS = 30 * 60 * 1000
+BREAK_MS = 60 * 60 * 1000
 # Where a session's time goes, and the theme colors of the time bar.
 TIME_PARTS = {
     "model": "p",
@@ -309,7 +309,7 @@ def session_of(header, calls, agent, entries):
         consumed["conversation:compaction runs"] += run_tokens(compaction)
     peak = max(calls, key=lambda c: c["prompt"])
     messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
-    spent = timing(entries)
+    spent, waits = timing(entries)
     return {
         "id": header.get("id"),
         "agent": agent,
@@ -328,6 +328,7 @@ def session_of(header, calls, agent, entries):
         "cost": sum(c["cost"] for c in calls),
         "compaction_list": [compaction_of(e, calls) for e in compactions],
         "spent": spent,
+        "waits": waits,
         # Wall-clock span, for the parallelism of a parent's subagent runs.
         "start": milliseconds(entries[0]["timestamp"]),
         "end": milliseconds(entries[-1]["timestamp"]),
@@ -357,12 +358,18 @@ def timing(entries):
 
     Model time is each response's durationMs; a turn's tool time is its longest tool result,
     since tools of one turn run in parallel, and counts as subagent waits when it includes a
-    subagent wait. Compaction runs from the entry before it; your time runs from the end of
-    the previous run to the next prompt, without gaps longer than BREAK_MS, plus the time
-    you take to answer the question tool.
+    subagent wait. Compaction runs from the entry before it. Your time is the wait from the
+    end of a finished run to your next prompt (prompts sent while a run continues, such as
+    steering, are not waits; gaps longer than BREAK_MS are breaks), plus the time you take to
+    answer the question tool. The session files do not record closing Pi or /resume, so a
+    shorter gap across them counts as a wait too.
+
+    Returns the milliseconds per category and each counted wait.
     """
-    spent, calls = defaultdict(float), {}
-    previous, turn, waited = None, 0.0, False
+    spent, calls, waits = defaultdict(float), {}, []
+    # ended: when the last run finished, None while one runs; entries after it (a mode switch,
+    # a changed system prompt) do not shorten the wait.
+    previous, turn, waited, ended = None, 0.0, False, None
     for entry in entries:
         stamp = milliseconds(entry["timestamp"])
         message = entry.get("message") or {}
@@ -372,10 +379,15 @@ def timing(entries):
             turn, waited = 0.0, False
         if entry["type"] == "compaction" and previous is not None:
             spent["compaction"] += stamp - previous
-        elif role == "user" and previous is not None and stamp - previous <= BREAK_MS:
-            spent["you"] += stamp - previous
+        elif role == "user":
+            if ended is not None and stamp - ended <= BREAK_MS:
+                spent["you"] += stamp - ended
+                waits.append(stamp - ended)
+            ended = None
         elif role == "assistant":
             spent["model"] += message.get("durationMs") or 0
+            # A response without tool calls ends the run; one with tool calls continues it.
+            ended = stamp if message.get("stopReason") != "toolUse" else None
             for block in message.get("content") or []:
                 if block.get("type") == "toolCall":
                     calls[block["id"]] = (block["name"], block.get("arguments") or {})
@@ -391,7 +403,7 @@ def timing(entries):
                 waited |= name == "subagent wait"
         previous = stamp
     spent["subagent waits" if waited else "tools"] += turn
-    return dict(spent)
+    return dict(spent), waits
 
 
 def run_tokens(compaction):
@@ -923,6 +935,7 @@ def overview(sessions, calls, skipped, theme):
                 "compaction tokens",
                 num(sum(c["run"] for s in sessions for c in s["compaction_list"])),
             ),
+            ("wait/turn", wait_per_turn(sessions)),
             ("skipped calls", skipped),
         ]
     )
@@ -1133,9 +1146,16 @@ def session_kpis(items, average):
             ("cost", f"${mean([s['cost'] for s in items]):.2f}"),
             ("compactions", f"{round(mean([s['compactions'] for s in items]), 1):g}"),
             ("active time", duration(mean([sum(s["spent"].values()) for s in items]))),
+            ("wait/turn", wait_per_turn(items)),
             *startup_figures(items),
         ]
     )
+
+
+def wait_per_turn(items):
+    # Your average wait over every counted turn of the sessions.
+    waits = [w for s in items for w in s["waits"]]
+    return duration(statistics.mean(waits)) if waits else "-"
 
 
 def startup_figures(items):
