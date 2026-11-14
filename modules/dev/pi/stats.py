@@ -390,7 +390,8 @@ def collect(since, project):
 # Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
 
 TABS = {"overview": "Overview", "startup": "Startup", "session": "Session", "tools": "Tools"}
-# Sessions offered in the Session tab's selector, newest first; averages use all of them.
+# Sessions offered after the averages in the Startup and Session selectors, newest first;
+# averages use all of them.
 SESSION_LIMIT = 30
 # Parts listed per group in session tables, by consumption.
 SESSION_PARTS = 8
@@ -432,10 +433,20 @@ const show = () => {
 };
 addEventListener("hashchange", show);
 show();
-document.querySelectorAll("select[data-panels]").forEach(select => {
+// Choosing an average or a session in one tab chooses it in the others too.
+const choose = (select, value) => {
+  select.value = value;
+  select.parentElement.querySelectorAll(":scope > .panel").forEach(panel => {
+    panel.hidden = panel.id !== value;
+  });
+};
+const selects = document.querySelectorAll("select[data-panels]");
+selects.forEach(select => {
   select.addEventListener("change", () => {
-    select.parentElement.querySelectorAll(":scope > .panel").forEach(panel => {
-      panel.hidden = panel.id !== select.value;
+    const key = select.selectedOptions[0].dataset.key;
+    selects.forEach(other => {
+      const option = [...other.options].find(o => o.dataset.key === key);
+      if (option) choose(other, option.value);
     });
   });
 });
@@ -990,73 +1001,49 @@ def startup_bar(theme, values):
     return render(theme, draw, size=(16, 1.6))
 
 
-def startup_tab(sessions, theme):
-    by_agent = defaultdict(list)
-    for session in sorted(sessions, key=lambda s: s["time"]):
-        by_agent[session["agent"]].append(session)
-    agents = sorted(by_agent, key=lambda a: (a != "main", a))
-
-    # Average: every session start of each agent.
-    panels = []
-    for agent in agents:
-        items = by_agent[agent]
-        starts = [
-            (merged(fixed), merged(sizes), counts)
-            for fixed, sizes, counts in map(startup_of, items)
-        ]
-        totals, seen, size_totals = defaultdict(float), defaultdict(int), defaultdict(float)
-        for fixed, sizes, _ in starts:
-            for name, tokens in fixed.items():
-                totals[name] += tokens / len(starts)
-                size_totals[name] += sizes.get(name, 0) / len(starts)
-                seen[name] += 1
-        counts = {name: statistics.mean(c[name] for _, _, c in starts) for name in starts[0][2]}
-        columns = [
+def startup_average(items, theme):
+    # Every session start of one agent, averaged; a part missing from a start counts as 0.
+    starts = list(map(startup_of, items))
+    totals, seen, size_totals = defaultdict(float), defaultdict(int), defaultdict(float)
+    for fixed, sizes, _ in starts:
+        for name, tokens in fixed.items():
+            totals[name] += tokens / len(starts)
+            size_totals[name] += sizes.get(name, 0) / len(starts)
+            seen[name] += 1
+    counts = {name: statistics.mean(c[name] for _, _, c in starts) for name in starts[0][2]}
+    # Stacked from the bottom in prompt order, labeled with the group names.
+    history = stacked_chart(
+        theme,
+        [s["time"][:10] for s in items],
+        [
             {
-                key: sum(t for n, t in fixed.items() if n.split(":")[0] == key)
-                for key in STARTUP_GROUPS
+                label: sum(t for n, t in fixed.items() if n.split(":")[0] == key)
+                for key, (label, _) in STARTUP_GROUPS.items()
             }
             for fixed, _, _ in starts
-        ]
-        # Stacked from the bottom in prompt order, labeled with the group names.
-        history = stacked_chart(
-            theme,
-            [s["time"][:10] for s in items],
-            [{STARTUP_GROUPS[key][0]: c[key] for key in c} for c in columns],
-            "Startup tokens",
-            "Session",
-            groups=dict(STARTUP_GROUPS.values()),
-        )
-        panels.append(
-            (
-                f"average-{agent}",
-                f"{agent} · {len(items)} sessions",
-                startup_kpis(totals, size_totals, counts)
-                + history
-                + startup_table(theme, totals, size_totals, seen),
-            )
-        )
-    average = selector(panels)
+        ],
+        "Startup tokens",
+        "Session",
+        groups=dict(STARTUP_GROUPS.values()),
+    )
+    return (
+        startup_kpis(totals, size_totals, counts)
+        + history
+        + startup_table(theme, totals, size_totals, seen)
+    )
 
-    # Selected: the latest session start of each project and agent.
-    latest = {}
-    for session in sorted(sessions, key=lambda s: s["time"]):
-        latest[(Path(session["cwd"]).name, session["agent"])] = session
-    panels = []
-    for (project, agent), session in sorted(
-        latest.items(), key=lambda kv: kv[1]["time"], reverse=True
-    ):
-        fixed, sizes, counts = startup_of(session)
-        panels.append(
-            (
-                f"start-{session['id']}",
-                f"{project} · {agent} · {session['time'][:10]}",
-                startup_kpis(fixed, sizes, counts)
-                + startup_bar(theme, fixed)
-                + startup_table(theme, fixed, sizes, limit=None),
-            )
-        )
-    return "<h2>Average</h2>" + average + "<h2>Selected</h2>" + selector(panels)
+
+def startup_single(session, theme):
+    fixed, sizes, counts = startup_of(session)
+    return (
+        startup_kpis(fixed, sizes, counts)
+        + startup_bar(theme, fixed)
+        + startup_table(theme, fixed, sizes, limit=None)
+    )
+
+
+def startup_tab(sessions, theme):
+    return panels_tab(sessions, "startup", startup_average, startup_single, theme)
 
 
 def shares(parts):
@@ -1114,126 +1101,135 @@ def session_table(theme, context, consumption, sizes, context_label):
     return table(["Part", context_label, "Consumption", "Ratio", "KiB"], rows)
 
 
-def session_tab(sessions, theme):
-    ordered = sorted(sessions, key=lambda s: s["time"])
-    by_agent = defaultdict(list)
-    for session in ordered:
-        by_agent[session["agent"]].append(session)
+def session_kpis(items, average):
+    # The same figures for one session or, with average, the means over several.
+    def mean(values):
+        return statistics.mean(values) if average else values[0]
 
-    # Average: all sessions of each agent.
-    panels = []
-    for agent in sorted(by_agent, key=lambda a: (a != "main", a)):
-        items = by_agent[agent]
-        calls = [c for s in items for c in s["calls"]]
-        consumed = defaultdict(float)
-        for session in items:
-            for name, tokens in session["consumed"].items():
-                consumed[name] += tokens
-        head = kpis(
-            [
-                ("sessions", len(items)),
-                ("avg requests", f"{len(calls) / len(items):.0f}"),
-                ("avg peak", num(statistics.mean(s["peak"] for s in items))),
-                ("avg consumed", num(sum(consumed.values()) / len(items))),
-                ("avg cost", f"${statistics.mean(s['cost'] for s in items):.2f}"),
-            ]
-        )
-        history = stacked_chart(
-            theme,
-            [s["time"][:10] for s in items],
-            [grouped(s["consumed"]) for s in items],
-            "Consumed tokens",
-            "Session",
-        )
-        # Context size at each call number, averaged over the sessions that reached it.
-        average, running = [], []
-        for i in range(max(len(s["calls"]) for s in items)):
-            at = [s["calls"][i]["prompt"] for s in items if len(s["calls"]) > i]
-            if len(at) < GROWTH_MIN_SESSIONS:
-                break
-            running.append(len(at))
-            average.append(statistics.mean(at))
-        growth = (
-            combo_chart(
-                theme,
-                [str(i + 1) for i in range(len(running))],
-                ("Sessions", running),
-                [("Average context", average, "p", "Context tokens")],
-                "Request",
-                axis="lines",
-            )
-            if running
-            else ""
-        )
-        panels.append(
-            (
-                f"sessions-{agent}",
-                f"{agent} · {len(items)} sessions",
-                head
-                + history
-                + session_table(
-                    theme,
-                    mean_shares(calls),
-                    shares(merged(consumed)),
-                    mean_sizes(calls),
-                    "Context",
-                )
-                + growth,
-            )
-        )
-    average = selector(panels)
+    head = [("sessions", len(items))] if average else []
+    return kpis(
+        [
+            *head,
+            ("requests", f"{mean([len(s['calls']) for s in items]):.0f}"),
+            ("peak context", num(mean([s["peak"] for s in items]))),
+            ("consumed", num(mean([sum(s["consumed"].values()) for s in items]))),
+            ("output", num(mean([sum(c["output"] for c in s["calls"]) for s in items]))),
+            ("cost", f"${mean([s['cost'] for s in items]):.2f}"),
+            ("compactions", f"{round(mean([s['compactions'] for s in items]), 1):g}"),
+        ]
+    )
 
-    # Selected: the newest sessions, one at a time.
-    panels = []
-    for session in ordered[::-1][:SESSION_LIMIT]:
-        calls = session["calls"]
-        peak = max(calls, key=lambda c: c["prompt"])
-        consumption = shares(merged(session["consumed"]))
-        context = shares(merged(peak["parts"]))
-        head = kpis(
-            [
-                ("requests", len(calls)),
-                ("peak context", num(session["peak"])),
-                ("consumed", num(sum(session["consumed"].values()))),
-                ("output", num(sum(c["output"] for c in calls))),
-                ("cost", f"${session['cost']:.2f}"),
-                ("compactions", session["compactions"]),
-            ]
-        )
-        tokens = stacked_chart(
+
+def session_average(items, theme):
+    calls = [c for s in items for c in s["calls"]]
+    consumed = defaultdict(float)
+    for session in items:
+        for name, tokens in session["consumed"].items():
+            consumed[name] += tokens
+    history = stacked_chart(
+        theme,
+        [s["time"][:10] for s in items],
+        [grouped(s["consumed"]) for s in items],
+        "Consumed tokens",
+        "Session",
+    )
+    # Context size at each call number, averaged over the sessions that reached it.
+    average, running = [], []
+    for i in range(max(len(s["calls"]) for s in items)):
+        at = [s["calls"][i]["prompt"] for s in items if len(s["calls"]) > i]
+        if len(at) < GROWTH_MIN_SESSIONS:
+            break
+        running.append(len(at))
+        average.append(statistics.mean(at))
+    growth = (
+        combo_chart(
             theme,
-            [str(c["index"] + 1) for c in calls],
-            [grouped(c["parts"]) for c in calls],
-            "Context tokens",
+            [str(i + 1) for i in range(len(running))],
+            ("Sessions", running),
+            [("Average context", average, "p", "Context tokens")],
             "Request",
-            marks=session["marks"],
+            axis="lines",
         )
-        label = (
-            f"{session['time'][:16].replace('T', ' ')} · {Path(session['cwd']).name}"
-            f" · {session['agent']} · {len(calls)} requests · peak {num(session['peak'])}"
+        if running
+        else ""
+    )
+    return (
+        session_kpis(items, average=True)
+        + history
+        + session_table(
+            theme, mean_shares(calls), shares(merged(consumed)), mean_sizes(calls), "Context"
         )
-        panels.append(
-            (
-                f"session-{session['id']}",
-                label,
-                head
-                + tokens
-                + session_table(
-                    theme, context, consumption, merged(peak["sizes"]), "Peak context"
-                ),
-            )
-        )
-    return "<h2>Average</h2>" + average + "<h2>Selected</h2>" + selector(panels)
+        + growth
+    )
 
 
-def selector(panels):
-    # A select over panels (id, label, content); the first is shown.
+def session_single(session, theme):
+    calls = session["calls"]
+    peak = max(calls, key=lambda c: c["prompt"])
+    tokens = stacked_chart(
+        theme,
+        [str(c["index"] + 1) for c in calls],
+        [grouped(c["parts"]) for c in calls],
+        "Context tokens",
+        "Request",
+        marks=session["marks"],
+    )
+    return (
+        session_kpis([session], average=False)
+        + tokens
+        + session_table(
+            theme,
+            shares(merged(peak["parts"])),
+            shares(merged(session["consumed"])),
+            merged(peak["sizes"]),
+            "Peak context",
+        )
+    )
+
+
+def session_tab(sessions, theme):
+    return panels_tab(sessions, "session", session_average, session_single, theme)
+
+
+def panels_tab(sessions, prefix, average, single, theme):
+    # One selector: an average per agent, then the newest sessions. Panel IDs carry the tab
+    # prefix; option keys do not, so choosing a session selects it in every tab.
+    by_agent = defaultdict(list)
+    for session in sorted(sessions, key=lambda s: s["time"]):
+        by_agent[session["agent"]].append(session)
+    averages = [
+        (f"avg-{agent}", f"{agent} · {len(items)} sessions", average(items, theme))
+        for agent, items in sorted(by_agent.items(), key=lambda kv: (kv[0] != "main", kv[0]))
+    ]
+    newest = sorted(sessions, key=lambda s: s["time"], reverse=True)[:SESSION_LIMIT]
+    singles = [(f"s-{s['id']}", session_label(s), single(s, theme)) for s in newest]
+    return selector(prefix, [("Averages", averages), ("Sessions", singles)])
+
+
+def session_label(session):
+    return (
+        f"{session['time'][:16].replace('T', ' ')} · {Path(session['cwd']).name}"
+        f" · {session['agent']} · {len(session['calls'])} requests"
+        f" · peak {num(session['peak'])}"
+    )
+
+
+def selector(prefix, groups):
+    # A select over grouped panels (key, label, content); the first panel is shown.
+    panels = [panel for _, items in groups for panel in items]
     options = "".join(
-        f'<option value="{esc(i)}">{esc(label)}</option>' for i, label, _ in panels
+        f'<optgroup label="{esc(group)}">'
+        + "".join(
+            f'<option value="{esc(prefix)}-{esc(key)}" data-key="{esc(key)}">{esc(label)}</option>'
+            for key, label, _ in items
+        )
+        + "</optgroup>"
+        for group, items in groups
+        if items
     )
     shown = "".join(
-        f'<div class="panel" id="{esc(i)}"{" hidden" if n else ""}>{content}</div>'
-        for n, (i, _, content) in enumerate(panels)
+        f'<div class="panel" id="{esc(prefix)}-{esc(key)}"{" hidden" if n else ""}>{content}</div>'
+        for n, (key, _, content) in enumerate(panels)
     )
     return f"<div><select data-panels>{options}</select>{shown}</div>"
 
