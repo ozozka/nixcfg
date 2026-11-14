@@ -800,6 +800,11 @@ export default function (pi: ExtensionAPI) {
         "A subagent ends its turn with a report or a question, and may send a note while it keeps working. What arrives while you are not waiting comes as a message.",
         `Agents:\n${[...agents].map(([name, agent]) => `- ${name}: ${agent.description}`).join("\n")}`,
       ].join("\n"),
+      promptGuidelines: [
+        "Write each subagent task as a complete brief, since the subagent has not seen this conversation: the goal, the relevant files, the decisions already made, and what to report back.",
+        "After subagent start, call subagent wait when your next step needs the result; otherwise continue with independent work or end your turn, since each report arrives by itself. Never redo work you delegated.",
+        "Answer a subagent note with subagent send only to override the decision it reports.",
+      ],
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, signal, onUpdate, ctx) {
