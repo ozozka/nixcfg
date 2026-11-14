@@ -14,7 +14,9 @@
  * cannot call it. Each child keeps its session in subagent-sessions/ under Pi's agent directory;
  * the result details record its session ID, linking it to the parent's tool call, with only
  * the final output and the last COLLAPSED_ITEM_COUNT items of the transcript. Children
- * inherit the parent's FORWARDED_FLAGS, so a `wpi` child loads the project docs too.
+ * Budgets: at TURN_LIMIT turns or TIME_LIMIT_MS a child is told to stop and report, and it is
+ * aborted after TURN_GRACE more turns or TIME_GRACE_MS; either way its last text is returned
+ * as a partial report. Children inherit the parent's FORWARDED_FLAGS, so a `wpi` child loads the project docs too.
  * While children run, their count is shown in the status line (status.ts). Vendored from the
  * Pi subagent example.
  */
@@ -64,6 +66,16 @@ const STDERR_CAP = 4096;
 const TEXT_ITEM_LINES = 3;
 // After an abort, a child still running is killed after this delay.
 const KILL_DELAY_MS = 5000;
+const TURN_LIMIT = 72;
+const TURN_GRACE = 24;
+const TIME_LIMIT_MS = 30 * 60 * 1000;
+// A hung command delays the steer until it ends, so the time grace is short.
+const TIME_GRACE_MS = 5 * 60 * 1000;
+
+type Limit = "turn" | "time";
+
+const budgetMessage = (limit: Limit) =>
+  `You reached your ${limit} limit. Stop working now and report what you did, what you found, and what remains.`;
 
 interface Agent {
   description: string;
@@ -124,6 +136,8 @@ interface SingleResult {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  // The budget limit that stopped the run; its output is then a partial report.
+  limit?: Limit;
 }
 
 type Mode = "single" | "parallel";
@@ -252,10 +266,20 @@ function addMessage(result: SingleResult, message: AssistantMessage) {
   result.items = result.items.slice(-COLLAPSED_ITEM_COUNT);
 }
 
+// A run stopped by its budget is not a failure: it returns a partial report.
 function isFailedResult(result: SingleResult): boolean {
+  if (result.limit) return false;
   return (
     result.exitCode > 0 || result.stopReason === "error" || result.stopReason === "aborted"
   );
+}
+
+// The run's status for the parent, before its report.
+function statusText(result: SingleResult): string {
+  if (result.limit) return `stopped at the ${result.limit} limit (partial report)`;
+  if (isFailedResult(result))
+    return `failed${result.stopReason && result.stopReason !== "stop" ? ` (${result.stopReason})` : ""}`;
+  return "completed";
 }
 
 function getResultOutput(result: SingleResult): string {
@@ -355,6 +379,22 @@ async function runAgent(
     const close = () => proc.stdin.end();
     // The child may exit before a write; its exit code reports the failure.
     proc.stdin.on("error", () => undefined);
+
+    // Budget: at a limit the child is told to stop and report, then aborted after the grace.
+    const reachLimit = (limit: Limit) => {
+      if (result.limit) return;
+      result.limit = limit;
+      send({ type: "steer", message: budgetMessage(limit) });
+    };
+    const overLimit = (limit: Limit) => {
+      result.limit ??= limit;
+      send({ type: "abort" });
+    };
+    const timers = [
+      setTimeout(() => reachLimit("time"), TIME_LIMIT_MS),
+      setTimeout(() => overLimit("time"), TIME_LIMIT_MS + TIME_GRACE_MS),
+    ];
+    for (const timer of timers) timer.unref();
     let buffer = "";
 
     // Collects assistant messages and usage from the child's events, and closes the child
@@ -391,6 +431,8 @@ async function runAgent(
       if (!result.model && msg.model) result.model = msg.model;
       if (msg.stopReason) result.stopReason = msg.stopReason;
       if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+      if (result.usage.turns >= TURN_LIMIT + TURN_GRACE) overLimit("turn");
+      else if (result.usage.turns >= TURN_LIMIT) reachLimit("turn");
       run.onProgress?.(result);
     };
 
@@ -405,6 +447,7 @@ async function runAgent(
       result.stderr = (result.stderr + data.toString()).slice(-STDERR_CAP);
     });
     proc.on("close", (code) => {
+      for (const timer of timers) clearTimeout(timer);
       if (buffer.trim()) processLine(buffer);
       resolve(code ?? 0);
     });
@@ -540,10 +583,7 @@ export default function (pi: ExtensionAPI) {
 
           const succeeded = results.filter((r) => !isFailedResult(r)).length;
           const summaries = results.map((r) => {
-            const status = isFailedResult(r)
-              ? `failed${r.stopReason && r.stopReason !== "stop" ? ` (${r.stopReason})` : ""}`
-              : "completed";
-            return `### [${r.agent}] ${status}\n\n${truncateOutput(getResultOutput(r))}`;
+            return `### [${r.agent}] ${statusText(r)}\n\n${truncateOutput(getResultOutput(r))}`;
           });
           const text = `Parallel: ${succeeded}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`;
           return reply(text, details("parallel", results));
@@ -558,6 +598,11 @@ export default function (pi: ExtensionAPI) {
           const text = `Agent ${result.stopReason || "failed"}: ${getResultOutput(result)}`;
           return reply(text, details("single", [result]), true);
         }
+        if (result.limit)
+          return reply(
+            `Agent ${statusText(result)}:\n\n${getResultOutput(result)}`,
+            details("single", [result]),
+          );
         return reply(result.output || "(no output)", details("single", [result]));
       },
 
@@ -635,7 +680,11 @@ export default function (pi: ExtensionAPI) {
         if (data.mode === "single") {
           const r = data.results[0];
           const header = `${statusIcon(r)} ${fg("toolTitle", theme.bold(r.agent))}${
-            isFailedResult(r) && r.stopReason ? ` ${fg("error", `[${r.stopReason}]`)}` : ""
+            isFailedResult(r) && r.stopReason
+              ? ` ${fg("error", `[${r.stopReason}]`)}`
+              : r.limit
+                ? ` ${fg("warning", `[${r.limit} limit]`)}`
+                : ""
           }`;
           if (expanded) {
             const container = new Container();
