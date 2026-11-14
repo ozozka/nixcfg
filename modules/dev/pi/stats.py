@@ -377,9 +377,6 @@ def collect(since, project):
 # Rendering: an HTML page of tabs; charts are matplotlib SVG in the theme's colors.
 
 TABS = {"overview": "Overview", "startup": "Startup", "session": "Session", "tools": "Tools"}
-# Sessions offered after the averages in the Startup and Session selectors, newest first;
-# averages use all of them.
-SESSION_LIMIT = 30
 # Chart groups and their theme colors, in stacking order; parts map to them by prefix.
 CHART_GROUPS = {
     "tool results": "s",
@@ -1160,7 +1157,7 @@ def session_tab(sessions, theme):
 
 
 def panels_tab(sessions, prefix, average, single, theme):
-    # One selector: an average per agent, then the newest sessions. Panel IDs carry the tab
+    # One selector: an average per agent, then every session, newest first. Panel IDs carry the tab
     # prefix; option keys do not, so choosing a session selects it in every tab.
     by_agent = defaultdict(list)
     for session in sorted(sessions, key=lambda s: s["time"]):
@@ -1169,7 +1166,7 @@ def panels_tab(sessions, prefix, average, single, theme):
         (f"avg-{agent}", f"{agent} · {len(items)} sessions", average(items, theme))
         for agent, items in sorted(by_agent.items(), key=lambda kv: (kv[0] != "main", kv[0]))
     ]
-    newest = sorted(sessions, key=lambda s: s["time"], reverse=True)[:SESSION_LIMIT]
+    newest = sorted(sessions, key=lambda s: s["time"], reverse=True)
     singles = [(f"s-{s['id']}", session_label(s), single(s, theme)) for s in newest]
     return selector(prefix, [("Averages", averages), ("Sessions", singles)])
 
