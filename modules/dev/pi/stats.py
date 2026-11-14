@@ -30,6 +30,7 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from functools import cache
+from itertools import pairwise
 from pathlib import Path
 
 AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
@@ -48,6 +49,9 @@ OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "
 GROWTH_MIN_SESSIONS = 3
 # Gaps before a prompt longer than this are breaks, not time spent on the session.
 BREAK_MS = 60 * 60 * 1000
+# A compaction's time is the gap from the entry before it. After a run ends that gap can
+# include your idle time; real compactions take a few minutes, so longer gaps are not counted.
+COMPACTION_MAX_MS = 5 * 60 * 1000
 # Weight of each new day in the overview's moving averages: about a twelve-day memory.
 EMA_ALPHA = 1 / 12
 # Where a session's time goes, and the theme colors of the time bar.
@@ -329,7 +333,11 @@ def session_of(header, calls, agent, entries):
             for e in compactions
         ],
         "cost": sum(c["cost"] for c in calls),
-        "compaction_list": [compaction_of(e, calls) for e in compactions],
+        "compaction_list": [
+            compaction_of(e, calls, previous)
+            for previous, e in pairwise(entries)
+            if e["type"] == "compaction"
+        ],
         "spent": spent,
         "waits": waits,
         # Wall-clock span, for the parallelism of a parent's subagent runs.
@@ -361,7 +369,7 @@ def timing(entries):
 
     Model time is each response's durationMs; a turn's tool time is its longest tool result,
     since tools of one turn run in parallel, and counts as subagent waits when it includes a
-    subagent wait. Compaction runs from the entry before it. Your time is the wait from the
+    subagent wait. Compaction runs from the entry before it, up to COMPACTION_MAX_MS. Your time is the wait from the
     end of a finished run to your next prompt (prompts sent while a run continues, such as
     steering, are not waits; gaps longer than BREAK_MS are breaks), plus the time you take to
     answer the question tool. The session files do not record closing Pi or /resume, so a
@@ -381,7 +389,8 @@ def timing(entries):
             spent["subagent waits" if waited else "tools"] += turn
             turn, waited = 0.0, False
         if entry["type"] == "compaction" and previous is not None:
-            spent["compaction"] += stamp - previous
+            if stamp - previous <= COMPACTION_MAX_MS:
+                spent["compaction"] += stamp - previous
         elif role == "user":
             if ended is not None and stamp - ended <= BREAK_MS:
                 spent["you"] += stamp - ended
@@ -415,15 +424,25 @@ def run_tokens(compaction):
     return sum(usage.get(key, 0) for key in ("input", "cacheRead", "cacheWrite", "output"))
 
 
-def compaction_of(entry, calls):
-    # One compaction: the context before it (Pi's count), the context of the first request
-    # after it (None when none followed), and the tokens of its own run.
+def compaction_of(entry, calls, previous):
+    """One compaction: the context before it (Pi's count), the context of the first request
+    after it and the summary's tokens in that request (None when none followed), the tokens
+    of its own run, and its time from the entry before it (None above COMPACTION_MAX_MS).
+    """
     after = next((c for c in calls if c["time"] > entry["timestamp"]), None)
+    summary = after["parts"].get("conversation:compaction summary") if after else None
     return {
         "before": entry.get("tokensBefore", 0),
         "after": after["prompt"] if after else None,
+        "summary": summary,
         "run": run_tokens(entry),
+        "time": compaction_time(previous, entry),
     }
+
+
+def compaction_time(previous, entry):
+    gap = milliseconds(entry["timestamp"]) - milliseconds(previous["timestamp"])
+    return gap if gap <= COMPACTION_MAX_MS else None
 
 
 def collect(since, project):
@@ -1238,6 +1257,12 @@ def startup_line(theme, items):
     return startup_bar(theme, tokens)
 
 
+def mean_duration(values):
+    # The mean of the known durations, "-" without any.
+    known = [v for v in values if v is not None]
+    return duration(statistics.mean(known)) if known else "-"
+
+
 def compactions_summary(items):
     # The compactions per session, then means over every compaction of the sessions.
     every = [c for s in items for c in s["compaction_list"]]
@@ -1249,13 +1274,9 @@ def compactions_summary(items):
             ("compactions", f"{round(len(every) / len(items), 1):g}"),
             ("context before", num(statistics.mean(c["before"] for c in every))),
             ("context after", num(statistics.mean(c["after"] for c in done)) if done else "-"),
-            (
-                "reduction",
-                pct(statistics.mean(1 - c["after"] / c["before"] for c in done))
-                if done
-                else "-",
-            ),
+            ("summary", num(statistics.mean(c["summary"] for c in done)) if done else "-"),
             ("run tokens", num(statistics.mean(c["run"] for c in every))),
+            ("compaction time", mean_duration([c["time"] for c in every])),
         ]
     )
 
