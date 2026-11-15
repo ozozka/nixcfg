@@ -376,6 +376,8 @@ class Session:
     task: str
     # How its runs ended, as its parent recorded them.
     outcomes: Counter
+    # The name given in Pi, the latest when renamed.
+    name: str | None
     delegations: list[Delegation] = field(default_factory=list)
     # Set for a child whose parent's reports include it.
     delegation: Delegation | None = None
@@ -664,6 +666,9 @@ def session_of(header, entries, requests, uses, links, child):
         parent=parents.get(session_id) if child else None,
         task=tasks.get(session_id, "") if child else "",
         outcomes=outcomes.get(session_id, Counter()),
+        name=next(
+            (e.get("name") for e in reversed(entries) if e["type"] == "session_info"), None
+        ),
     )
 
 
@@ -768,6 +773,15 @@ def preview(task):
     # A task's first line, cut to PREVIEW.
     line = task.strip().split("\n")[0]
     return line[:PREVIEW] + ("…" if len(line) > PREVIEW else "")
+
+
+def session_title(session):
+    # Its name in Pi; otherwise a run's agent and task, or a session's start and project.
+    if session.name:
+        return session.name
+    if session.child:
+        return f"{session.agent} · {preview(session.task)}"
+    return f"{session.time[:16].replace('T', ' ')} · {Path(session.cwd).name}"
 
 
 def session_label(session):
@@ -1287,9 +1301,11 @@ def value_axis(name=None, show=True, tokens=True):
     } | ({"axisLabel": {":formatter": SHORT_NUMBER}} if tokens else {})
 
 
-def column_options(labels, xlabel, yaxes, series, legend=None):
+def column_options(labels, xlabel, yaxes, series, legend=None, ticks=None):
     # Columns and lines over category labels, with the legend in the top left, in the
-    # series' order or legend's.
+    # series' order or legend's; ticks, when given, label the axis in place of the labels,
+    # which the tooltip still shows.
+    tick_labels = {"axisLabel": {":formatter": f"(_, i) => {json.dumps(ticks)}[i]"}}
     return {
         "grid": {"left": 72, "right": 72, "top": 40, "bottom": 48},
         "tooltip": {"trigger": "axis", ":valueFormatter": EXACT_NUMBER},
@@ -1300,7 +1316,8 @@ def column_options(labels, xlabel, yaxes, series, legend=None):
             "name": xlabel,
             "nameLocation": "middle",
             "nameGap": 32,
-        },
+        }
+        | (tick_labels if ticks else {}),
         "yAxis": yaxes,
         "series": series,
     }
@@ -1333,7 +1350,7 @@ def daily_options(series):
     )
 
 
-def stacked_options(labels, columns, ylabel, xlabel, marks=()):
+def stacked_options(labels, columns, ylabel, xlabel, marks=(), ticks=None):
     """Columns stacked by CHART_GROUPS, in their order from the bottom: each column's height
     is its total, each color a group's tokens, and a group's colored area over all columns
     its sum.
@@ -1364,7 +1381,7 @@ def stacked_options(labels, columns, ylabel, xlabel, marks=()):
             "data": [{"xAxis": mark} for mark in marks],
         }
     return column_options(
-        labels, xlabel, [value_axis(ylabel)], series, legend=list(CHART_GROUPS)[::-1]
+        labels, xlabel, [value_axis(ylabel)], series, list(CHART_GROUPS)[::-1], ticks
     )
 
 
@@ -1419,8 +1436,9 @@ def growth_options(running, average):
 # Pages
 
 
-def chart(options, height):
-    ui.echart(options, theme=chart_theme()).classes("w-full").style(f"height:{height}px")
+def chart(options, height, on_click=None):
+    element = ui.echart(options, on_point_click=on_click, theme=chart_theme())
+    element.classes("w-full").style(f"height:{height}px")
 
 
 def kpis(items):
@@ -1557,8 +1575,14 @@ def average_page(agent: str):
             return
         ui.label(f"{agent} · {len(items)} sessions").classes("title")
         kpis(session_figures(items, True))
-        labels, columns = history_columns(items)
-        chart(stacked_options(labels, columns, "Consumed tokens", "Session"), 420)
+        # Each session's column is labeled with its day, shows its title, and opens its page.
+        days, columns = history_columns(items)
+        titles = [session_title(s) for s in items]
+        chart(
+            stacked_options(titles, columns, "Consumed tokens", "Session", ticks=days),
+            420,
+            on_click=lambda e: ui.navigate.to(f"/session/{items[e.data_index].id}"),
+        )
         chart(bar_options(startup_segments(items), "Tokens"), 96)
         parts_table(*average_parts(items))
         time_section(items)
@@ -1604,14 +1628,12 @@ def navigation():
 
     def node(session):
         size = f"{len(session.requests)} requests · peak {num(session.peak.prompt)}"
-        if session.child:
-            label, caption = f"{session.agent} · {preview(session.task)}", size
-        else:
-            label = f"{session.time[:16].replace('T', ' ')} · {Path(session.cwd).name}"
-            caption = f"{session.agent} · {size}"
+        caption = size if session.child else f"{session.agent} · {size}"
         runs = [node(child) for child in children[session.id]]
-        return {"id": f"/session/{session.id}", "label": label, "caption": caption} | (
-            {"children": runs} if runs else {}
+        return (
+            {"id": f"/session/{session.id}", "label": session_title(session)}
+            | {"caption": caption}
+            | ({"children": runs} if runs else {})
         )
 
     def group(key, label, nodes):
@@ -1708,6 +1730,8 @@ a.title {{ text-decoration:none; }}
 .q-drawer--bordered {{ border-color:var(--o) !important; }}
 .q-drawer .q-tree {{ color:var(--f); padding:{dim["s"]}px; }}
 .q-tree__node--selected {{ color:var(--p); }}
+.q-tree__node::after, .q-tree__node-header::before, .q-tree__node-body::after {{
+  color:var(--o); }}
 .caption {{ color:var(--m); font-size:{px(size["s"])}px; }}
 """
 
