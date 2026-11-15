@@ -1264,6 +1264,7 @@ BAR_GAP = "28%"
 
 def chart_theme():
     # Fonts and axes in the page's colors, without grid lines.
+    pointer = {"lineStyle": {"color": color("o")}, "shadowStyle": {"color": color("o")}}
     axis = {
         "axisLine": {"lineStyle": {"color": color("o")}},
         "axisTick": {"lineStyle": {"color": color("o")}},
@@ -1281,9 +1282,12 @@ def chart_theme():
         "categoryAxis": axis,
         "valueAxis": axis,
         "legend": {"textStyle": {"color": color("f")}},
+        # Hovers in overlay: the tooltip, and the line or band that marks the hovered column.
+        "axisPointer": pointer,
         "tooltip": {
-            "backgroundColor": color("b"),
-            "borderColor": color("o"),
+            "backgroundColor": color("o"),
+            "borderWidth": 0,
+            "axisPointer": pointer,
             "textStyle": {"color": color("f")},
         },
     }
@@ -1724,12 +1728,18 @@ a.title {{ text-decoration:none; }}
   font-size:inherit; white-space:nowrap; border-color:var(--o); }}
 .q-table td.wrap {{ white-space:normal; color:var(--m); font:{px(size["m"])}px "{fonts["sans"]}"; }}
 .q-table tbody tr.branch {{ cursor:pointer; }}
+.q-table tbody td {{ border-bottom-width:0; }}
 .square {{ margin-right:{dim["t"] * 2}px; }}
 .marker {{ color:var(--m); }}
 .q-drawer {{ background:var(--b); }}
 .q-drawer--bordered {{ border-color:var(--o) !important; }}
 .q-drawer .q-tree {{ color:var(--f); padding:{dim["s"]}px; }}
-.q-tree__node--selected {{ color:var(--p); }}
+/* Hovers and the selected page in overlay, in place of Quasar's translucent layers, which
+   sit above the text. */
+.q-drawer .q-focus-helper, .q-table tbody td::before {{ display:none; }}
+.q-tree__node-header:hover, .q-drawer .q-btn:hover, .q-tree__node--selected,
+  .q-table tbody tr:hover > td {{ background:var(--o); }}
+.q-tree__node--selected .q-tree__node-header-content {{ color:var(--f); }}
 .q-tree__node::after, .q-tree__node-header::before, .q-tree__node-body::after {{
   color:var(--o); }}
 .caption {{ color:var(--m); font-size:{px(size["s"])}px; }}
