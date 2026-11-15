@@ -76,6 +76,7 @@
   (x-pointer-shape 'text)
   (x-sensitive-text-pointer-shape 'hand)
   (initial-scratch-message nil)
+  (help-window-select t)
   (select-enable-clipboard t)
   (select-enable-primary t)
   (indent-tabs-mode nil)
@@ -335,7 +336,8 @@ function itself."
 (use-package vc
   :ensure nil
   :custom
-  (vc-dir-auto-hide-up-to-date t))
+  (vc-dir-auto-hide-up-to-date t)
+  (vc-display-failed-async-commands t))
 
 (use-package ibuffer
   :ensure nil
@@ -463,15 +465,7 @@ scrollback are gone."
   :ensure nil
   :custom
   (compilation-scroll-output 'first-error)
-  (compile-command "nix run .#")
-  :config
-  (add-to-list
-   'display-buffer-alist
-   '((derived-mode . compilation-mode)
-     (display-buffer-in-side-window)
-     (side . bottom)
-     (slot . 0)
-     (window-height . 0.333334))))
+  (compile-command "nix run .#"))
 
 (use-package minibuffer
   :ensure nil
