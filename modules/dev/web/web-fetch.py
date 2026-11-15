@@ -2,7 +2,8 @@
 
 Asks for Markdown first, which some sites serve to agents; otherwise extracts the main
 text of the HTML with trafilatura, keeping headings, links, and tables. Pages that render
-in the browser yield no text, so the exit status tells the agent to use the browser.
+in the browser yield no text (exit 1) or only a notice; short results carry a hint, since
+length alone cannot tell a small page from an empty application shell.
 """
 
 import argparse
@@ -21,8 +22,8 @@ HEADERS = {
 TEXT_TYPES = ("text/markdown", "text/plain", "application/json", "text/xml", "application/xml")
 # Markdown link targets, resolved against the page URL.
 LINK = re.compile(r"\]\(([^)\s]+)\)")
-# Below this, an extraction is a cookie banner or an empty application shell.
-MIN_CHARS = 200
+# Results shorter than this get a hint that the page may need the browser.
+SHORT_CHARS = 300
 
 
 def positive(value):
@@ -93,7 +94,7 @@ def main():
         return 1
 
     text = text.strip()
-    if len(text) < MIN_CHARS and content_type not in TEXT_TYPES:
+    if not text:
         print(
             f"web-fetch: no readable text at {url}; it may render in the browser: use playwright-cli",
             file=sys.stderr,
@@ -108,6 +109,8 @@ def main():
         )
     else:
         print(text)
+    if len(text) < SHORT_CHARS and content_type not in TEXT_TYPES:
+        print("\n[web-fetch: short page; if content is missing, it may need the browser]")
     return 0
 
 
