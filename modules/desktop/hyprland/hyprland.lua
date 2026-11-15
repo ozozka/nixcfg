@@ -149,7 +149,9 @@ local mainMod = "SUPER"
 
 hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd "qs ipc call notifications dismissAll")
 hl.bind(mainMod .. " + SHIFT + Escape", hl.dsp.exec_cmd "qs ipc call lock lock")
-hl.bind(mainMod .. " + A", hl.dsp.exec_cmd "qs ipc call menu toggle")
+hl.bind(mainMod .. " + Z", hl.dsp.exec_cmd "qs ipc call menu toggle")
+-- The latest notification, as if clicked: its app takes focus.
+hl.bind(mainMod .. " + A", hl.dsp.exec_cmd "qs ipc call notifications activateLatest")
 hl.bind(
   mainMod .. " + P",
   hl.dsp.exec_cmd [[sh -c 'geometry=$(slurp) || exit; dir="$HOME/Pictures/Screenshots"; mkdir -p "$dir" && file="$dir/$(date +%Y-%m-%d_%H-%M-%S_%N).png" && grim -g "$geometry" "$file" && wl-copy --type image/png < "$file"']]
