@@ -76,7 +76,10 @@ in
     etc = {
       "claude-code/managed-settings.json".source = managedSettings;
       "claude-code/CLAUDE.md".source = agents.instructions;
-      "claude-code/.claude/skills".source = pkgs.linkFarm "claude-skills" agents.skills;
+      # Without `web`: Claude has its own web search and fetch tools.
+      "claude-code/.claude/skills".source = pkgs.linkFarm "claude-skills" (
+        removeAttrs agents.skills [ "web" ]
+      );
     };
   };
 
