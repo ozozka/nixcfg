@@ -25,6 +25,7 @@ let
     mapAttrsToList
     mkOption
     nameValuePair
+    sort
     splitString
     tail
     types
@@ -165,12 +166,14 @@ let
           concatMap (profile: profile.validDeclarations) profiles
         )
       );
+      parents = unique (concatMap parentTargets (attrNames files));
     in
     {
       inherit
         account
         enabledProfiles
         files
+        parents
         targets
         ;
     };
@@ -249,12 +252,29 @@ let
     }
   ];
 
+  # What home.nix manages for a user, read by the activation cleanup: tab-separated `L <path>
+  # <link target>` lines, then `d <path>` lines from the deepest folder, the order of removal.
+  makeManifest =
+    resolved:
+    let
+      inherit (resolved) account files parents;
+      home = toString account.home;
+      links = map (target: "L\t${home}/${target}\t/etc/home-files/${account.name}/${target}") (
+        attrNames files
+      );
+      folders = map (parent: "d\t${home}/${parent}") (sort (a: b: a > b) parents);
+    in
+    concatStringsSep "\n" (links ++ folders) + "\n";
+
   makeEtcEntries =
     _: resolved:
     mapAttrs' (
       target: source:
       nameValuePair "home-files/${resolved.account.name}/${target}" { inherit source; }
-    ) resolved.files;
+    ) resolved.files
+    // {
+      "home-files/.${resolved.account.name}.manifest".text = makeManifest resolved;
+    };
 
   etcEntries = foldl' (entries: userEntries: entries // userEntries) { } (
     mapAttrsToList makeEtcEntries resolvedUsers
@@ -263,10 +283,9 @@ let
   makeTmpfilesSettings =
     _: resolved:
     let
-      inherit (resolved) account files;
+      inherit (resolved) account files parents;
       home = toString account.home;
       owner = account.name;
-      parents = unique (concatMap parentTargets (attrNames files));
 
       parentRules = listToAttrs (
         map (
@@ -321,48 +340,42 @@ in
     environment.etc = etcEntries;
     systemd.tmpfiles.settings = tmpfilesSettings;
 
-    # tmpfiles only creates links, so links that left the config are removed here: the rules of
-    # the previous generation (still `/run/current-system` during activation) are compared with
-    # the new ones by path. A link goes only while it still points to its old target, a parent
-    # only when empty, both as the user. At boot there is no previous generation to compare.
-    system.activationScripts.homeFilesCleanup = {
+    # tmpfiles only creates links, so links that left the config are removed here: the previous
+    # generation's manifest (still under `/run/current-system` during activation) is compared with
+    # the new one. A link goes only while it still points to its old target, a folder only when
+    # empty, both as the user. At boot there is no previous generation, so only warnings run.
+    system.activationScripts.homeFiles = {
       deps = [ "users" ];
       text = ''
-        homeFilesRules() {
-          # Prints `<type> <path>\t<target>` of the `L` and `d` rules; paths contain no quotes or tabs.
-          local line rest
-          [ -f "$1" ] || return 0
-          while IFS= read -r line; do
-            case $line in
-              "'L' '"* | "'d' '"*) ;;
-              *) continue ;;
-            esac
-            rest=''${line:5}
-            printf '%s %s\t%s\n' "''${line:1:1}" "''${rest%%\'*}" "''${line##*\'-\' }"
-          done <"$1"
-        }
-
         homeFilesCleanup() {
-          local oldRules=$1 user=$2 newEntries type path target
-          newEntries=$(homeFilesRules "$systemConfig/etc/tmpfiles.d/''${oldRules##*/}" | cut -f1)
-          # Links first, then parents from the deepest.
-          homeFilesRules "$oldRules" | LC_ALL=C sort -k1,1 -k2r | while IFS=$'\t' read -r type target; do
-            path=''${type#? }
-            type=''${type%% *}
-            grep -qxF -- "$type $path" <<<"$newEntries" && continue
-            if [ "$type" = L ]; then
-              [ "$(readlink -- "$path")" = "$target" ] && runuser -u "$user" -- rm -f -- "$path"
-            else
-              runuser -u "$user" -- rmdir --ignore-fail-on-non-empty -- "$path" 2>/dev/null
-            fi
+          local user=$1 new=$2 type path target
+          # Old entries missing from the new manifest, in its order: links before their folders.
+          grep -vxFf "$new" "$3" | while IFS=$'\t' read -r type path target; do
+            case $type in
+              L) [ "$(readlink -- "$path")" = "$target" ] && runuser -u "$user" -- rm -f -- "$path" ;;
+              d) [ -d "$path" ] && runuser -u "$user" -- rmdir -- "$path" 2>/dev/null ;;
+            esac && echo "home-files: removed $path"
           done
         }
 
-        for oldRules in /run/current-system/etc/tmpfiles.d/10-home-files-*.conf; do
-          [ -f "$oldRules" ] || continue
-          user=''${oldRules##*/10-home-files-}
-          user=''${user%.conf}
-          id -- "$user" >/dev/null 2>&1 && homeFilesCleanup "$oldRules" "$user" || true
+        for old in /run/current-system/etc/home-files/.*.manifest; do
+          [ -f "$old" ] || continue
+          new=$systemConfig/etc/home-files/''${old##*/}
+          [ -f "$new" ] || new=/dev/null
+          user=''${old##*/.}
+          user=''${user%.manifest}
+          id -- "$user" >/dev/null 2>&1 && homeFilesCleanup "$user" "$new" "$old" || true
+        done
+
+        # tmpfiles skips targets that already exist, so the config would silently not apply.
+        for new in "$systemConfig"/etc/home-files/.*.manifest; do
+          [ -f "$new" ] || continue
+          while IFS=$'\t' read -r type path target; do
+            [ "$type" = L ] || continue
+            if [ -e "$path" ] || [ -L "$path" ]; then
+              [ "$(readlink -- "$path")" = "$target" ] || echo "home-files: $path is occupied, not linked" >&2
+            fi
+          done <"$new"
         done
       '';
     };
