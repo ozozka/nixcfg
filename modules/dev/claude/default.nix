@@ -31,9 +31,7 @@ let
     tui = "default";
     disableAgentView = true;
     # Commands of the shared browser skill.
-    permissions.allow = [
-      "Bash(playwright-cli:*)"
-    ];
+    permissions.allow = [ "Bash(playwright-cli:*)" ];
     attribution = {
       commit = "";
       pr = "";
