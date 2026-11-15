@@ -12,6 +12,11 @@ let
       exec ${pkgs.python3}/bin/python3 -I ${./web-search.py} "$@"
   '';
 
+  # Page reader for agents (the web skill); trafilatura extracts the main text.
+  webFetch = pkgs.writeShellScriptBin "web-fetch" ''
+    exec ${pkgs.python3.withPackages (p: [ p.trafilatura ])}/bin/python3 -I ${./web-fetch.py} "$@"
+  '';
+
   # Playwright's browser CLI from the nixpkgs driver, under the command name its skill and help
   # use (npm `@playwright/cli`). Chromium only: the driver's default set has every browser.
   # A project `.playwright/cli.config.json` replaces this config instead of merging with it.
@@ -71,6 +76,7 @@ in
   environment.systemPackages = [
     pkgs.agent-browser
     playwrightCli
+    webFetch
     webSearch
   ];
 
