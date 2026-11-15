@@ -96,11 +96,12 @@ profiles under `ozozka.home.profiles.<profile>.files`; hosts enable them per use
 `ozozka.home.users.<user>.<profile> = true`.
 
 Files are exposed through `/etc/home-files/<user>` and linked into the user's home by
-systemd-tmpfiles. Invalid paths and conflicting targets are rejected. On a switch, links that
-left the config and their emptied folders are removed, as listed in each generation's
-`/etc/home-files/.<user>.manifest`; files and changed links are kept, and targets occupied by
-them are reported. All managed files are public and store-backed; profiles must not contain
-secrets.
+systemd-tmpfiles. Invalid paths and conflicting targets are rejected. Each activation, at switch
+or boot, compares the last applied manifest (`/var/lib/home-files/<user>.manifest`) with the new
+one (`/etc/home-files/.<user>.manifest`): links that left the config and their emptied folders
+are removed, missing links are recreated, and targets occupied by files or changed links are
+reported, never replaced. All managed files are public and store-backed; profiles must not
+contain secrets.
 
 ## Development
 

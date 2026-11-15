@@ -340,12 +340,16 @@ in
     environment.etc = etcEntries;
     systemd.tmpfiles.settings = tmpfilesSettings;
 
-    # tmpfiles only creates links, so links that left the config are removed here: the previous
-    # generation's manifest (still under `/run/current-system` during activation) is compared with
-    # the new one. A link goes only while it still points to its old target, a folder only when
-    # empty, both as the user. At boot there is no previous generation, so only warnings run.
+    # tmpfiles creates links but never removes them, and recreates missing ones only when its
+    # rules change. So each activation compares the last applied manifest (kept in
+    # /var/lib/home-files, so boots and boot-menu generations are covered) with the new one and
+    # removes what left: a link only while it still points to its old target, a folder only
+    # when empty, both as the user. Then it applies the user's rules and reports occupied targets.
     system.activationScripts.homeFiles = {
-      deps = [ "users" ];
+      deps = [
+        "users"
+        "etc"
+      ];
       text = ''
         homeFilesCleanup() {
           local user=$1 new=$2 type path target
@@ -358,24 +362,53 @@ in
           done
         }
 
-        for old in /run/current-system/etc/home-files/.*.manifest; do
-          [ -f "$old" ] || continue
-          new=$systemConfig/etc/home-files/''${old##*/}
+        homeFilesUser() {
+          local user=$1 state=/var/lib/home-files/$1.manifest home type path target
+          local new=$systemConfig/etc/home-files/.$1.manifest old=$state
+          # Before the first saved state, the previous generation is the last applied one.
+          [ -f "$old" ] || old=/run/current-system/etc/home-files/.$user.manifest
+          home=$(getent passwd "$user" | cut -d: -f6)
+          if [ -z "$home" ]; then
+            rm -f -- "$state"
+            return 0
+          fi
+          # An unmounted home keeps its state, so the next activation still cleans it.
+          if [ ! -d "$home" ]; then
+            echo "home-files: $home is missing, skipped" >&2
+            return 0
+          fi
           [ -f "$new" ] || new=/dev/null
-          user=''${old##*/.}
-          user=''${user%.manifest}
-          id -- "$user" >/dev/null 2>&1 && homeFilesCleanup "$user" "$new" "$old" || true
-        done
-
-        # tmpfiles skips targets that already exist, so the config would silently not apply.
-        for new in "$systemConfig"/etc/home-files/.*.manifest; do
-          [ -f "$new" ] || continue
-          while IFS=$'\t' read -r type path target; do
-            [ "$type" = L ] || continue
-            if [ -e "$path" ] || [ -L "$path" ]; then
-              [ "$(readlink -- "$path")" = "$target" ] || echo "home-files: $path is occupied, not linked" >&2
+          if [ -f "$old" ]; then homeFilesCleanup "$user" "$new" "$old" || true; fi
+          if [ "$new" = /dev/null ]; then
+            rm -f -- "$state"
+            return 0
+          fi
+          ${config.systemd.package}/bin/systemd-tmpfiles --create "/etc/tmpfiles.d/10-home-files-$user.conf" ||
+            echo "home-files: tmpfiles failed for $user" >&2
+          cp -- "$new" "$state"
+          # tmpfiles skips targets that already exist, so the config would silently not apply.
+          grep $'^L\t' "$new" | while IFS=$'\t' read -r type path target; do
+            if [ "$(readlink -- "$path")" = "$target" ]; then
+              continue
+            elif [ -e "$path" ] || [ -L "$path" ]; then
+              echo "home-files: $path is occupied, not linked" >&2
+            else
+              echo "home-files: $path is missing" >&2
             fi
-          done <"$new"
+          done
+        }
+
+        mkdir -p /var/lib/home-files
+        declare -A homeFilesUsers=()
+        for manifest in /var/lib/home-files/*.manifest /run/current-system/etc/home-files/.*.manifest \
+          "$systemConfig"/etc/home-files/.*.manifest; do
+          [ -f "$manifest" ] || continue
+          manifest=''${manifest##*/}
+          manifest=''${manifest#.}
+          homeFilesUsers[''${manifest%.manifest}]=1
+        done
+        for user in "''${!homeFilesUsers[@]}"; do
+          homeFilesUser "$user"
         done
       '';
     };
