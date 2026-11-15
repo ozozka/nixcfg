@@ -32,8 +32,7 @@ let
     disableAgentView = true;
     # Commands of the shared web skill.
     permissions.allow = [
-      "Bash(web-search:*)"
-      "Bash(agent-browser:*)"
+      "Bash(playwright-cli:*)"
     ];
     attribution = {
       commit = "";
