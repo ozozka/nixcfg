@@ -23,6 +23,7 @@ both are supplied by Nix. The sessions are read once at start and again on reloa
 """
 
 import json
+import math
 import os
 import re
 import socket
@@ -736,12 +737,37 @@ def collect():
 # Figures: what the pages show, as text and series.
 
 
+def numstr(number: float, decimals: int = 2) -> str:
+    # Turkish number format: dots between thousands, a comma before decimals.
+    if isinstance(number, int):
+        return f"{number:,}".replace(",", ".")
+    if not math.isfinite(number):
+        return "unavailable"
+    if round(number, decimals) == 0:
+        number = 0.0
+    formatted = f"{number:,.{decimals}f}"
+    return formatted.replace(",", "_").replace(".", ",").replace("_", ".")
+
+
 def num(value):
+    # Token counts, in thousands, millions, or billions from 10,000.
+    if value >= 1e9:
+        return f"{numstr(value / 1e9, 1)}B"
     if value >= 1e6:
-        return f"{value / 1e6:.1f}M"
+        return f"{numstr(value / 1e6, 1)}M"
     if value >= 1e4:
-        return f"{value / 1e3:.0f}k"
-    return f"{value:,.0f}"
+        return f"{numstr(value / 1e3, 0)}k"
+    return numstr(value, 0)
+
+
+def trimmed(value):
+    # One decimal, left out for whole numbers.
+    value = round(value, 1)
+    return numstr(int(value)) if value.is_integer() else numstr(value, 1)
+
+
+def money(value):
+    return f"${numstr(float(value), 2)}"
 
 
 def duration(ms):
@@ -750,19 +776,20 @@ def duration(ms):
         return f"{seconds // 3600:.0f}h{seconds % 3600 // 60:02.0f}m"
     if seconds >= 60:
         return f"{seconds // 60:.0f}m{seconds % 60:02.0f}s"
-    return f"{seconds:.1f}s"
+    return f"{numstr(seconds, 1)}s"
 
 
 def kib(value):
-    return f"{value / 1024:,.1f}"
+    return numstr(value / 1024, 1)
 
 
 def pct(value):
-    return f"{100 * value:.1f}%"
+    # A share of exactly 0 is an int, which numstr writes without decimals.
+    return f"%{numstr(float(100 * value), 1)}"
 
 
 def ratio(consumption, context):
-    return f"{consumption / context:.1f}x" if context else "-"
+    return f"{numstr(consumption / context, 1)}x" if context else "-"
 
 
 def maybe(value, show):
@@ -787,7 +814,8 @@ def session_title(session):
 def session_label(session):
     return (
         f"{session.time[:16].replace('T', ' ')} · {Path(session.cwd).name}"
-        f" · {session.agent} · {len(session.requests)} requests · peak {num(session.peak.prompt)}"
+        f" · {session.agent} · {numstr(len(session.requests))} requests"
+        f" · peak {num(session.peak.prompt)}"
     )
 
 
@@ -801,10 +829,10 @@ def overview_figures(sessions):
     # Your usage of Pi over every session: volume, cost, time, and rhythm.
     requests = [r for s in sessions for r in s.requests]
     return [
-        ("sessions", str(sum(1 for s in sessions if s.agent == "main"))),
+        ("sessions", numstr(sum(1 for s in sessions if s.agent == "main"))),
         ("input", num(sum(r.prompt for r in requests))),
         ("output", num(sum(r.output for r in requests))),
-        ("cost", f"${sum(r.cost for r in requests):.2f}"),
+        ("cost", money(sum(r.cost for r in requests))),
         ("active time", duration(sum(s.active for s in sessions))),
         ("wait/turn", wait_per_turn(sessions)),
     ]
@@ -827,12 +855,12 @@ def model_rows(sessions):
         rows.append(
             [
                 model,
-                str(len(items)),
+                numstr(len(items)),
                 num(tokens),
                 num(sum(r.output for r in items)),
-                f"${sum(r.cost for r in items):.2f}",
-                f"{100 * sum(r.cache for r in items) / tokens:.0f}%",
-                f"{sum(r.output for r in timed) / seconds:.1f}" if seconds else "-",
+                money(sum(r.cost for r in items)),
+                f"%{numstr(100 * sum(r.cache for r in items) / tokens, 0)}",
+                numstr(sum(r.output for r in timed) / seconds, 1) if seconds else "-",
             ]
         )
     return ["Model", "Requests", "Input", "Output", "Cost", "Cache", "Tok/s"], rows
@@ -914,7 +942,7 @@ def startup_figures(items):
     skills = statistics.mean(s.requests[0].skills for s in items)
     return [
         ("startup tokens", num(statistics.mean(sum(s.startup.values()) for s in items))),
-        ("skills", f"{round(skills, 1):g}"),
+        ("skills", trimmed(skills)),
     ]
 
 
@@ -938,23 +966,23 @@ def session_figures(items, average):
         return statistics.mean(values) if average else values[0]
 
     return [
-        ("requests", f"{mean([len(s.requests) for s in items]):.0f}"),
+        ("requests", numstr(mean([len(s.requests) for s in items]), 0)),
         ("peak context", num(mean([s.peak.prompt for s in items]))),
         ("consumed", num(mean([s.total for s in items]))),
         ("cache hit", cache_hit(items)),
         ("output", num(mean([sum(r.output for r in s.requests) for s in items]))),
-        ("cost", f"${mean([s.cost for s in items]):.2f}"),
+        ("cost", money(mean([s.cost for s in items]))),
         ("active time", duration(mean([s.active for s in items]))),
         ("wait/turn", wait_per_turn(items)),
         *startup_figures(items),
-        ("subagents", f"{round(mean([len(s.delegations) for s in items]), 1):g}"),
+        ("subagents", trimmed(mean([len(s.delegations) for s in items]))),
         ("subagent share", subagent_share(items)),
     ]
 
 
 def context_columns(session):
     # The context of each request stacked by chart group, with the compactions.
-    labels = [str(r.index + 1) for r in session.requests]
+    labels = [numstr(r.index + 1) for r in session.requests]
     return labels, [grouped(r.parts) for r in session.requests], session.marks
 
 
@@ -1007,11 +1035,13 @@ def parts_rows(context, consumed, sizes, counts, sessions=None, context_shares=N
             pct(cons / cons_total),
             ratio(cons / cons_total, share),
             kib(sum(sizes.get(n, 0) for n in members)),
-            f"{sum(counts.get(n, 0) for n in members):.{1 if sessions is not None else 0}f}",
+            numstr(
+                float(sum(counts.get(n, 0) for n in members)), 1 if sessions is not None else 0
+            ),
         ]
         if sessions is not None:
             row.append(
-                str(sum(1 for present in sessions if any(n in present for n in members)))
+                numstr(sum(1 for present in sessions if any(n in present for n in members)))
             )
         return row
 
@@ -1057,7 +1087,7 @@ def parts_rows(context, consumed, sizes, counts, sessions=None, context_shares=N
     headers = ["Part", "Context", "Context %", "Consumed", "Consumed %", "Ratio", "KiB"]
     headers.append("Count/session" if sessions is not None else "Count")
     if sessions is not None:
-        headers.append(f"Sessions/{len(sessions)}")
+        headers.append(f"Sessions/{numstr(len(sessions))}")
     return headers, rows
 
 
@@ -1102,7 +1132,7 @@ def compaction_figures(items):
         return None
     done = [c for c in every if c.after and c.before]
     return [
-        ("compactions", f"{round(len(every) / len(items), 1):g}"),
+        ("compactions", trimmed(len(every) / len(items))),
         ("context before", num(statistics.mean(c.before for c in every))),
         ("context after", num(statistics.mean(c.after for c in done)) if done else "-"),
         ("summary", num(statistics.mean(c.summary for c in done)) if done else "-"),
@@ -1115,7 +1145,7 @@ def compression(row):
     # Tokens of the child's work per token of report, when both are known.
     if not (row.consumed and row.tokens):
         return "-"
-    return f"{row.consumed / row.tokens:.0f}x"
+    return f"{numstr(row.consumed / row.tokens, 0)}x"
 
 
 def parallelism(rows):
@@ -1125,7 +1155,7 @@ def parallelism(rows):
         (s.start for s in sessions), default=0
     )
     active = sum(s.active for s in sessions)
-    return f"{active / span:.1f}x" if span > 0 else "-"
+    return f"{numstr(active / span, 1)}x" if span > 0 else "-"
 
 
 def delegations_figures(session):
@@ -1154,8 +1184,8 @@ def delegation_rows(session):
         [
             row.agent,
             preview(row.task),
-            str(row.runs),
-            maybe(row.requests, str),
+            numstr(row.runs),
+            maybe(row.requests, numstr),
             maybe(row.consumed, num),
             maybe(row.active, duration),
             maybe(row.overhead, pct),
@@ -1163,8 +1193,8 @@ def delegation_rows(session):
             compression(row),
             maybe(row.kept, num),
             num(row.resent),
-            maybe(row.corrections, str),
-            maybe(row.notes, str),
+            maybe(row.corrections, numstr),
+            maybe(row.notes, numstr),
             OUTCOMES.get(row.state, "-"),
         ]
         for row in sorted(session.delegations, key=lambda r: -(r.consumed or 0))
@@ -1175,14 +1205,14 @@ def delegation_rows(session):
 def delegation_figures(row):
     # A child's run as its parent saw it: what it returned and how it ended.
     return [
-        ("runs", str(row.runs)),
+        ("runs", numstr(row.runs)),
         ("report", num(row.tokens)),
         ("compression", compression(row)),
         ("kept out", maybe(row.kept, num)),
         ("parent re-send", num(row.resent)),
         ("overhead", maybe(row.overhead, pct)),
-        ("corrections", maybe(row.corrections, str)),
-        ("notes", maybe(row.notes, str)),
+        ("corrections", maybe(row.corrections, numstr)),
+        ("notes", maybe(row.notes, numstr)),
         ("ending", OUTCOMES.get(row.state, "-")),
     ]
 
@@ -1198,13 +1228,13 @@ def efficiency_figures(items):
     ends = sum((s.outcomes for s in items), Counter())
     runs = sum(r.runs for r in rows)
     return [
-        ("linked runs", str(runs)),
-        ("compression", f"{statistics.median(ratios):.0f}x" if ratios else "-"),
+        ("linked runs", numstr(runs)),
+        ("compression", f"{numstr(statistics.median(ratios), 0)}x" if ratios else "-"),
         ("overhead", pct(statistics.mean(overheads)) if overheads else "-"),
         ("kept out/run", num(sum(kept) / runs) if kept else "-"),
         ("budget stops", pct(ends["budget"] / sum(ends.values())) if ends else "-"),
-        ("corrections/run", f"{sum(r.corrections or 0 for r in rows) / runs:.1f}"),
-        ("notes/run", f"{sum(r.notes or 0 for r in rows) / runs:.1f}"),
+        ("corrections/run", numstr(sum(r.corrections or 0 for r in rows) / runs, 1)),
+        ("notes/run", numstr(sum(r.notes or 0 for r in rows) / runs, 1)),
     ]
 
 
@@ -1253,11 +1283,19 @@ def px(points):
 
 # Charts: ECharts options in the theme's colors.
 
-# Axis labels in the same short form as num(); tooltips show exact values.
-SHORT_NUMBER = """v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M'
-  : v >= 1e4 ? (v / 1e3).toFixed(0) + 'k' : Math.round(v).toLocaleString('en-US')"""
-EXACT_NUMBER = "v => v == null ? '-' : Math.round(v).toLocaleString('en-US')"
-DECIMAL = "v => v == null ? '-' : v.toFixed(1)"
+# numstr() in JavaScript; axis labels in the short form of num(), and tooltips with exact
+# values.
+NUMSTR = """(x, d) => x.toLocaleString('tr-TR',
+  {minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: 'always'})"""
+SHORT_NUMBER = f"""v => {{ const f = {NUMSTR};
+  return v >= 1e9 ? f(v / 1e9, 1) + 'B' : v >= 1e6 ? f(v / 1e6, 1) + 'M'
+    : v >= 1e4 ? f(v / 1e3, 0) + 'k' : f(v, 0); }}"""
+EXACT_NUMBER = f"v => v == null ? '-' : ({NUMSTR})(v, 0)"
+DECIMAL = f"v => v == null ? '-' : ({NUMSTR})(v, 1)"
+# Axis ticks that are not token counts, with as many decimals as the tick has.
+PLAIN_NUMBER = (
+    "v => v.toLocaleString('tr-TR', {useGrouping: 'always', maximumFractionDigits: 3})"
+)
 DENSE_COLUMNS = 60
 BAR_GAP = "28%"
 
@@ -1294,7 +1332,7 @@ def chart_theme():
 
 
 def value_axis(name=None, show=True, tokens=True):
-    # A zero-based axis; token axes label in the short form, others with ECharts' numbers.
+    # A zero-based axis; token axes label in the short form, others in full.
     return {
         "type": "value",
         "min": 0,
@@ -1302,7 +1340,8 @@ def value_axis(name=None, show=True, tokens=True):
         "name": name,
         "nameLocation": "middle",
         "nameGap": 56,
-    } | ({"axisLabel": {":formatter": SHORT_NUMBER}} if tokens else {})
+        "axisLabel": {":formatter": SHORT_NUMBER if tokens else PLAIN_NUMBER},
+    }
 
 
 def column_options(labels, xlabel, yaxes, series, legend=None, ticks=None):
@@ -1399,7 +1438,7 @@ def bar_options(segments, xlabel, tokens=True, legend=False):
     # The bar ends at its total, which is not a round number to label.
     axis = value_axis(xlabel, tokens=tokens)
     axis |= {"max": sum(v for v, _, _ in segments) or 1, "nameGap": 24}
-    axis["axisLabel"] = axis.get("axisLabel", {}) | {"showMaxLabel": False}
+    axis["axisLabel"]["showMaxLabel"] = False
     return {
         "grid": {"left": 0, "right": 0, "top": 0, "bottom": 64 if legend else 40},
         "tooltip": {
@@ -1427,7 +1466,7 @@ def bar_options(segments, xlabel, tokens=True, legend=False):
 def growth_options(running, average):
     # The sessions that reached each request number as columns, and their average context.
     return column_options(
-        [str(i + 1) for i in range(len(running))],
+        [numstr(i + 1) for i in range(len(running))],
         "Request",
         [value_axis("Sessions", tokens=False), value_axis("Context tokens")],
         [
@@ -1577,7 +1616,7 @@ def average_page(agent: str):
         if not items:
             ui.label("No such agent.")
             return
-        ui.label(f"{agent} · {len(items)} sessions").classes("title")
+        ui.label(f"{agent} · {numstr(len(items))} sessions").classes("title")
         kpis(session_figures(items, True))
         # Each session's column is labeled with its day, shows its title, and opens its page.
         days, columns = history_columns(items)
@@ -1631,7 +1670,7 @@ def navigation():
             children[session.parent].append(session)
 
     def node(session):
-        size = f"{len(session.requests)} requests · peak {num(session.peak.prompt)}"
+        size = f"{numstr(len(session.requests))} requests · peak {num(session.peak.prompt)}"
         caption = size if session.child else f"{session.agent} · {size}"
         runs = [node(child) for child in children[session.id]]
         return (
@@ -1649,7 +1688,7 @@ def navigation():
 
     agents = sorted(store.by_agent.items(), key=lambda kv: (kv[0] != "main", kv[0]))
     averages = [
-        {"id": f"/average/{agent}", "label": agent, "caption": f"{len(items)} sessions"}
+        {"id": f"/average/{agent}", "label": agent, "caption": f"{numstr(len(items))} sessions"}
         for agent, items in agents
     ]
     unlinked = [s for s in newest if s.child and s.parent not in store.by_id]
