@@ -96,8 +96,9 @@ profiles under `ozozka.home.profiles.<profile>.files`; hosts enable them per use
 `ozozka.home.users.<user>.<profile> = true`.
 
 Files are exposed through `/etc/home-files/<user>` and linked into the user's home by
-systemd-tmpfiles. Invalid paths and conflicting targets are rejected. All managed files are
-public and store-backed; profiles must not contain secrets.
+systemd-tmpfiles. Invalid paths and conflicting targets are rejected. On a switch, links that
+left the config and their emptied folders are removed; files and changed links are kept. All
+managed files are public and store-backed; profiles must not contain secrets.
 
 ## Development
 
