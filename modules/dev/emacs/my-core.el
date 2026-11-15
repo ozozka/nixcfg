@@ -371,14 +371,51 @@ function itself."
 (defvar-local my-term-notification nil
   "ID of the terminal buffer's last desktop notification, replaced by its next one.")
 
+(defun my-term-state-has-buffer-p (state buffer)
+  "Non-nil if window STATE has BUFFER among a window's previous buffers.
+Other tabs keep their windows as writable state, with buffer names."
+  (cond ((and (consp state) (eq (car state) 'prev-buffers))
+         (seq-some (lambda (entry)
+                     (member (car-safe entry) (list buffer (buffer-name buffer))))
+                   (cdr state)))
+        ((consp state)
+         (or (my-term-state-has-buffer-p (car state) buffer)
+             (my-term-state-has-buffer-p (cdr state) buffer)))))
+
+(defun my-term-show-in-tab-line (buffer)
+  "Show BUFFER in the window whose tab line has it, selecting that window's tab.
+`tab-bar-get-buffer-tab' only sees buffers displayed in other tabs, not the
+ones behind another buffer of a window's tab line.  Return non-nil if found."
+  (let ((window-with-buffer
+         (lambda ()
+           (seq-find (lambda (window) (assq buffer (window-prev-buffers window)))
+                     (window-list)))))
+    (unless (funcall window-with-buffer)
+      (when-let* ((place
+                   (seq-some
+                    (lambda (frame)
+                      (seq-some (lambda (tab)
+                                  (and (not (eq (car tab) 'current-tab))
+                                       (my-term-state-has-buffer-p (alist-get 'ws tab) buffer)
+                                       (cons frame (seq-position (tab-bar-tabs frame) tab))))
+                                (tab-bar-tabs frame)))
+                    (frame-list))))
+        (select-frame-set-input-focus (car place))
+        (tab-bar-select-tab (1+ (cdr place)))))
+    (when-let* ((window (funcall window-with-buffer)))
+      (select-window window)
+      (switch-to-buffer buffer nil t))))
+
 (defun my-term-show (buffer)
-  "Show BUFFER: select the tab displaying it, else show it in the selected window."
+  "Show BUFFER: select the tab displaying it or holding it in a tab line,
+else show it in the selected window."
   (when (buffer-live-p buffer)
-    (if (tab-bar-get-buffer-tab buffer t)
-        ;; Overriding, since `display-buffer-alist' places terminals in the selected window.
-        (let ((display-buffer-overriding-action '(display-buffer-in-tab (reusable-frames . t))))
-          (pop-to-buffer buffer))
-      (pop-to-buffer-same-window buffer))))
+    (cond ((tab-bar-get-buffer-tab buffer t)
+           ;; Overriding, since `display-buffer-alist' places terminals in the selected window.
+           (let ((display-buffer-overriding-action '(display-buffer-in-tab (reusable-frames . t))))
+             (pop-to-buffer buffer)))
+          ((my-term-show-in-tab-line buffer))
+          (t (pop-to-buffer-same-window buffer)))))
 
 (defun my-term-notify (_code text)
   "Send TEXT, an OSC 777 `notify;TITLE;BODY' sequence, as a desktop notification.
