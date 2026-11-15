@@ -40,15 +40,15 @@ Scope {
     }
   }
 
-  // The window whose class is the notification's desktop entry or app name.
+  // The window whose class is the notification's desktop entry or app name. Hyprland evaluates
+  // dispatches as Lua, so names keep only characters safe in both a Lua string and a regex.
   function focusApp(notification) {
-    const names = [notification.desktopEntry, notification.appName].filter(name => name).map(name
-                                                                                             => name.replace(
-                                                                                                  /[^A-Za-z0-9 ._-]/g,
-                                                                                                  "").replace(
-                                                                                                  /\./g, "\\."));
-    if (names.length > 0)
-      Hyprland.dispatch(`focuswindow class:(?i)^(${names.join("|")})$`);
+    const names = [notification.desktopEntry, notification.appName].filter(name => name);
+    const pattern = names.map(name => name.replace(/[^A-Za-z0-9 ._-]/g, "").replace(/\./g,
+                                                                                    "[.]")).join(
+            "|");
+    if (pattern)
+      Hyprland.dispatch(`hl.dsp.focus({ window = "class:(?i)^(${pattern})$" })`);
   }
 
   ScriptModel {
