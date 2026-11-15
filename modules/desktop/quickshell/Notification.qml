@@ -106,6 +106,9 @@ Scope {
       if (notification)
         notificationModule.activate(notification);
     }
+    function dismissLatest(): void {
+      notificationModule.states[0]?.notification?.dismiss();
+    }
     function dismissAll(): void {
       for (const state of notificationModule.states.slice())
         state.notification?.dismiss();
