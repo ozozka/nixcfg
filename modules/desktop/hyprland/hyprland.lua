@@ -147,8 +147,9 @@ hl.window_rule {
 
 local mainMod = "SUPER"
 
-hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd "qs ipc call notifications dismissAll")
-hl.bind(mainMod .. " + SHIFT + Escape", hl.dsp.exec_cmd "qs ipc call lock lock")
+hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd "qs ipc call notifications dismissLatest")
+hl.bind(mainMod .. " + SHIFT + Escape", hl.dsp.exec_cmd "qs ipc call notifications dismissAll")
+hl.bind(mainMod .. " + CTRL + Escape", hl.dsp.exec_cmd "qs ipc call lock lock")
 hl.bind(mainMod .. " + Z", hl.dsp.exec_cmd "qs ipc call menu toggle")
 -- The latest notification, as if clicked: its app takes focus.
 hl.bind(mainMod .. " + A", hl.dsp.exec_cmd "qs ipc call notifications activateLatest")
