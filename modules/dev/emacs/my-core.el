@@ -77,6 +77,7 @@
   (x-sensitive-text-pointer-shape 'hand)
   (initial-scratch-message nil)
   (help-window-select t)
+  (async-shell-command-buffer 'new-buffer)
   (select-enable-clipboard t)
   (select-enable-primary t)
   (indent-tabs-mode nil)
