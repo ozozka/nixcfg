@@ -161,6 +161,17 @@
   (mpc-songs-format "   %{Duration} %{file}")
   (mpc-status-buffer-format '("%{Duration}-%{Time}" "%{file}")))
 
+(defun my-tab-line-tabs ()
+  "The window's tab-line buffers in a stable order that survives desktop saves.
+`tab-line-tabs-fixed-window-buffers' keeps the order as buffers, which desktop
+cannot write, so it is mirrored as names and restored from them."
+  (when-let* (((not (window-parameter nil 'tab-line-buffers)))
+              (names (window-parameter nil 'my-tab-line-names)))
+    (set-window-parameter nil 'tab-line-buffers (delq nil (mapcar #'get-buffer names))))
+  (let ((buffers (tab-line-tabs-fixed-window-buffers)))
+    (set-window-parameter nil 'my-tab-line-names (mapcar #'buffer-name buffers))
+    buffers))
+
 (use-package tab-line
   :ensure nil
   :functions tab-line-select-tab-buffer
@@ -179,7 +190,7 @@
              (tab-line-tab-name-truncated-buffer buffer buffers))))
   (tab-line-auto-hscroll t)
   ;; (tab-line-tabs-buffer-groups nil)
-  (tab-line-tabs-function #'tab-line-tabs-fixed-window-buffers)
+  (tab-line-tabs-function #'my-tab-line-tabs)
   (tab-line-tabs-buffer-group-function #'tab-line-tabs-buffer-group-by-project)
   :bind
   ("M-`" . (lambda () (interactive) (switch-to-buffer nil)))
@@ -194,6 +205,7 @@
          (let* ((tab (nth (1- number) (funcall tab-line-tabs-function)))
                 (buffer (and tab (get-buffer tab))))
            (when buffer (tab-line-select-tab-buffer buffer (selected-window))))))))
+  (add-to-list 'window-persistent-parameters '(my-tab-line-names . writable))
   (global-tab-line-mode 1))
 
 (use-package tab-bar
