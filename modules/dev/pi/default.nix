@@ -124,6 +124,8 @@ in
       "keybindings.json" = settingsFormat.generate "keybindings.json" {
         "app.session.resume" = "ctrl+r";
         "app.thinking.cycle" = "ctrl+t";
+        # Emacs takes alt+up inside its terminals (previous result).
+        "app.message.dequeue" = "alt+r";
       };
 
       "themes/ozozka.json" = settingsFormat.generate "ozozka.json" {

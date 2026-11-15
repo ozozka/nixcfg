@@ -135,7 +135,7 @@
   :hook
   (markdown-ts-mode . my-markdown-writing-setup)
   :bind
-  (:map markdown-ts-mode-map ("C-c c" . markdown-ts-toggle-hide-markup))
+  (:map markdown-ts-mode-map ("M-e" . markdown-ts-toggle-hide-markup))
   :config
   (defun my-markdown-sync-line-numbers (&rest _)
     (display-line-numbers-mode (if markdown-ts-hide-markup -1 1)))

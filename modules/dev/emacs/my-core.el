@@ -12,39 +12,67 @@
 
 (use-package emacs
   :ensure nil
-  :functions flymake-start project-prefixed-buffer-name
+  :functions flymake-start project-prefixed-buffer-name project-root
 
   :bind
-  ("M-<down>" . (lambda () (interactive) (scroll-up-command my-scroll-step)))
-  ("M-<up>" . (lambda () (interactive) (scroll-down-command my-scroll-step)))
-  ("S-M-<down>" . (lambda () (interactive) (scroll-other-window my-scroll-step)))
-  ("S-M-<up>" . (lambda () (interactive) (scroll-other-window (- my-scroll-step))))
-  ("C-c SPC" . project-recompile)
-  ("C-c C-SPC" . project-compile)
+  ;; Navigation: Shift moves, Ctrl+Shift relocates or acts on the other window.
+  ("S-<down>" . (lambda () (interactive) (scroll-up-command my-scroll-step)))
+  ("S-<up>" . (lambda () (interactive) (scroll-down-command my-scroll-step)))
+  ("C-S-<down>" . (lambda () (interactive) (scroll-other-window my-scroll-step)))
+  ("C-S-<up>" . (lambda () (interactive) (scroll-other-window (- my-scroll-step))))
+  ;; Results of compile, project search, grep, occur; Flymake diagnostics are on M-S-<up/down>.
+  ("M-<up>" . previous-error)
+  ("M-<down>" . next-error)
+  ("S-<left>" . tab-line-switch-to-prev-tab)
+  ("S-<right>" . tab-line-switch-to-next-tab)
+  ("C-S-<left>" . tab-line-move-tab-backward)
+  ("C-S-<right>" . tab-line-move-tab-forward)
+  ;; The window's own previous buffer, matching its tab line, not the frame-wide one.
+  ("M-<tab>" . (lambda ()
+                 (interactive)
+                 (when-let* ((entry (seq-find (lambda (entry)
+                                                (and (buffer-live-p (car entry))
+                                                     (not (eq (car entry) (current-buffer)))))
+                                              (window-prev-buffers))))
+                   (switch-to-buffer (car entry)))))
+  ("M-`" . other-window)
+  ("C-<tab>" . completion-at-point)
+  ("C-S-<tab>" . tab-next)
+  ("C-S-<iso-lefttab>" . tab-next)
+
+  ;; Commands: M-<key> for the common case, Shift for a second variant.
+  ("M-z" . project-recompile)
+  ("M-Z" . project-compile)
   ;; Async and terminal buffers are named after the project, like `project-shell':
   ;; *ol-async*, *ol-term*, numbered when several exist.
-  ("C-c e" . (lambda ()
-              (interactive)
-              (require 'project)
-              (let ((shell-command-buffer-name-async (project-prefixed-buffer-name "async")))
-                (call-interactively #'project-async-shell-command))))
-  ("C-c a" .  (lambda () (interactive) (save-buffer) (kill-current-buffer)))
-  ("C-c s" . project-save-some-buffers)
-  ("C-c f" . project-find-file)
-  ("C-c d" . project-dired)
-  ("C-c v" . project-vc-dir)
-  ("C-c b" . ibuffer)
-  ("C-c z" . (lambda ()
-              (interactive)
-              (require 'project)
-              ;; `ansi-term' adds the stars itself.
-              (ansi-term (getenv "SHELL")
-                         (string-trim (project-prefixed-buffer-name "term") "\\*" "\\*"))))
-  ("C-c =" . count-words)
-  ("C-c w" . whitespace-cleanup)
-  ("C-c t" . toggle-frame-tab-bar)
-  ("C-c q" . tab-line-close-tab)
-  ("C-c k" . kill-current-buffer)
+  ("M-a" . (lambda ()
+             (interactive)
+             (require 'project)
+             (let ((shell-command-buffer-name-async (project-prefixed-buffer-name "async")))
+               (call-interactively #'project-async-shell-command))))
+  ("M-A" . (lambda ()
+             (interactive)
+             (require 'project)
+             ;; At the project root, else in the buffer's folder; `ansi-term' adds the stars.
+             (let ((default-directory (if-let* ((project (project-current)))
+                                          (project-root project)
+                                        default-directory)))
+               (ansi-term (getenv "SHELL")
+                          (string-trim (project-prefixed-buffer-name "term") "\\*" "\\*")))))
+  ("M-f" . project-find-file)
+  ("M-F" . project-dired)
+  ("M-b" . project-switch-to-buffer)
+  ("M-B" . ibuffer)
+  ("M-q" . kill-current-buffer)
+  ("M-Q" . tab-line-close-tab)
+  ("M-'" . project-find-regexp)
+  ("M-\"" . project-vc-dir)
+  ("M-c" . whitespace-cleanup)
+  ("M-o" . count-words)
+  ("M-O" . toggle-frame-tab-bar)
+  ("C-s" . save-buffer)
+  ("C-f" . isearch-forward)
+  ("C-S-f" . isearch-backward)
   ("C-c m" . (lambda () (interactive) (flymake-start t)))
   ("C-c C-m" . (lambda (directory)
                  (interactive (list (read-directory-name "Trust directory: " default-directory default-directory t)))
@@ -66,7 +94,6 @@
   (fset 'yes-or-no-p 'y-or-n-p)
   (prefer-coding-system 'utf-8)
   (set-language-environment "UTF-8")
-  (windmove-default-keybindings)
   (cua-mode 1)
   (show-paren-mode 1)
   (column-number-mode 1)
@@ -207,8 +234,6 @@ function itself."
   ;; (tab-line-tabs-buffer-groups nil)
   (tab-line-tabs-function #'tab-line-tabs-fixed-window-buffers)
   (tab-line-tabs-buffer-group-function #'tab-line-tabs-buffer-group-by-project)
-  :bind
-  ("M-`" . (lambda () (interactive) (switch-to-buffer nil)))
   :config
   (dotimes (index 9)
     (let ((number (1+ index)))
@@ -500,15 +525,11 @@ scrollback are gone."
   (keymap-set term-raw-map "<escape>" (lambda () (interactive) (term-send-raw-string "\e")))
   (keymap-set term-raw-map "<backtab>" (lambda () (interactive) (term-send-raw-string "\e[Z")))
   (keymap-set term-raw-map "S-<return>" (lambda () (interactive) (term-send-raw-string "\026\n")))
-  (keymap-set term-raw-map "C-c d" (keymap-lookup global-map "C-c d"))
-  (keymap-set term-raw-map "C-c z" (keymap-lookup global-map "C-c z"))
-  (keymap-set term-raw-map "C-c f" (keymap-lookup global-map "C-c f"))
-  (keymap-set term-raw-map "C-c q" (keymap-lookup global-map "C-c q"))
-  (keymap-set term-raw-map "C-c k" (keymap-lookup global-map "C-c k"))
-  (keymap-set term-raw-map "M-`" (keymap-lookup global-map "M-`"))
-  (dotimes (number 10)
-    (let ((key (format "M-%d" number)))
-      (keymap-set term-raw-map key (keymap-lookup global-map key)))))
+  ;; Global keys that also work inside terminals; the program there loses them.
+  (dolist (key (append '("M-<tab>" "M-`" "M-z" "M-Z" "M-a" "M-A" "M-f" "M-F" "M-b" "M-B"
+                         "M-q" "M-Q" "M-'" "M-\"")
+                       (mapcar (lambda (number) (format "M-%d" number)) (number-sequence 0 9))))
+    (keymap-set term-raw-map key (keymap-lookup global-map key))))
 
 (use-package compile
   :ensure nil
@@ -517,6 +538,22 @@ scrollback are gone."
   (compile-command "nix run .#")
   ;; *ol-compilation*, like the async and terminal buffers.
   (project-compilation-buffer-name-function #'project-prefixed-buffer-name))
+
+(use-package isearch
+  :ensure nil
+  :bind
+  ;; Search is on C-f; repeating it steps through matches, as in other editors.
+  (:map isearch-mode-map
+        ("C-f" . isearch-repeat-forward)
+        ("C-S-f" . isearch-repeat-backward)))
+
+(use-package flymake
+  :ensure nil
+  :bind
+  ;; Diagnostics of this buffer; M-<up/down> walk result lists, which skip them.
+  (:map flymake-mode-map
+        ("M-S-<up>" . flymake-goto-prev-error)
+        ("M-S-<down>" . flymake-goto-next-error)))
 
 (use-package minibuffer
   :ensure nil
