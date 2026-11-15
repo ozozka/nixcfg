@@ -12,7 +12,7 @@
 
 (use-package emacs
   :ensure nil
-  :functions flymake-start
+  :functions flymake-start project-prefixed-buffer-name
 
   :bind
   ("M-<down>" . (lambda () (interactive) (scroll-up-command my-scroll-step)))
@@ -21,14 +21,25 @@
   ("S-M-<up>" . (lambda () (interactive) (scroll-other-window (- my-scroll-step))))
   ("C-c SPC" . project-recompile)
   ("C-c C-SPC" . project-compile)
-  ("C-c e" . project-async-shell-command)
+  ;; Async and terminal buffers are named after the project, like `project-shell':
+  ;; *ol-async*, *ol-term*, numbered when several exist.
+  ("C-c e" . (lambda ()
+              (interactive)
+              (require 'project)
+              (let ((shell-command-buffer-name-async (project-prefixed-buffer-name "async")))
+                (call-interactively #'project-async-shell-command))))
   ("C-c a" .  (lambda () (interactive) (save-buffer) (kill-current-buffer)))
   ("C-c s" . project-save-some-buffers)
   ("C-c f" . project-find-file)
   ("C-c d" . project-dired)
   ("C-c v" . project-vc-dir)
   ("C-c b" . ibuffer)
-  ("C-c z" . (lambda () (interactive) (ansi-term (getenv "SHELL") "bash")))
+  ("C-c z" . (lambda ()
+              (interactive)
+              (require 'project)
+              ;; `ansi-term' adds the stars itself.
+              (ansi-term (getenv "SHELL")
+                         (string-trim (project-prefixed-buffer-name "term") "\\*" "\\*"))))
   ("C-c =" . count-words)
   ("C-c w" . whitespace-cleanup)
   ("C-c t" . toggle-frame-tab-bar)
@@ -503,7 +514,9 @@ scrollback are gone."
   :ensure nil
   :custom
   (compilation-scroll-output 'first-error)
-  (compile-command "nix run .#"))
+  (compile-command "nix run .#")
+  ;; *ol-compilation*, like the async and terminal buffers.
+  (project-compilation-buffer-name-function #'project-prefixed-buffer-name))
 
 (use-package minibuffer
   :ensure nil
