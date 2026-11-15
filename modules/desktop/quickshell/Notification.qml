@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Services.Notifications
@@ -20,6 +21,34 @@ Scope {
   function remove(state) {
     states = states.filter(candidate => candidate !== state);
     Qt.callLater(() => state.destroy());
+  }
+
+  // A click: the app handles the default action (Zen opens the chat), then its window takes focus,
+  // switching workspace. Apps cannot take focus on their own (Hyprland ignores activation
+  // requests), so this happens only on a click or the activateLatest call.
+  function activate(notification) {
+    const actions = notification.actions;
+    const action = actions.find(action => action.identifier === "default") ?? actions[0];
+    const resident = notification.resident;
+    focusApp(notification);
+    if (!action)
+      notification.dismiss();
+    else {
+      action.invoke();
+      if (resident && notification)
+        notification.dismiss();
+    }
+  }
+
+  // The window whose class is the notification's desktop entry or app name.
+  function focusApp(notification) {
+    const names = [notification.desktopEntry, notification.appName].filter(name => name).map(name
+                                                                                             => name.replace(
+                                                                                                  /[^A-Za-z0-9 ._-]/g,
+                                                                                                  "").replace(
+                                                                                                  /\./g, "\\."));
+    if (names.length > 0)
+      Hyprland.dispatch(`focuswindow class:(?i)^(${names.join("|")})$`);
   }
 
   ScriptModel {
@@ -71,6 +100,12 @@ Scope {
 
   IpcHandler {
     target: "notifications"
+    // The latest notification, as if clicked.
+    function activateLatest(): void {
+      const notification = notificationModule.states[0]?.notification;
+      if (notification)
+        notificationModule.activate(notification);
+    }
     function dismissAll(): void {
       for (const state of notificationModule.states.slice())
         state.notification?.dismiss();
@@ -141,6 +176,8 @@ Scope {
 
     implicitHeight: content.implicitHeight + T.dimS * 2
     color: cardHover.hovered ? T.colO : T.colB
+    border.color: T.colP
+    border.width: notification?.urgency === NotificationUrgency.Critical ? 2 : 0
     HoverHandler {
       id: cardHover
     }
@@ -153,16 +190,7 @@ Scope {
         if (button === Qt.RightButton) {
           card.notification.dismiss();
         } else {
-          const actions = card.notification.actions;
-          const action = actions.find(action => action.identifier === "default") ?? actions[0];
-          if (action) {
-            const resident = card.notification.resident;
-            action.invoke();
-            if (resident && card.notification)
-              card.notification.dismiss();
-          } else {
-            card.notification.dismiss();
-          }
+          notificationModule.activate(card.notification);
         }
       }
     }
