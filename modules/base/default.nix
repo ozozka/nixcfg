@@ -1,9 +1,28 @@
 self:
 
-{ config, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   cfg = config.ozozka;
+  # Shortcuts as commands rather than aliases, so non-interactive shells (Emacs commands,
+  # scripts, agents) have them too. Interactive-only ones stay aliases.
+  shortcuts = lib.mapAttrsToList pkgs.writeShellScriptBin {
+    n = ''exec nix flake "$@"'';
+    nf = ''exec nix fmt "$@"'';
+    # A flake app: `r info` runs `.#info`, `r nixpkgs#hello` an external one.
+    r = ''
+      ref=$1
+      shift
+      [[ $ref == *#* ]] || ref=.#$ref
+      exec nix run "$ref" -- "$@"
+    '';
+    j = ''exec ${pkgs.just}/bin/just "$@"'';
+  };
 in
 {
   imports = [ self.nixosModules.options ];
@@ -125,10 +144,6 @@ in
       l = "LC_COLLATE=C ls -ACx --group-directories-first --color=auto"; # -F (symbols), -x
       c = "printf '\\033c'";
       nd = "exec nix develop";
-      nf = "nix fmt";
-      n = "nix flake";
-      r = "f() { local ref=\"$1\"; shift; [[ \"$ref\" == *#* ]] || ref=\".#$ref\"; nix run \"$ref\" -- \"$@\"; }; f";
-      j = "just";
     };
 
     variables = {
@@ -138,12 +153,15 @@ in
       HISTCONTROL = "ignoreboth:erasedups";
     };
 
-    systemPackages = with pkgs; [
-      libarchive
-      wget
-      fd
-      ripgrep
-      just
-    ];
+    systemPackages =
+      with pkgs;
+      [
+        libarchive
+        wget
+        fd
+        ripgrep
+        just
+      ]
+      ++ shortcuts;
   };
 }

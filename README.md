@@ -17,7 +17,7 @@ should be predictable and easy to recover from, while keeping the system up to d
 ## Manual
 
 Most of the required commands are wrapped as Nix flake apps for ease of use. `nix flake show`
-lists the available apps, while the `r` shell alias provides a shorthand for running them.
+lists the available apps, while the `r` command provides a shorthand for running them.
 
 ```bash
 nix run              # Build and activate the current host configuration

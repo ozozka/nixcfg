@@ -9,14 +9,14 @@ in
   imports = [ self.nixosModules.options ];
 
   environment = {
-    systemPackages = with pkgs; [ gh ];
+    systemPackages = [
+      pkgs.gh
+      # A command rather than an alias, so non-interactive shells have it too.
+      (pkgs.writeShellScriptBin "g" ''exec git "$@"'')
+    ];
 
     sessionVariables = {
       GH_TELEMETRY = "0";
-    };
-
-    shellAliases = {
-      g = "git";
     };
   };
 
