@@ -1375,6 +1375,10 @@ def bar_options(segments, xlabel, tokens=True, legend=False):
     in the background color separate them.
     """
     edge = {} if legend else {"itemStyle": {"borderColor": color("b"), "borderWidth": 1}}
+    # The bar ends at its total, which is not a round number to label.
+    axis = value_axis(xlabel, tokens=tokens)
+    axis |= {"max": sum(v for v, _, _ in segments) or 1, "nameGap": 24}
+    axis["axisLabel"] = axis.get("axisLabel", {}) | {"showMaxLabel": False}
     return {
         "grid": {"left": 0, "right": 0, "top": 0, "bottom": 64 if legend else 40},
         "tooltip": {
@@ -1382,8 +1386,7 @@ def bar_options(segments, xlabel, tokens=True, legend=False):
             ":valueFormatter": EXACT_NUMBER if tokens else DECIMAL,
         },
         "legend": {"show": legend, "bottom": 0},
-        "xAxis": value_axis(xlabel, tokens=tokens)
-        | {"max": sum(v for v, _, _ in segments) or 1, "nameGap": 24},
+        "xAxis": axis,
         "yAxis": {"type": "category", "data": [""], "show": False},
         "series": [
             {
@@ -1398,6 +1401,19 @@ def bar_options(segments, xlabel, tokens=True, legend=False):
             for value, key, name in segments
         ],
     }
+
+
+def growth_options(running, average):
+    # The sessions that reached each request number as columns, and their average context.
+    return column_options(
+        [str(i + 1) for i in range(len(running))],
+        "Request",
+        [value_axis("Sessions", tokens=False), value_axis("Context tokens")],
+        [
+            {"type": "bar", "name": "Sessions", "data": running, "color": color("o")},
+            line("Average context", average, "p", 1),
+        ],
+    )
 
 
 # Pages
@@ -1520,6 +1536,17 @@ def session_page(session_id: str):
         chart(stacked_options(labels, columns, "Context tokens", "Request", marks), 420)
         chart(bar_options(startup_segments([session]), "Tokens"), 96)
         parts_table(*session_parts(session))
+        time_section([session])
+        compactions_section([session])
+        if session.delegations:
+            section("Subagents")
+            kpis(delegations_figures(session))
+            table(*delegation_rows(session), wrap=1)
+        if row := session.delegation:
+            section("Delegation")
+            ui.link(session_label(row.parent), f"/session/{row.parent.id}").classes("title")
+            ui.label(row.task.strip().split("\n")[0])
+            kpis(delegation_figures(row))
 
 
 def average_page(agent: str):
@@ -1534,6 +1561,33 @@ def average_page(agent: str):
         chart(stacked_options(labels, columns, "Consumed tokens", "Session"), 420)
         chart(bar_options(startup_segments(items), "Tokens"), 96)
         parts_table(*average_parts(items))
+        time_section(items)
+        compactions_section(items)
+        if figures := efficiency_figures(items):
+            section("Efficiency")
+            kpis(figures)
+        running, average = growth_series(items)
+        if running:
+            chart(growth_options(running, average), 420)
+
+
+def section(title):
+    ui.label(title).classes("section")
+
+
+def time_section(items):
+    # Time per category as a bar; averages show means per session.
+    spent = time_spent(items)
+    if any(spent.values()):
+        section("Time")
+        segments = [(spent[part] / 60000, key, part) for part, key in TIME_PARTS.items()]
+        chart(bar_options(segments, "Minutes", tokens=False, legend=True), 120)
+
+
+def compactions_section(items):
+    if figures := compaction_figures(items):
+        section("Compactions")
+        kpis(figures)
 
 
 def navigation():
@@ -1588,7 +1642,7 @@ def root():
         store.load(await run.io_bound(collect))
         ui.navigate.reload()
 
-    with ui.left_drawer(value=True, fixed=True).props("width=400 bordered"):
+    with ui.left_drawer(value=True, fixed=True).props("width=320 bordered"):
         button = ui.button("Reload", icon="refresh", on_click=reload).props("flat dense")
         tree = ui.tree(navigation(), on_select=lambda e: e.value and ui.navigate.to(e.value))
         tree.add_slot(
@@ -1606,10 +1660,18 @@ def root():
             "/average/{agent}": average_page,
         }
     )
-    # The tree follows the shown page, also one opened from a link.
+
+    # The tree follows the shown page, also one opened from a link, and opens the parent of
+    # a subagent run.
+    def follow(path):
+        tree.select(path)
+        session = store.by_id.get(path.removeprefix("/session/"))
+        if session and session.parent in store.by_id:
+            tree.expand([f"/session/{session.parent}"])
+
     router = ui.context.client.sub_pages_router
-    tree.select(router.current_path)
-    router.on_path_changed(tree.select)
+    follow(router.current_path)
+    router.on_path_changed(follow)
 
 
 def style():
@@ -1626,6 +1688,7 @@ body, body.body--dark {{ background:var(--b); color:var(--f);
 .nicegui-sub-pages {{ width:100%; }}
 .page {{ width:100%; gap:{dim["s"]}px; padding:{dim["m"]}px; }}
 .title {{ color:var(--m); }}
+a.title {{ text-decoration:none; }}
 .section {{ width:100%; font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
   border-bottom:1px solid var(--o); margin-top:{dim["s"]}px; }}
 .kpis {{ width:100%; display:grid; grid-template-columns:repeat(6, minmax(0, 1fr));
@@ -1637,7 +1700,7 @@ body, body.body--dark {{ background:var(--b); color:var(--f);
 .q-table th {{ font:{px(size["l"])}px "{fonts["sans"]}"; color:var(--m); }}
 .q-table th, .q-table td {{ padding:{dim["t"]}px {dim["s"]}px; height:auto;
   font-size:inherit; white-space:nowrap; border-color:var(--o); }}
-.q-table td.wrap {{ white-space:normal; color:var(--m); font-size:{px(size["m"])}px; }}
+.q-table td.wrap {{ white-space:normal; color:var(--m); font:{px(size["m"])}px "{fonts["sans"]}"; }}
 .q-table tbody tr.branch {{ cursor:pointer; }}
 .square {{ margin-right:{dim["t"] * 2}px; }}
 .marker {{ color:var(--m); }}

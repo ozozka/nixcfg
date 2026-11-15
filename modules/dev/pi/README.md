@@ -10,7 +10,7 @@ commands below and links the files under `~/.pi/agent` through the `pi` home pro
 | `pi`                                | Pi with the extensions below, without the workflow, docs, or subagents   |
 | `wpi`                               | Pi with the personal workflow appended to the system prompt and `--docs` |
 | `wpi --subagents`, `pi --subagents` | Either of the above with subagents enabled                               |
-| `pi-stats`                          | An HTML report of what Pi's model requests contained (`stats.py`)        |
+| `pi-stats`                          | A local app of what Pi's model requests contained (`stats.py`)           |
 
 Flags enable whole features (`--docs`, `--subagents`); a single tool is turned on through the
 tool selection (`--tools +name`). `wpi` stays the only wrapper.
@@ -90,15 +90,17 @@ tokens and cost, current tool call) until the next prompt after it ends, and
 
 ## pi-stats
 
-`pi-stats [--since YYYY-MM-DD] [--project TEXT] [--out FILE]` rebuilds every model request from
-the session files and writes `/tmp/pi-stats.html`, styled with the system theme, as one page:
+`pi-stats` rebuilds every model request from the session files, then serves a NiceGUI app on
+`127.0.0.1` and opens it in Zen; Ctrl+C stops it. It is styled with the system theme, and the
+reload button reads the session files again. A tree on the left opens each page, with its own
+URL:
 
 - The overview: totals of your usage and tokens per calendar day with moving averages (weight
   1/12) of tokens, active hours, and your wait per turn.
-- The sessions: one dropdown with an average per agent, then every session newest first, with
-  the subagent runs it started nested under it, then subagent runs whose parent is missing.
+- An average per agent, then every session newest first, with the subagent runs it started
+  nested under it, then subagent runs whose parent is missing.
 
-Each session panel shows figures (including the startup's tokens, KiB, tools, context files, and
+Each session page shows figures (including the startup's tokens, KiB, tools, context files, and
 skills), the context per request stacked by section, the startup's parts as one bar, and a parts
 table nested by section (startup, conversation, tool calls, tool results, other) that opens on
 click, with context and consumed tokens, their shares and ratio, KiB, how many times each part
