@@ -104,10 +104,10 @@
       (propertize
        (buffer-name)
        'face (pcase (list (buffer-modified-p) buffer-read-only)
-               (`(t t) '((t :inherit mode-line-inactive)))
-               (`(t nil) '((t :inherit flymake-warning-echo :weight bold))) ; flymake-error-echo
-               (`(nil t) '((t :inherit mode-line-inactive)))
-               ('((t :inherit mode-line :weight bold))))))
+               (`(t t) '(:inherit mode-line-inactive))
+               (`(t nil) '(:inherit flymake-warning-echo :weight bold)) ; flymake-error-echo
+               (`(nil t) '(:inherit mode-line-inactive))
+               ('(:inherit mode-line :weight bold)))))
      " "
      (:eval
       (cond
