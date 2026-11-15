@@ -343,7 +343,8 @@ in
     # tmpfiles only creates links, so links that left the config are removed here: the previous
     # generation's manifest (still under `/run/current-system` during activation) is compared with
     # the new one. A link goes only while it still points to its old target, a folder only when
-    # empty, both as the user. At boot there is no previous generation, so only warnings run.
+    # empty, both as the user. At boot there is no previous generation, so only the checks of the
+    # new manifest run.
     system.activationScripts.homeFiles = {
       deps = [ "users" ];
       text = ''
@@ -370,12 +371,18 @@ in
         # tmpfiles skips targets that already exist, so the config would silently not apply.
         for new in "$systemConfig"/etc/home-files/.*.manifest; do
           [ -f "$new" ] || continue
-          while IFS=$'\t' read -r type path target; do
-            [ "$type" = L ] || continue
+          user=''${new##*/.}
+          user=''${user%.manifest}
+          # A folder that is still a link from when it was a target itself: it is home.nix's own.
+          grep $'^d\t' "$new" | while IFS=$'\t' read -r type path; do
+            [ -L "$path" ] && [[ $(readlink -- "$path") == /etc/home-files/"$user"/* ]] &&
+              runuser -u "$user" -- rm -f -- "$path" && echo "home-files: removed $path"
+          done
+          grep $'^L\t' "$new" | while IFS=$'\t' read -r type path target; do
             if [ -e "$path" ] || [ -L "$path" ]; then
               [ "$(readlink -- "$path")" = "$target" ] || echo "home-files: $path is occupied, not linked" >&2
             fi
-          done <"$new"
+          done
         done
       '';
     };
