@@ -110,6 +110,10 @@ in
       promptInit = ''
         PS1='\[\033[36m\]\w\[\033[31m\] \$ \[\033[00m\]'
         PS2='\[\033[31m\]> \[\033[00m\]'
+        # Reports the working directory (OSC 7) at each prompt; terminals that track it, such as
+        # Emacs term, follow `cd`, others ignore it.
+        __report_directory() { printf '\e]7;file://%s%s\e\\' "$HOSTNAME" "$PWD"; }
+        PROMPT_COMMAND="__report_directory''${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
       '';
     };
   };
