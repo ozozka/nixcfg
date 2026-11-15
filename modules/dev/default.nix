@@ -14,6 +14,8 @@ _:
       scc
       github-linguist
 
+      typescript-language-server
+      tinymist
       bash-language-server
       vscode-langservers-extracted
       docker-language-server
