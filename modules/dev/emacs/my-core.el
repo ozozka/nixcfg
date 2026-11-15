@@ -350,6 +350,42 @@
   :hook
   (shell-mode . ansi-color-for-comint-mode-on))
 
+(defvar-local my-term-notification nil
+  "ID of the terminal buffer's last desktop notification, replaced by its next one.")
+
+(defun my-term-show (buffer)
+  "Show BUFFER: select the tab displaying it, else show it in the selected window."
+  (when (buffer-live-p buffer)
+    (if (tab-bar-get-buffer-tab buffer t)
+        ;; Overriding, since `display-buffer-alist' places terminals in the selected window.
+        (let ((display-buffer-overriding-action '(display-buffer-in-tab (reusable-frames . t))))
+          (pop-to-buffer buffer))
+      (pop-to-buffer-same-window buffer))))
+
+(defun my-term-notify (_code text)
+  "Send TEXT, an OSC 777 `notify;TITLE;BODY' sequence, as a desktop notification.
+Programs in the terminal notify without knowing where they run.  Nothing is
+sent while the terminal is the selected buffer of the focused frame; a click
+shows it.  Quickshell focuses the Emacs window by the desktop entry."
+  (when (string-prefix-p "notify;" text)
+    (let ((fields (split-string (substring text 7) ";"))
+          (buffer (current-buffer)))
+      (unless (and (eq (window-buffer (selected-window)) buffer)
+                   (eq (frame-focus-state) t))
+        (setq my-term-notification
+              (notifications-notify
+               :title (car fields)
+               :body (string-join (cdr fields) ";")
+               :app-name "Emacs"
+               :desktop-entry "emacs"
+               :replaces-id my-term-notification
+               :actions '("default" "Show")
+               :on-action (lambda (_id _action) (my-term-show buffer))))))))
+
+(use-package notifications
+  :ensure nil
+  :commands notifications-notify)
+
 (use-package term
   :ensure nil
   :functions term-send-raw-string term-paste
@@ -365,6 +401,7 @@
                  (setq-local scroll-conservatively 101)
                  (setq-local scroll-step 1)))
   :config
+  (add-to-list 'term-osc-handlers '("777" . my-term-notify))
   (keymap-set term-raw-map "C-S-c" #'kill-ring-save)
   (keymap-set term-raw-map "C-S-v" #'term-paste)
   (keymap-set term-raw-map "<escape>" (lambda () (interactive) (term-send-raw-string "\e")))
