@@ -382,6 +382,24 @@ shows it.  Quickshell focuses the Emacs window by the desktop entry."
                :actions '("default" "Show")
                :on-action (lambda (_id _action) (my-term-show buffer))))))))
 
+(defun my-term-desktop-misc (_desktop-dirname)
+  "Save the terminal's directory, so desktop reopens it there."
+  default-directory)
+
+(defun my-term-desktop-restore (_file name directory)
+  "Reopen the saved terminal NAME as a new shell in DIRECTORY, as `ansi-term' does.
+The same name lets restored windows and tabs find the buffer; programs and
+scrollback are gone."
+  (let ((default-directory (if (and (stringp directory) (file-directory-p directory))
+                                directory
+                              default-directory)))
+    (with-current-buffer (term-ansi-make-term (generate-new-buffer-name name) (getenv "SHELL"))
+      (term-mode)
+      (term-char-mode)
+      (let (term-escape-char)
+        (term-set-escape-char ?\C-x))
+      (current-buffer))))
+
 (use-package notifications
   :ensure nil
   :commands notifications-notify)
@@ -399,8 +417,10 @@ shows it.  Quickshell focuses the Emacs window by the desktop entry."
                  (setq-local truncate-lines t)
                  (setq-local scroll-margin 0)
                  (setq-local scroll-conservatively 101)
-                 (setq-local scroll-step 1)))
+                 (setq-local scroll-step 1)
+                 (setq-local desktop-save-buffer #'my-term-desktop-misc)))
   :config
+  (add-to-list 'desktop-buffer-mode-handlers '(term-mode . my-term-desktop-restore))
   (add-to-list 'term-osc-handlers '("777" . my-term-notify))
   (keymap-set term-raw-map "C-S-c" #'kill-ring-save)
   (keymap-set term-raw-map "C-S-v" #'term-paste)
