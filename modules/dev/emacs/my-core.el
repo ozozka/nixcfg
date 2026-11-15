@@ -161,6 +161,8 @@
   (mpc-songs-format "   %{Duration} %{file}")
   (mpc-status-buffer-format '("%{Duration}-%{Time}" "%{file}")))
 
+(declare-function tab-line-tabs-fixed-window-buffers "tab-line")
+
 (defun my-tab-line-tabs ()
   "The window's tab-line buffers in a stable order that survives desktop saves.
 `tab-line-tabs-fixed-window-buffers' keeps the order as buffers, which desktop
@@ -397,6 +399,13 @@ shows it.  Quickshell focuses the Emacs window by the desktop entry."
 (defun my-term-desktop-misc (_desktop-dirname)
   "Save the terminal's directory, so desktop reopens it there."
   default-directory)
+
+;; Defined in term.el, which is not loaded when this file is compiled.
+(defvar term-escape-char)
+(declare-function term-ansi-make-term "term")
+(declare-function term-char-mode "term")
+(declare-function term-mode "term")
+(declare-function term-set-escape-char "term")
 
 (defun my-term-desktop-restore (_file name directory)
   "Reopen the saved terminal NAME as a new shell in DIRECTORY, as `ansi-term' does.
