@@ -23,11 +23,6 @@ let
     };
     inherit (cfg) fontSize dim;
   };
-  # Shared code stays beside its consumers whether Pi follows the home-file links or not.
-  extensions = lib.fileset.toSource {
-    root = ./.;
-    fileset = lib.fileset.fileFilter (file: file.hasExt "ts") ./.;
-  };
 in
 {
   imports = with self.nixosModules; [
@@ -55,12 +50,22 @@ in
       "agents" = ./agents;
 
       "extensions" =
-        lib.genAttrs [ "docs.ts" "mode.ts" "notify.ts" "question.ts" "status.ts" "subagent.ts" ] (
-          file: "${extensions}/${file}"
-        )
-        // {
+        let
+          # One store path, so `./lib` imports resolve: Pi loads extensions by their real path.
+          source = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.fileFilter (file: file.hasExt "ts") ./.;
+          };
+        in
+        {
+          "docs.ts" = "${source}/docs.ts";
+          "mode.ts" = "${source}/mode.ts";
+          "notify.ts" = "${source}/notify.ts";
+          "question.ts" = "${source}/question.ts";
+          "status.ts" = "${source}/status.ts";
+          "subagent.ts" = "${source}/subagent.ts";
           # Shared code; Pi skips folders without an index file.
-          "lib" = "${extensions}/lib";
+          "lib" = "${source}/lib";
         };
 
       "settings.json" = settingsFormat.generate "settings.json" {
