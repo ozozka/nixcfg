@@ -1,41 +1,42 @@
-"""Pi context statistics: what each model call contained, rebuilt from Pi's session files.
+"""Pi context statistics: what each model request contained, rebuilt from Pi's session files
+and shown as a local NiceGUI app.
 
-Usage: stats.py THEME [--since YYYY-MM-DD] [--project TEXT] [--out FILE]
+Usage: stats.py THEME BROWSER
 
-Each assistant message is one model call. Its context is the path from the session root to
+Each assistant message is one model request. Its context is the path from the session root to
 that message: system messages patch the prompt sections and tool declarations, the latest
 compaction replaces older entries with its summary and prompt checkpoint, and context edits
 replace or drop entries. Parts are measured in UTF-8 bytes; their tokens are the part's share
-of the call's real prompt tokens (input + cache read + cache write) from the response usage.
+of the request's real prompt tokens (input + cache read + cache write) from the response usage.
 
 Output tokens are split over the response's own text, thinking, and tool calls the same way;
-reported reasoning tokens go to thinking. A session's consumption is the sum of its calls'
-prompt and output parts, so a part sent with every call weighs more than its context share.
+reported reasoning tokens go to thinking. A session's consumption is the sum of its requests'
+prompt and output parts, so a part sent with every request weighs more than its context share.
 
 Subagent sessions live in subagent-sessions/; the parent's subagent results and messages
 record their session IDs, and how each run of a child ended. A child's notes are its
 send_message calls; parent messages (steers and continuations) are its prompts that start
 with PARENT_MESSAGE.
-THEME is a JSON file of colors, fonts, and sizes supplied by Nix.
+
+THEME is a JSON file of colors, fonts, and sizes, and BROWSER the browser that opens the app;
+both are supplied by Nix. The sessions are read once at start and again on reload.
 """
 
-import argparse
-import html
-import io
 import json
-import math
 import os
 import re
+import socket
 import statistics
+import subprocess
+import sys
 from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from functools import cache
 from itertools import count, pairwise
 from pathlib import Path
 
-from matplotlib import cycler, rc_context
-from matplotlib.figure import Figure
-from matplotlib.ticker import FuncFormatter
+from nicegui import app, run, ui
 
 AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
 # Image blocks carry base64 data; count each as a fixed size instead.
@@ -48,7 +49,7 @@ SKILL_TAG = "<skill>"
 # How subagent.ts marks the parent's messages to a child, and the child's note tool.
 PARENT_MESSAGE = "Message from the parent:"
 NOTE_TOOL = "send_message"
-# Run endings in subagent.ts, as labeled in the report.
+# Run endings in subagent.ts, as labeled in the app.
 OUTCOMES = {"idle": "Done", "budget": "Budget", "failed": "Failed", "aborted": "Stopped"}
 GROWTH_MIN_SESSIONS = 3
 # Gaps before a prompt longer than this are breaks, not time spent on the session.
@@ -82,16 +83,24 @@ SECTIONS = ["other", "tool results", "tool calls", "conversation", "startup"]
 STARTUP_SECTIONS = ["tool definitions", "context files", "system prompt"]
 # The conversation's own parts, in table order; its other parts are listed under other.
 CONVERSATION_PARTS = ["conversation:thinking", "conversation:assistant", "conversation:user"]
+# The parts table SECTIONS as the chart stacks them, bottom to top, with their theme colors.
+CHART_GROUPS = {
+    "startup": "o",
+    "conversation": "m",
+    "tool calls": "p",
+    "tool results": "s",
+    "other": "f",
+}
+# Startup groups: the parts of a request before any conversation, and their theme colors, in
+# the order the prompt is put together.
+STARTUP_GROUPS = {
+    "system": ("system prompt", "m"),
+    "tool": ("tool definitions", "p"),
+    "context": ("context files", "s"),
+}
 
 
-def section_of(part):
-    # The parts table section and, for startup, the subsection of a part.
-    group = part.split(":", 1)[0]
-    if group in ("system", "context", "tool"):
-        return "startup", GROUPS[group]
-    if group in ("call", "result"):
-        return GROUPS[group], None
-    return ("conversation" if part in CONVERSATION_PARTS else "other"), None
+# Session files
 
 
 def read_session(path):
@@ -124,6 +133,20 @@ def text_of(content):
     if isinstance(content, str):
         return content
     return "".join(block.get("text", "") for block in content or [])
+
+
+def milliseconds(stamp):
+    return datetime.fromisoformat(stamp).timestamp() * 1000
+
+
+def section_of(part):
+    # The parts table section and, for startup, the subsection of a part.
+    group = part.split(":", 1)[0]
+    if group in ("system", "context", "tool"):
+        return "startup", GROUPS[group]
+    if group in ("call", "result"):
+        return GROUPS[group], None
+    return ("conversation" if part in CONVERSATION_PARTS else "other"), None
 
 
 def message_parts(entry, content=None):
@@ -214,12 +237,183 @@ def system_parts(state, cwd):
     return parts
 
 
-def calls_of(header, entries, uses):
-    # One record per assistant message with real usage and a system prompt; uses counts for
-    # each entry ID the requests whose context included it.
+def subagent_records(entries):
+    # The subagent tool's results and messages in a session, as (entry, details, content).
+    for entry in entries:
+        message = entry.get("message") or {}
+        if message.get("toolName") == "subagent":
+            yield entry, message.get("details") or {}, message.get("content")
+        elif entry.get("customType") == "subagent":
+            yield entry, entry.get("details") or {}, entry.get("content")
+
+
+# Data
+
+
+@dataclass
+class Request:
+    """One model request: an assistant message with real usage and a system prompt."""
+
+    index: int
+    time: str
+    model: str | None
+    # Prompt tokens: input + cache read + cache write.
+    prompt: int
+    output: int
+    cache: int
+    cost: float
+    # Pi's time for the whole response, from sending the request; None before Pi recorded it.
+    duration: float | None
+    # Skills listed in the system prompt.
+    skills: int
+    # Context bytes in all and per part; context tokens per part; output tokens per part.
+    bytes: int
+    sizes: dict[str, int]
+    parts: dict[str, float]
+    out: dict[str, float]
+
+
+@dataclass
+class Compaction:
+    """One compaction: the context before it (Pi's count), the context of the first request
+    after it and the summary's tokens in that request (None when none followed), the tokens
+    of its own run, and its time from the entry before it (None above COMPACTION_MAX_MS).
+    """
+
+    before: int
+    after: int | None
+    summary: float | None
+    run: int
+    time: float | None
+
+
+@dataclass
+class RunReport:
+    """A report a subagent returned to its parent: one per ended child run."""
+
+    child: str
+    agent: str
+    task: str
+    state: str | None
+    tokens: float
+    resent: float
+
+
+@dataclass
+class Delegation:
+    """A child session's runs as its parent saw them, with the child's own totals."""
+
+    child: str
+    agent: str
+    task: str
+    state: str | None
+    parent: Session
+    session: Session | None
+    runs: int = 0
+    tokens: float = 0.0
+    resent: float = 0.0
+
+    @property
+    def requests(self):
+        return len(self.session.requests) if self.session else None
+
+    @property
+    def consumed(self):
+        return self.session.total if self.session else None
+
+    @property
+    def active(self):
+        return self.session.active if self.session else None
+
+    @property
+    def overhead(self):
+        # The fixed price of an agent: its startup tokens, sent with every request.
+        if not (self.session and self.consumed):
+            return None
+        return sum(self.session.startup.values()) * len(self.session.requests) / self.consumed
+
+    @property
+    def kept(self):
+        # What the parent never had to hold: the child's tool results, less the report.
+        return max(0, self.session.material - self.tokens) if self.session else None
+
+    @property
+    def corrections(self):
+        return self.session.parent_messages if self.session else None
+
+    @property
+    def notes(self):
+        return self.session.notes if self.session else None
+
+
+@dataclass
+class Session:
+    id: str
+    agent: str
+    cwd: str
+    child: bool
+    requests: list[Request]
+    # Part -> tokens over the session, prompt and output parts of every request.
+    consumed: dict[str, float]
+    compactions: list[Compaction]
+    # The index of the first request after each compaction.
+    marks: list[int]
+    # Milliseconds per TIME_PARTS category, and each counted wait as (prompt time, wait).
+    spent: dict[str, float]
+    waits: list[tuple[float, float]]
+    # Wall-clock span, for the parallelism of a parent's subagent runs.
+    start: float
+    end: float
+    notes: int
+    parent_messages: int
+    # Part -> how many times it occurred.
+    counts: Counter
+    # The tool results the session read, each counted once, for delegation's kept out.
+    material: float
+    bytes_per_token: float
+    reports: list[RunReport]
+    parent: str | None
+    task: str
+    # How its runs ended, as its parent recorded them.
+    outcomes: Counter
+    delegations: list[Delegation] = field(default_factory=list)
+    # Set for a child whose parent's reports include it.
+    delegation: Delegation | None = None
+
+    @property
+    def time(self):
+        return self.requests[0].time
+
+    @property
+    def peak(self):
+        return max(self.requests, key=lambda r: r.prompt)
+
+    @property
+    def cost(self):
+        return sum(r.cost for r in self.requests)
+
+    @property
+    def total(self):
+        return sum(self.consumed.values())
+
+    @property
+    def active(self):
+        return sum(self.spent.values())
+
+    @property
+    def startup(self):
+        # The first request's parts before any conversation, in tokens.
+        parts = self.requests[0].parts
+        return {n: v for n, v in parts.items() if n.split(":")[0] in STARTUP_GROUPS}
+
+
+def requests_of(header, entries, uses):
+    # The session's requests; uses counts for each entry ID the requests whose context
+    # included it.
     by_id = {e["id"]: e for e in entries}
-    # Each entry is measured once; later calls share it.
+    # Each entry is measured once; later requests share it.
     measured = {}
+    index = count()
     for entry in entries:
         message = entry.get("message") or {}
         usage = message.get("usage") or {}
@@ -239,22 +433,18 @@ def calls_of(header, entries, uses):
         state = {"sections": {}, "tools": {}}
         compactions = [i for i, e in enumerate(path) if e["type"] == "compaction"]
         if compactions:
-            index = compactions[-1]
-            compaction = path[index]
+            at = compactions[-1]
+            compaction = path[at]
             apply_system(state, compaction.get("systemMessage") or {})
             kept = next(
                 (i for i, e in enumerate(path) if e["id"] == compaction["firstKeptEntryId"]),
-                index,
+                at,
             )
             # Kept entries before the compaction, without their system messages, then the rest.
             path = (
                 [compaction]
-                + [
-                    e
-                    for e in path[kept:index]
-                    if (e.get("message") or {}).get("role") != "system"
-                ]
-                + path[index + 1 :]
+                + [e for e in path[kept:at] if (e.get("message") or {}).get("role") != "system"]
+                + path[at + 1 :]
             )
         conversation, included = [], []
         for item in path:
@@ -278,86 +468,21 @@ def calls_of(header, entries, uses):
         for name, length in system_parts(state, header.get("cwd")) + conversation:
             parts[name] += length
         total = sum(parts.values()) or 1
-        yield {
-            "time": entry["timestamp"],
-            "model": message.get("model"),
-            "prompt": prompt,
-            "bytes": total,
-            "sizes": dict(parts),
-            "output": usage.get("output", 0),
-            # Pi's time for the whole response, from sending the request; None before Pi
-            # recorded it.
-            "duration": message.get("durationMs"),
-            "cache": usage.get("cacheRead", 0),
-            "cost": (usage.get("cost") or {}).get("total", 0),
-            # Skills listed in the system prompt.
-            "skills": state["sections"].get("skills", "").count(SKILL_TAG),
-            "parts": {name: value / total * prompt for name, value in parts.items()},
-            "out": output_parts(message),
-        }
-
-
-def session_of(header, calls, agent, entries):
-    # Session totals; consumption sums every call's prompt parts and output parts.
-    consumed = defaultdict(float)
-    for index, call in enumerate(calls):
-        call["index"] = index
-        for parts in (call["parts"], call["out"]):
-            for name, tokens in parts.items():
-                consumed[name] += tokens
-    compactions = [e for e in entries if e["type"] == "compaction"]
-    for compaction in compactions:
-        consumed["conversation:compaction runs"] += run_tokens(compaction)
-    peak = max(calls, key=lambda c: c["prompt"])
-    messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
-    spent, waits = timing(entries)
-    return {
-        "id": header.get("id"),
-        "agent": agent,
-        "cwd": header.get("cwd", ""),
-        "time": calls[0]["time"],
-        "model": peak["model"],
-        "calls": calls,
-        "peak": peak["prompt"],
-        "consumed": dict(consumed),
-        "total": sum(consumed.values()),
-        # Bytes per token of the session's requests, for parts measured only in bytes.
-        "ratio": statistics.median(c["bytes"] / c["prompt"] for c in calls),
-        "compactions": len(compactions),
-        # The first call after each compaction.
-        "marks": [
-            next((c["index"] for c in calls if c["time"] > e["timestamp"]), len(calls) - 1)
-            for e in compactions
-        ],
-        "cost": sum(c["cost"] for c in calls),
-        "compaction_list": [
-            compaction_of(e, calls, previous)
-            for previous, e in pairwise(entries)
-            if e["type"] == "compaction"
-        ],
-        "spent": spent,
-        "active": sum(spent.values()),
-        "waits": waits,
-        # Wall-clock span, for the parallelism of a parent's subagent runs.
-        "start": milliseconds(entries[0]["timestamp"]),
-        "end": milliseconds(entries[-1]["timestamp"]),
-        "notes": sum(
-            1
-            for m in messages
-            if m.get("role") == "assistant"
-            for block in m.get("content") or []
-            if block.get("type") == "toolCall" and block.get("name") == NOTE_TOOL
-        ),
-        "parent_messages": sum(
-            1
-            for m in messages
-            if m.get("role") == "user" and text_of(m.get("content")).startswith(PARENT_MESSAGE)
-        ),
-    }
-
-
-def milliseconds(stamp):
-    return datetime.fromisoformat(stamp).timestamp() * 1000
+        yield Request(
+            index=next(index),
+            time=entry["timestamp"],
+            model=message.get("model"),
+            prompt=prompt,
+            output=usage.get("output", 0),
+            cache=usage.get("cacheRead", 0),
+            cost=(usage.get("cost") or {}).get("total", 0),
+            duration=message.get("durationMs"),
+            skills=state["sections"].get("skills", "").count(SKILL_TAG),
+            bytes=total,
+            sizes=dict(parts),
+            parts={name: value / total * prompt for name, value in parts.items()},
+            out=output_parts(message),
+        )
 
 
 def timing(entries):
@@ -365,11 +490,11 @@ def timing(entries):
 
     Model time is each response's durationMs; a turn's tool time is its longest tool result,
     since tools of one turn run in parallel, and counts as subagent waits when it includes a
-    subagent wait. Compaction runs from the entry before it, up to COMPACTION_MAX_MS. Your time is the wait from the
-    end of a finished run to your next prompt (prompts sent while a run continues, such as
-    steering, are not waits; gaps longer than BREAK_MS are breaks), plus the time you take to
-    answer the question tool. The session files do not record closing Pi or /resume, so a
-    shorter gap across them counts as a wait too.
+    subagent wait. Compaction runs from the entry before it, up to COMPACTION_MAX_MS. Your
+    time is the wait from the end of a finished run to your next prompt (prompts sent while a
+    run continues, such as steering, are not waits; gaps longer than BREAK_MS are breaks),
+    plus the time you take to answer the question tool. The session files do not record
+    closing Pi or /resume, so a shorter gap across them counts as a wait too.
 
     Returns the milliseconds per category and each counted wait as (prompt time, wait).
     """
@@ -420,115 +545,39 @@ def run_tokens(compaction):
     return sum(usage.get(key, 0) for key in ("input", "cacheRead", "cacheWrite", "output"))
 
 
-def compaction_of(entry, calls, previous):
-    """One compaction: the context before it (Pi's count), the context of the first request
-    after it and the summary's tokens in that request (None when none followed), the tokens
-    of its own run, and its time from the entry before it (None above COMPACTION_MAX_MS).
-    """
-    after = next((c for c in calls if c["time"] > entry["timestamp"]), None)
-    summary = after["parts"].get("conversation:compaction summary") if after else None
-    return {
-        "before": entry.get("tokensBefore", 0),
-        "after": after["prompt"] if after else None,
-        "summary": summary,
-        "run": run_tokens(entry),
-        "time": compaction_time(previous, entry),
-    }
-
-
-def compaction_time(previous, entry):
+def compaction_of(entry, requests, previous):
+    after = next((r for r in requests if r.time > entry["timestamp"]), None)
     gap = milliseconds(entry["timestamp"]) - milliseconds(previous["timestamp"])
-    return gap if gap <= COMPACTION_MAX_MS else None
+    return Compaction(
+        before=entry.get("tokensBefore", 0),
+        after=after.prompt if after else None,
+        summary=after.parts.get("conversation:compaction summary") if after else None,
+        run=run_tokens(entry),
+        time=gap if gap <= COMPACTION_MAX_MS else None,
+    )
 
 
-def subagent_records(entries):
-    # The subagent tool's results and messages in a session, as (entry, details, content).
-    for entry in entries:
-        message = entry.get("message") or {}
-        if message.get("toolName") == "subagent":
-            yield entry, message.get("details") or {}, message.get("content")
-        elif entry.get("customType") == "subagent":
-            yield entry, entry.get("details") or {}, entry.get("content")
-
-
-def collect(since, project):
-    main_files = sorted(AGENT_DIR.glob("sessions/*/*.jsonl"))
-    child_files = sorted(AGENT_DIR.glob("subagent-sessions/*.jsonl"))
-    sessions = [(*read_session(path), False) for path in main_files]
-    # Child session ID -> agent name, parent session ID, task, and run endings, from the
-    # parents' subagent results and messages. A run's end is delivered once, in a wait result
-    # or a message.
-    agents, parents, tasks, outcomes = {}, {}, {}, defaultdict(Counter)
-    for header, entries, _ in sessions:
-        for _, details, _ in subagent_records(entries):
-            ends = details.get("action") in ("wait", "event") and details.get("note") is None
-            for result in details.get("results", []):
-                if result.get("sessionId"):
-                    agents[result["sessionId"]] = result["agent"]
-                    parents[result["sessionId"]] = header.get("id")
-                    tasks.setdefault(result["sessionId"], result.get("task", ""))
-                    if ends and result.get("state") in OUTCOMES:
-                        outcomes[result["sessionId"]][result["state"]] += 1
-    sessions += [(*read_session(path), True) for path in child_files]
-
-    found = []
-    for header, entries, child in sessions:
-        if project and project not in header.get("cwd", ""):
-            continue
-        agent = agents.get(header.get("id"), "subagent") if child else "main"
-        uses = Counter()
-        calls = list(calls_of(header, entries, uses))
-        if not calls or (since and calls[0]["time"] < since):
-            continue
-        session = session_of(header, calls, agent, entries)
-        session_id = header.get("id")
-        session.update(
-            # How its runs ended, as its parent recorded them.
-            outcomes=outcomes.get(session_id, Counter()),
-            child=child,
-            parent=parents.get(session_id) if child else None,
-            task=tasks.get(session_id, "") if child else "",
-            # Set below for a child whose parent's reports include it.
-            delegation=None,
-            reports=[] if child else reports_of(entries, session["ratio"], uses),
-        )
-        session["counts"], once = occurrences(session, entries)
-        # The tool results the session read, each counted once, for delegation's kept out.
-        session["material"] = sum(t for n, t in once.items() if n.startswith("result:"))
-        found.append(session)
-    # Each parent's subagent runs, with the child sessions' own totals; each child keeps its
-    # row and parent.
-    children = {s["id"]: s for s in found if s["child"]}
-    for session in found:
-        session["delegations"] = delegations_of(session["reports"], children)
-        for row in session["delegations"]:
-            if row["child"] in children:
-                children[row["child"]]["delegation"] = {**row, "parent": session}
-    return found
-
-
-def occurrences(session, entries):
+def occurrences(entries, consumed, compactions, bytes_per_token):
     """How many times each part occurred, and its tokens with each occurrence counted once.
 
     Every message block, custom message, and summary counts once however often later requests
     resend it; each compaction run counts once; startup parts count 1. Tokens are bytes at the
     session's own bytes per token.
     """
-    ratio = session["ratio"]
     counts, once = Counter(), defaultdict(float)
     for entry in entries:
         for name, length in message_parts(entry):
             counts[name] += 1
-            once[name] += length / ratio
-    counts["conversation:compaction runs"] = session["compactions"]
-    for name in session["consumed"]:
+            once[name] += length / bytes_per_token
+    counts["conversation:compaction runs"] = compactions
+    for name in consumed:
         if section_of(name)[0] == "startup":
             counts[name] = 1
     return +counts, once
 
 
-def reports_of(entries, ratio, uses):
-    """The reports subagents returned to this parent: one record per ended child run.
+def reports_of(entries, bytes_per_token, uses):
+    """The reports subagents returned to this parent: one per ended child run.
 
     A report is a subagent wait result or message; its tokens are its bytes at the parent's
     bytes per token, split evenly when one wait returned several runs, and its re-sent
@@ -545,117 +594,141 @@ def reports_of(entries, ratio, uses):
             if r.get("sessionId") and r.get("state") not in ("queued", "running")
         ]
         for result in ended:
-            tokens = text_size(content or []) / ratio / len(ended)
+            tokens = text_size(content or []) / bytes_per_token / len(ended)
             reports.append(
-                {
-                    "child": result["sessionId"],
-                    "agent": result["agent"],
-                    "task": result.get("task", ""),
-                    "state": result.get("state"),
-                    "tokens": tokens,
-                    "resent": tokens * uses[entry["id"]],
-                }
+                RunReport(
+                    child=result["sessionId"],
+                    agent=result["agent"],
+                    task=result.get("task", ""),
+                    state=result.get("state"),
+                    tokens=tokens,
+                    resent=tokens * uses[entry["id"]],
+                )
             )
     return reports
 
 
-def delegations_of(reports, children):
-    # One row per child session: its runs' reports summed, with the child's own totals.
+def session_of(header, entries, requests, uses, links, child):
+    # Session totals; consumption sums every request's prompt parts and output parts.
+    agents, parents, tasks, outcomes = links
+    session_id = header.get("id")
+    consumed = defaultdict(float)
+    for request in requests:
+        for parts in (request.parts, request.out):
+            for name, tokens in parts.items():
+                consumed[name] += tokens
+    compactions = [e for e in entries if e["type"] == "compaction"]
+    for compaction in compactions:
+        consumed["conversation:compaction runs"] += run_tokens(compaction)
+    consumed = dict(consumed)
+    bytes_per_token = statistics.median(r.bytes / r.prompt for r in requests)
+    counts, once = occurrences(entries, consumed, len(compactions), bytes_per_token)
+    messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
+    spent, waits = timing(entries)
+    return Session(
+        id=session_id,
+        agent=agents.get(session_id, "subagent") if child else "main",
+        cwd=header.get("cwd", ""),
+        child=child,
+        requests=requests,
+        consumed=consumed,
+        compactions=[
+            compaction_of(e, requests, previous)
+            for previous, e in pairwise(entries)
+            if e["type"] == "compaction"
+        ],
+        marks=[
+            next((r.index for r in requests if r.time > e["timestamp"]), len(requests) - 1)
+            for e in compactions
+        ],
+        spent=spent,
+        waits=waits,
+        start=milliseconds(entries[0]["timestamp"]),
+        end=milliseconds(entries[-1]["timestamp"]),
+        notes=sum(
+            1
+            for m in messages
+            if m.get("role") == "assistant"
+            for block in m.get("content") or []
+            if block.get("type") == "toolCall" and block.get("name") == NOTE_TOOL
+        ),
+        parent_messages=sum(
+            1
+            for m in messages
+            if m.get("role") == "user" and text_of(m.get("content")).startswith(PARENT_MESSAGE)
+        ),
+        counts=counts,
+        material=sum(t for n, t in once.items() if n.startswith("result:")),
+        bytes_per_token=bytes_per_token,
+        reports=[] if child else reports_of(entries, bytes_per_token, uses),
+        parent=parents.get(session_id) if child else None,
+        task=tasks.get(session_id, "") if child else "",
+        outcomes=outcomes.get(session_id, Counter()),
+    )
+
+
+def delegations_of(session, children):
+    # One delegation per child session: its runs' reports summed, with the child's totals.
     rows = {}
-    for report in reports:
+    for report in session.reports:
         row = rows.setdefault(
-            report["child"],
-            {**report, "runs": 0, "tokens": 0.0, "resent": 0.0},
+            report.child,
+            Delegation(
+                child=report.child,
+                agent=report.agent,
+                task=report.task,
+                state=report.state,
+                parent=session,
+                session=children.get(report.child),
+            ),
         )
-        row["runs"] += 1
-        row["tokens"] += report["tokens"]
-        row["resent"] += report["resent"]
-        row["state"] = report["state"]
-    for row in rows.values():
-        child = children.get(row["child"])
-        row["session"] = child
-        row["requests"] = len(child["calls"]) if child else None
-        row["consumed"] = child["total"] if child else None
-        row["active"] = child["active"] if child else None
-        # The fixed price of an agent: its startup tokens, sent with every request.
-        startup = sum(startup_of(child).values()) if child else 0
-        row["overhead"] = (
-            startup * len(child["calls"]) / row["consumed"]
-            if child and row["consumed"]
-            else None
-        )
-        # What the parent never had to hold: the child's tool results, less the report.
-        material = child["material"] if child else None
-        row["kept"] = max(0, material - row["tokens"]) if material is not None else None
-        row["corrections"] = child["parent_messages"] if child else None
-        row["notes"] = child["notes"] if child else None
+        row.runs += 1
+        row.tokens += report.tokens
+        row.resent += report.resent
+        row.state = report.state
     return list(rows.values())
 
 
-# Rendering: one HTML page, the overview then the sessions; charts are matplotlib SVG in the
-# theme's colors.
+def collect():
+    """Every session with requests, children linked to their parents."""
+    main_files = sorted(AGENT_DIR.glob("sessions/*/*.jsonl"))
+    child_files = sorted(AGENT_DIR.glob("subagent-sessions/*.jsonl"))
+    files = [(*read_session(path), False) for path in main_files]
+    # Child session ID -> agent name, parent session ID, task, and run endings, from the
+    # parents' subagent results and messages. A run's end is delivered once, in a wait result
+    # or a message.
+    agents, parents, tasks, outcomes = {}, {}, {}, defaultdict(Counter)
+    for header, entries, _ in files:
+        for _, details, _ in subagent_records(entries):
+            ends = details.get("action") in ("wait", "event") and details.get("note") is None
+            for result in details.get("results", []):
+                if result.get("sessionId"):
+                    agents[result["sessionId"]] = result["agent"]
+                    parents[result["sessionId"]] = header.get("id")
+                    tasks.setdefault(result["sessionId"], result.get("task", ""))
+                    if ends and result.get("state") in OUTCOMES:
+                        outcomes[result["sessionId"]][result["state"]] += 1
+    files += [(*read_session(path), True) for path in child_files]
 
-# The parts table SECTIONS as the chart stacks them, bottom to top, with their theme colors.
-CHART_GROUPS = {
-    "startup": "o",
-    "conversation": "m",
-    "tool calls": "p",
-    "tool results": "s",
-    "other": "f",
-}
-# Startup groups: the parts of a call before any conversation, and their theme colors, in
-# the order the prompt is put together.
-STARTUP_GROUPS = {
-    "system": ("system prompt", "m"),
-    "tool": ("tool definitions", "p"),
-    "context": ("context files", "s"),
-}
-BAR_WIDTH = 0.72
-# Figures per line; more continue on the next line in the same columns.
-KPI_COLUMNS = 6
-# Above this many columns, stacked bars touch, so dense sessions read as a stepped area.
-DENSE_COLUMNS = 60
-TICK_COUNT = 8
-
-SCRIPT = """
-// Nested table rows: a row with data-id opens its direct children and closes all its
-// descendants.
-const toggle = row => {
-  const open = !row.classList.contains("open");
-  row.classList.toggle("open", open);
-  const close = id => row.parentElement.querySelectorAll(`tr[data-parent="${id}"]`).forEach(child => {
-    child.hidden = true;
-    child.classList.remove("open");
-    if (child.dataset.id) close(child.dataset.id);
-  });
-  if (open) {
-    row.parentElement.querySelectorAll(`tr[data-parent="${row.dataset.id}"]`).forEach(child => {
-      child.hidden = false;
-    });
-  } else close(row.dataset.id);
-};
-document.querySelectorAll("table.nested tr[data-id]").forEach(row => {
-  row.addEventListener("click", () => toggle(row));
-});
-// A select shows the panel named by its value.
-document.querySelectorAll("select[data-panels]").forEach(select => {
-  select.addEventListener("change", () => {
-    select.parentElement.querySelectorAll(":scope > .panel").forEach(panel => {
-      panel.hidden = panel.id !== select.value;
-    });
-  });
-});
-"""
+    sessions = []
+    links = (agents, parents, tasks, outcomes)
+    for header, entries, child in files:
+        uses = Counter()
+        requests = list(requests_of(header, entries, uses))
+        if requests:
+            sessions.append(session_of(header, entries, requests, uses, links, child))
+    # Each parent's subagent runs, with the child sessions' own totals; each child keeps its
+    # delegation, which knows its parent.
+    children = {s.id: s for s in sessions if s.child}
+    for session in sessions:
+        session.delegations = delegations_of(session, children)
+        for row in session.delegations:
+            if row.session:
+                row.session.delegation = row
+    return sessions
 
 
-def preview(task):
-    # A task's first line, cut to PREVIEW.
-    line = task.strip().split("\n")[0]
-    return line[:PREVIEW] + ("…" if len(line) > PREVIEW else "")
-
-
-def esc(value):
-    return html.escape(str(value))
+# Figures: what the pages show, as text and series.
 
 
 def num(value):
@@ -683,262 +756,79 @@ def pct(value):
     return f"{100 * value:.1f}%"
 
 
-class Markup(str):
-    pass
+def ratio(consumption, context):
+    return f"{consumption / context:.1f}x" if context else "-"
 
 
-def swatch(color_key, theme):
-    return Markup(f'<span class="square" style="color:#{theme["colors"][color_key]}">■</span>')
+def maybe(value, show):
+    return show(value) if value is not None else "-"
 
 
-def kpis(items):
-    cells = "".join(f"<div><span>{esc(k)}</span><b>{esc(v)}</b></div>" for k, v in items)
-    return f'<div class="kpis">{cells}</div>'
+def preview(task):
+    # A task's first line, cut to PREVIEW.
+    line = task.strip().split("\n")[0]
+    return line[:PREVIEW] + ("…" if len(line) > PREVIEW else "")
 
 
-def table(headers, rows, cls=""):
-    # rows: (cells, row class) or (cells, row class, row attributes); cells are escaped
-    # unless wrapped in Markup.
-    head = "".join(f"<th>{esc(h)}</th>" for h in headers)
-    body = "".join(
-        f'<tr class="{row[1]}"{row[2] if len(row) > 2 else ""}>'
-        + "".join(f"<td>{cell_html(c)}</td>" for c in row[0])
-        + "</tr>"
-        for row in rows
+def session_label(session):
+    return (
+        f"{session.time[:16].replace('T', ' ')} · {Path(session.cwd).name}"
+        f" · {session.agent} · {len(session.requests)} requests · peak {num(session.peak.prompt)}"
     )
-    return f'<table class="{cls}"><tr>{head}</tr>{body}</table>'
 
 
-def cell_html(value):
-    return value if isinstance(value, Markup) else esc(value)
+def wait_per_turn(items):
+    # Your average wait over every counted turn of the sessions.
+    waits = [w for s in items for _, w in s.waits]
+    return duration(statistics.mean(waits)) if waits else "-"
 
 
-def px(points):
-    return points * 96 / 72
+def overview_figures(sessions):
+    # Your usage of Pi over every session: volume, cost, time, and rhythm.
+    requests = [r for s in sessions for r in s.requests]
+    return [
+        ("sessions", str(sum(1 for s in sessions if s.agent == "main"))),
+        ("input", num(sum(r.prompt for r in requests))),
+        ("output", num(sum(r.output for r in requests))),
+        ("cost", f"${sum(r.cost for r in requests):.2f}"),
+        ("active time", duration(sum(s.active for s in sessions))),
+        ("wait/turn", wait_per_turn(sessions)),
+    ]
 
 
-def style(theme):
-    c, size, dim, fonts = theme["colors"], theme["fontSize"], theme["dim"], theme["fonts"]
-    return f"""
-:root {{ --p:#{c["p"]}; --s:#{c["s"]}; --f:#{c["f"]}; --m:#{c["m"]}; --o:#{c["o"]};
-  --b:#{c["b"]}; }}
-body {{ background:var(--b); color:var(--f); font:{px(size["m"])}px "{fonts["sans"]}";
-  margin:0; }}
-main {{ padding:{dim["m"]}px; }}
-h2 {{ font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
-  border-bottom:1px solid var(--o); margin:{dim["m"]}px 0 {dim["s"]}px; }}
-.kpis {{ display:grid; grid-template-columns:repeat({KPI_COLUMNS}, minmax(0, 1fr));
-  row-gap:{dim["s"]}px; text-align:center; margin-bottom:{dim["s"]}px; }}
-.kpis span {{ display:block; color:var(--m); font-size:{px(size["s"])}px; }}
-.kpis b {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
-table {{ border-collapse:collapse; width:100%; font:{px(size["l"])}px "{fonts["mono"]}";
-  margin-bottom:{dim["s"]}px; }}
-th {{ font-family:"{fonts["sans"]}"; color:var(--m); text-align:right; }}
-th, td {{ padding:{dim["t"]}px {dim["s"]}px; white-space:nowrap; text-align:right;
-  border-bottom:1px solid var(--o); }}
-th:first-child, td:first-child, table.text :is(td, th):last-child {{ text-align:left; }}
-table.text td:last-child {{ white-space:normal; color:var(--m);
-  font-size:{px(size["m"])}px; }}
-tr.group td {{ color:var(--m); }}
-table.nested tr[data-id] {{ cursor:pointer; }}
-table.nested tr[data-id] td:first-child::before {{ content:"▸ "; color:var(--m); }}
-table.nested tr.open td:first-child::before {{ content:"▾ "; }}
-table.nested tr.level-1 td:first-child, table.nested tr.part-1 td:first-child {{
-  padding-left:{dim["m"]}px; }}
-table.nested tr.part-2 td:first-child {{ padding-left:{dim["m"] * 2}px; }}
-tr.part td:first-child {{ padding-left:{dim["m"]}px; }}
-tr.flag td {{ color:var(--s); }}
-.square {{ margin-right:{dim["t"] * 2}px; }}
-.chart svg {{ width:100%; height:auto; display:block; margin-bottom:{dim["s"]}px; }}
-select {{ background:var(--o); color:var(--f); border:0; padding:{dim["t"] * 2}px;
-  font:{px(size["l"])}px "{fonts["mono"]}"; margin:{dim["s"]}px 0; }}
-"""
-
-
-# Charts
-
-
-def chart_style(theme):
-    c = {key: f"#{value}" for key, value in theme["colors"].items()}
-    small = theme["fontSize"]["s"]
-    return {
-        "figure.figsize": (16, 6),
-        "svg.fonttype": "none",
-        "svg.hashsalt": "pi-stats",
-        "font.family": theme["fonts"]["mono"],
-        "font.size": small,
-        "legend.fontsize": small,
-        "figure.facecolor": c["b"],
-        "axes.facecolor": c["b"],
-        "text.color": c["f"],
-        "axes.labelcolor": c["m"],
-        "axes.edgecolor": c["o"],
-        "axes.grid": False,
-        "axes.xmargin": 0,
-        "xtick.color": c["o"],
-        "ytick.color": c["o"],
-        "xtick.labelcolor": c["m"],
-        "ytick.labelcolor": c["m"],
-        "legend.facecolor": c["b"],
-        "legend.edgecolor": c["o"],
-        "axes.prop_cycle": cycler(color=[c["p"], c["f"], c["m"]]),
-    }
-
-
-def render(theme, draw, size=None):
-    # Runs draw(figure) under the theme style and returns the SVG markup.
-    with rc_context(chart_style(theme)):
-        figure = Figure(layout="constrained", figsize=size)
-        draw(figure)
-        buffer = io.StringIO()
-        # Without the figure's own margins, the page's spacing is the only space between blocks.
-        figure.savefig(
-            buffer, format="svg", metadata={"Date": None}, bbox_inches="tight", pad_inches=0
+def model_rows(sessions):
+    # One row per model, most requests first.
+    models = defaultdict(list)
+    for session in sessions:
+        for request in session.requests:
+            models[request.model].append(request)
+    rows = []
+    for model, items in sorted(models.items(), key=lambda m: -len(m[1])):
+        tokens = sum(r.prompt for r in items)
+        # Output tokens over response time, for the responses with a duration; it includes
+        # the time before the first token, so it compares models rather than measuring raw
+        # generation speed.
+        timed = [r for r in items if r.duration]
+        seconds = sum(r.duration for r in timed) / 1000
+        rows.append(
+            [
+                model,
+                str(len(items)),
+                num(tokens),
+                num(sum(r.output for r in items)),
+                f"${sum(r.cost for r in items):.2f}",
+                f"{100 * sum(r.cache for r in items) / tokens:.0f}%",
+                f"{sum(r.output for r in timed) / seconds:.1f}" if seconds else "-",
+            ]
         )
-    svg = buffer.getvalue()
-    return Markup(f'<div class="chart">{svg[svg.index("<svg") :]}</div>')
+    return ["Model", "Requests", "Input", "Output", "Cost", "Cache", "Tok/s"], rows
 
 
-def compact_ticks(axes):
-    axes.yaxis.set_major_formatter(FuncFormatter(lambda value, _: num(value)))
-
-
-def x_labels(axes, labels):
-    step = max(1, len(labels) // TICK_COUNT)
-    # Evenly spaced ticks plus the last label, skipping one that would crowd it.
-    last = len(labels) - 1
-    positions = sorted({0, last, *(i for i in range(0, last, step) if last - i > step / 2)})
-    axes.set_xticks(positions, [labels[i] for i in positions], rotation=30, ha="right")
-    axes.set_xlim(-BAR_WIDTH / 2, len(labels) - 1 + BAR_WIDTH / 2)
-
-
-def corner_legend(figure, axes, handles):
-    # A legend in the top left corner of the axes, outside the layout.
-    legend = figure.legend(
-        handles=handles,
-        loc="upper left",
-        bbox_to_anchor=(0, 1),
-        bbox_transform=axes.transAxes,
-        framealpha=1,
-    )
-    legend.set_in_layout(False)
-
-
-def combo_chart(theme, labels, bars, lines, xlabel="", axis="own"):
-    """Overlay-colored columns on the left axis and lines over them.
-
-    bars: (label, values); lines: (label, values, color key, axis label or None), plus
-    "bars" as a fifth item to draw that line on the columns' axis. Lines may hold NaN where
-    they have no value yet.
-    axis: "own" gives each line its own zero-based axis, the first labeled one on the right
-    and the others hidden; "lines" puts every line on one right axis, for lines sharing a
-    unit apart from the bars.
-    """
-    colors = theme["colors"]
-
-    def draw(figure):
-        base = figure.subplots()
-        handles = [
-            base.bar(
-                range(len(labels)),
-                bars[1],
-                width=BAR_WIDTH,
-                color=f"#{colors['o']}",
-                label=bars[0],
-            )
-        ]
-        base.set_ylim(bottom=0)
-        base.set_ylabel(bars[0])
-        compact_ticks(base)
-        common = base.twinx() if axis == "lines" else None
-        shown = False
-        for label, values, color, axis_label, *place in lines:
-            on_bars = place == ["bars"]
-            axes = base if on_bars else common or base.twinx()
-            handles += axes.plot(
-                range(len(values)), values, color=f"#{colors[color]}", label=label
-            )
-            if on_bars:
-                continue
-            if common is None:
-                top = max((v for v in values if not math.isnan(v)), default=0)
-                axes.set_ylim(0, (top or 1) * 1.05)
-            if axis_label and not shown:
-                shown = True
-                axes.set_ylabel(axis_label)
-                compact_ticks(axes)
-            elif common is None:
-                axes.set_axis_off()
-        if axis == "lines":
-            common.set_ylim(bottom=0)
-        x_labels(base, labels)
-        base.set_xlabel(xlabel)
-        corner_legend(figure, base, handles)
-
-    return render(theme, draw)
-
-
-def stacked_chart(theme, labels, columns, ylabel, xlabel, marks=()):
-    """Columns stacked by CHART_GROUPS, in their order from the bottom: each column's height
-    is its total, each color a group's tokens, and a group's colored area over all columns
-    its sum.
-
-    columns: group name -> tokens, one per label; marks: x positions drawn as dashed
-    vertical rules.
-    """
-    colors = theme["colors"]
-
-    def draw(figure):
-        axes = figure.subplots()
-        positions = range(len(columns))
-        dense = len(columns) > DENSE_COLUMNS
-        width = 1 if dense else BAR_WIDTH
-        bottom = [0.0] * len(columns)
-        handles = []
-        for group, key in CHART_GROUPS.items():
-            values = [column.get(group, 0) for column in columns]
-            handles.append(
-                axes.bar(
-                    positions,
-                    values,
-                    width=width,
-                    bottom=bottom,
-                    color=f"#{colors[key]}",
-                    # A hairline edge in the bar's color closes the seams between dense bars.
-                    edgecolor=f"#{colors[key]}" if dense else "none",
-                    linewidth=0.5 if dense else 0,
-                    label=group,
-                )
-            )
-            bottom = [low + value for low, value in zip(bottom, values, strict=True)]
-        axes.set_ylim(bottom=0)
-        axes.set_ylabel(ylabel)
-        compact_ticks(axes)
-        for mark in marks:
-            axes.axvline(mark, color=f"#{colors['f']}", linestyle="--", linewidth=1)
-        x_labels(axes, labels)
-        axes.set_xlabel(xlabel)
-        corner_legend(figure, axes, handles[::-1])
-
-    return render(theme, draw)
-
-
-def grouped(parts):
-    # Part tokens summed per chart group.
-    totals = defaultdict(float)
-    for name, tokens in parts.items():
-        totals[section_of(name)[0]] += tokens
-    return totals
-
-
-# Sections
-
-
-def ema(values, carry=False):
+def ema(values):
     """The exponential moving average with EMA_ALPHA.
 
-    With carry, None (a day without a value) keeps the previous average instead of counting
-    as zero; days before the first value are NaN.
+    None (a day without a value) keeps the previous average; days before the first value
+    are None.
     """
     averages, current = [], None
     for value in values:
@@ -946,154 +836,42 @@ def ema(values, carry=False):
             current = (
                 value if current is None else EMA_ALPHA * value + (1 - EMA_ALPHA) * current
             )
-        averages.append(float("nan") if current is None else current)
+        averages.append(current)
     return averages
 
 
-def daily_chart(theme, sessions, calls):
-    """Tokens per calendar day as columns, with moving averages of tokens, active hours, and
-    your wait per turn.
+def daily_series(sessions):
+    """Calendar days with tokens per day and moving averages of tokens, active hours, and
+    your wait per turn in minutes.
 
-    Days without sessions count as zero tokens and hours; waits carry over them.
-    A session's active time counts on the day it started; a wait on the day of its prompt.
+    Days without sessions count as zero tokens and hours; waits carry over them. A session's
+    active time counts on the day it started; a wait on the day of its prompt.
     """
     tokens, active, waits = defaultdict(int), defaultdict(float), defaultdict(list)
-    for call in calls:
-        tokens[call["time"][:10]] += call["prompt"] + call["output"]
     for session in sessions:
-        active[session["time"][:10]] += session["active"] / 3_600_000
-        for stamp, wait in session["waits"]:
+        for request in session.requests:
+            tokens[request.time[:10]] += request.prompt + request.output
+        active[session.time[:10]] += session.active / 3_600_000
+        for stamp, wait in session.waits:
             day = datetime.fromtimestamp(stamp / 1000).date().isoformat()
             waits[day].append(wait / 60_000)
     first, last = date.fromisoformat(min(tokens)), date.fromisoformat(max(tokens))
     days = [(first + timedelta(n)).isoformat() for n in range((last - first).days + 1)]
     daily = [tokens[d] for d in days]
-    return combo_chart(
-        theme,
-        days,
-        ("Tokens", daily),
-        [
-            ("Tokens EMA", ema(daily), "m", None, "bars"),
-            ("Active hours EMA", ema([active[d] for d in days]), "p", "Hours"),
-            (
-                "Wait/turn minutes EMA",
-                ema(
-                    [statistics.mean(waits[d]) if waits[d] else None for d in days], carry=True
-                ),
-                "s",
-                None,
-            ),
-        ],
-        "Day",
-    )
+    return {
+        "days": days,
+        "tokens": daily,
+        "tokens_ema": ema(daily),
+        "hours_ema": ema([active[d] for d in days]),
+        "wait_ema": ema([statistics.mean(waits[d]) if waits[d] else None for d in days]),
+    }
 
 
-def overview(sessions, calls, theme):
-    # Your usage of Pi over every session: volume, cost, time, and rhythm.
-    prompt = sum(c["prompt"] for c in calls)
-    main = [s for s in sessions if s["agent"] == "main"]
-    head = kpis(
-        [
-            ("sessions", len(main)),
-            ("input", num(prompt)),
-            ("output", num(sum(c["output"] for c in calls))),
-            ("cost", f"${sum(c['cost'] for c in calls):.2f}"),
-            ("active time", duration(sum(s["active"] for s in sessions))),
-            ("wait/turn", wait_per_turn(sessions)),
-        ]
-    )
-
-    chart = daily_chart(theme, sessions, calls)
-
-    models = defaultdict(list)
-    for call in calls:
-        models[call["model"]].append(call)
-    rows = []
-    for model, items in sorted(models.items(), key=lambda m: -len(m[1])):
-        tokens = sum(c["prompt"] for c in items)
-        # Output tokens over response time, for the responses with a duration; it includes
-        # the time before the first token, so it compares models rather than measuring raw
-        # generation speed.
-        timed = [c for c in items if c["duration"]]
-        seconds = sum(c["duration"] for c in timed) / 1000
-        rows.append(
-            (
-                [
-                    model,
-                    len(items),
-                    num(tokens),
-                    num(sum(c["output"] for c in items)),
-                    f"${sum(c['cost'] for c in items):.2f}",
-                    f"{100 * sum(c['cache'] for c in items) / tokens:.0f}%",
-                    f"{sum(c['output'] for c in timed) / seconds:.1f}" if seconds else "-",
-                ],
-                "",
-            )
-        )
-    headers = ["Model", "Requests", "Input", "Output", "Cost", "Cache", "Tok/s"]
-    models_table = table(headers, rows)
-    return head + chart + models_table
-
-
-def startup_of(session):
-    # The first call's parts before any conversation, in tokens.
-    parts = session["calls"][0]["parts"]
-    return {n: v for n, v in parts.items() if n.split(":")[0] in STARTUP_GROUPS}
-
-
-def hbar(theme, segments, xlabel, size, legend=False):
-    """One horizontal bar of segments (value, theme color key, label) from the left.
-
-    With legend, the segments are labeled below the bar and touch; without it, thin lines in
-    the background color separate them and the axis counts tokens.
-    """
-    colors = theme["colors"]
-
-    def draw(figure):
-        axes = figure.subplots()
-        left, handles = 0, []
-        for value, key, label in segments:
-            edge = (
-                {"linewidth": 0} if legend else {"edgecolor": f"#{colors['b']}", "linewidth": 1}
-            )
-            handles.append(
-                axes.barh(
-                    0, value, height=1, left=left, color=f"#{colors[key]}", label=label, **edge
-                )
-            )
-            left += value
-        axes.set_xlim(0, left or 1)
-        axes.set_yticks([])
-        axes.set_ylim(-0.5, 0.5)
-        if not legend:
-            compact_ticks(axes)
-            axes.xaxis.set_major_formatter(axes.yaxis.get_major_formatter())
-        axes.set_xlabel(xlabel)
-        if legend:
-            figure.legend(handles=handles, loc="outside lower center", ncols=len(handles))
-
-    return render(theme, draw, size=size)
-
-
-def startup_bar(theme, values):
-    # One horizontal bar split into every part, colored by group, largest first per group.
-    segments = [
-        (tokens, color, None)
-        for key, (_, color) in STARTUP_GROUPS.items()
-        for tokens in sorted(
-            (t for n, t in values.items() if n.split(":")[0] == key), reverse=True
-        )
-    ]
-    return hbar(theme, segments, "Tokens", (16, 1.6))
-
-
-def mean_shares(calls):
-    # Each call's context shares, averaged with equal weight per call.
+def grouped(parts):
+    # Part tokens summed per chart group.
     totals = defaultdict(float)
-    for call in calls:
-        total = sum(call["parts"].values()) or 1
-        for name, tokens in call["parts"].items():
-            totals[name] += tokens / total / len(calls)
+    for name, tokens in parts.items():
+        totals[section_of(name)[0]] += tokens
     return totals
 
 
@@ -1106,28 +884,102 @@ def mean_dict(dicts):
     return totals
 
 
-def ratio(consumption, context):
-    return f"{consumption / context:.1f}x" if context else "-"
+def mean_shares(requests):
+    # Each request's context shares, averaged with equal weight per request.
+    totals = defaultdict(float)
+    for request in requests:
+        total = sum(request.parts.values()) or 1
+        for name, tokens in request.parts.items():
+            totals[name] += tokens / total / len(requests)
+    return totals
 
 
-TABLE_IDS = count(1)
+def startup_figures(items):
+    # The startup's tokens and skills, or their means over several sessions; its other
+    # sizes and counts are in the parts table's startup rows.
+    skills = statistics.mean(s.requests[0].skills for s in items)
+    return [
+        ("startup tokens", num(statistics.mean(sum(s.startup.values()) for s in items))),
+        ("skills", f"{round(skills, 1):g}"),
+    ]
 
 
-def session_table(theme, context, consumed, sizes, counts, sessions=None, context_shares=None):
-    """Every part, nested in SECTIONS (startup in STARTUP_SECTIONS), collapsed to the
-    section rows until opened.
+def cache_hit(items):
+    # The share of the sessions' input read from the provider's cache, over all requests.
+    requests = [r for s in items for r in s.requests]
+    prompt = sum(r.prompt for r in requests)
+    return pct(sum(r.cache for r in requests) / prompt) if prompt else "-"
+
+
+def subagent_share(items):
+    # The subagent runs' share of the tokens of the sessions and their runs together.
+    children = sum(d.consumed or 0 for s in items for d in s.delegations)
+    own = sum(s.total for s in items)
+    return pct(children / (own + children)) if children else "-"
+
+
+def session_figures(items, average):
+    # The same figures for one session or, with average, the means over several.
+    def mean(values):
+        return statistics.mean(values) if average else values[0]
+
+    return [
+        ("requests", f"{mean([len(s.requests) for s in items]):.0f}"),
+        ("peak context", num(mean([s.peak.prompt for s in items]))),
+        ("consumed", num(mean([s.total for s in items]))),
+        ("cache hit", cache_hit(items)),
+        ("output", num(mean([sum(r.output for r in s.requests) for s in items]))),
+        ("cost", f"${mean([s.cost for s in items]):.2f}"),
+        ("active time", duration(mean([s.active for s in items]))),
+        ("wait/turn", wait_per_turn(items)),
+        *startup_figures(items),
+        ("subagents", f"{round(mean([len(s.delegations) for s in items]), 1):g}"),
+        ("subagent share", subagent_share(items)),
+    ]
+
+
+def context_columns(session):
+    # The context of each request stacked by chart group, with the compactions.
+    labels = [str(r.index + 1) for r in session.requests]
+    return labels, [grouped(r.parts) for r in session.requests], session.marks
+
+
+def history_columns(items):
+    # Each session's consumption stacked by chart group, by start day.
+    return [s.time[:10] for s in items], [grouped(s.consumed) for s in items]
+
+
+def startup_segments(items):
+    # The startup's parts, averaged part by part over the sessions, as (tokens, color, part)
+    # by group in prompt order, largest first per group.
+    tokens = mean_dict([s.startup for s in items])
+    return [
+        (value, color, name.split(":", 1)[1])
+        for key, (_, color) in STARTUP_GROUPS.items()
+        for name, value in sorted(
+            ((n, t) for n, t in tokens.items() if n.split(":")[0] == key),
+            key=lambda item: -item[1],
+        )
+    ]
+
+
+def parts_rows(context, consumed, sizes, counts, sessions=None, context_shares=None):
+    """Every part, nested in SECTIONS (startup in STARTUP_SECTIONS), as table rows.
 
     context: part -> tokens in the context; consumed: part -> tokens over the session;
     sizes: part -> bytes; counts: part -> how many times it occurred (per session in
-    averages); sessions, for averages: each session's set of parts, counted for
-    every row; context_shares, for averages: part -> its context share averaged over the
-    requests, so each request weighs the same, instead of its share of the mean tokens.
+    averages); sessions, for averages: each session's set of parts, counted for every row;
+    context_shares, for averages: part -> its context share averaged over the requests, so
+    each request weighs the same, instead of its share of the mean tokens.
+
+    Returns the headers, and rows of id, parent, depth, branch (it opens to rows below it),
+    the color of a section, and the cells.
     """
     ctx_total = sum(context.values()) or 1
     if context_shares is None:
         context_shares = {name: tokens / ctx_total for name, tokens in context.items()}
     cons_total = sum(consumed.values()) or 1
-    names = set(context) | set(consumed)
+    ids = count()
 
     def cells(label, members):
         ctx = sum(context.get(n, 0) for n in members)
@@ -1144,40 +996,46 @@ def session_table(theme, context, consumed, sizes, counts, sessions=None, contex
             f"{sum(counts.get(n, 0) for n in members):.{1 if sessions is not None else 0}f}",
         ]
         if sessions is not None:
-            row.append(sum(1 for present in sessions if any(n in present for n in members)))
+            row.append(
+                str(sum(1 for present in sessions if any(n in present for n in members)))
+            )
         return row
-
-    def order(members, fixed=None):
-        if fixed:
-            return [n for n in fixed if n in members]
-        return sorted(members, key=lambda n: -consumed.get(n, 0))
 
     rows = []
 
+    def add(parent, depth, branch, color, cells):
+        node = next(ids)
+        rows.append(
+            {"id": node, "parent": parent, "depth": depth, "branch": branch, "color": color}
+            | {"cells": cells}
+        )
+        return node
+
     def nest(label, members, parent, depth, fixed=None, children=None):
-        # A row that opens to its parts, or to child rows given as (label, members, fixed).
+        # A row that opens to its parts, or to child rows given as (label, members).
         if not members:
             return
-        node = f"p{next(TABLE_IDS)}"
-        attrs = f' data-id="{node}"' + (f' data-parent="{parent}" hidden' if parent else "")
-        mark = swatch(CHART_GROUPS[label], theme) if depth == 0 else ""
-        title = Markup(f"{mark}<b>{esc(label)}</b>")
-        rows.append((cells(title, members), f"level-{depth}", attrs))
+        color = CHART_GROUPS[label] if depth == 0 else None
+        node = add(parent, depth, True, color, cells(label, members))
         if children:
-            for child_label, child_members, child_fixed in children:
-                nest(child_label, child_members, node, depth + 1, child_fixed)
+            for child_label, child_members in children:
+                nest(child_label, child_members, node, depth + 1)
             return
-        for name in order(members, fixed):
-            part = f' data-parent="{node}" hidden'
-            rows.append((cells(name.split(":", 1)[1], [name]), f"part-{depth + 1}", part))
+        names = (
+            [n for n in fixed if n in members]
+            if fixed
+            else sorted(members, key=lambda n: -consumed.get(n, 0))
+        )
+        for name in names:
+            add(node, depth + 1, False, None, cells(name.split(":", 1)[1], [name]))
 
     by_section = defaultdict(list)
-    for name in names:
+    for name in set(context) | set(consumed):
         by_section[section_of(name)].append(name)
     for section in SECTIONS:
         if section == "startup":
-            children = [(sub, by_section[("startup", sub)], None) for sub in STARTUP_SECTIONS]
-            members = [n for sub in STARTUP_SECTIONS for n in by_section[("startup", sub)]]
+            children = [(sub, by_section[("startup", sub)]) for sub in STARTUP_SECTIONS]
+            members = [n for _, part_names in children for n in part_names]
             nest(section, members, None, 0, children=children)
         else:
             fixed = CONVERSATION_PARTS if section == "conversation" else None
@@ -1186,68 +1044,35 @@ def session_table(theme, context, consumed, sizes, counts, sessions=None, contex
     headers.append("Count/session" if sessions is not None else "Count")
     if sessions is not None:
         headers.append(f"Sessions/{len(sessions)}")
-    return table(headers, rows, "nested")
+    return headers, rows
 
 
-def session_kpis(items, average):
-    # The same figures for one session or, with average, the means over several.
-    def mean(values):
-        return statistics.mean(values) if average else values[0]
+def session_parts(session):
+    # The parts at the session's peak context, with its consumption and counts.
+    peak = session.peak
+    return parts_rows(peak.parts, session.consumed, peak.sizes, session.counts)
 
-    return kpis(
-        [
-            ("requests", f"{mean([len(s['calls']) for s in items]):.0f}"),
-            ("peak context", num(mean([s["peak"] for s in items]))),
-            ("consumed", num(mean([s["total"] for s in items]))),
-            ("cache hit", cache_hit(items)),
-            ("output", num(mean([sum(c["output"] for c in s["calls"]) for s in items]))),
-            ("cost", f"${mean([s['cost'] for s in items]):.2f}"),
-            ("active time", duration(mean([s["active"] for s in items]))),
-            ("wait/turn", wait_per_turn(items)),
-            *startup_figures(items),
-            ("subagents", f"{round(mean([len(s['delegations']) for s in items]), 1):g}"),
-            ("subagent share", subagent_share(items)),
-        ]
+
+def average_parts(items):
+    # Each part's mean context, size, consumption, and count over the sessions.
+    requests = [r for s in items for r in s.requests]
+    consumed = defaultdict(float)
+    for session in items:
+        for name, tokens in session.consumed.items():
+            consumed[name] += tokens
+    return parts_rows(
+        mean_dict([r.parts for r in requests]),
+        {name: tokens / len(items) for name, tokens in consumed.items()},
+        mean_dict([r.sizes for r in requests]),
+        {n: c / len(items) for n, c in sum((s.counts for s in items), Counter()).items()},
+        [set(s.consumed) for s in items],
+        mean_shares(requests),
     )
 
 
-def subagent_share(items):
-    # The subagent runs' share of the tokens of the sessions and their runs together.
-    children = sum(r["consumed"] or 0 for s in items for r in s["delegations"])
-    own = sum(s["total"] for s in items)
-    return pct(children / (own + children)) if children else "-"
-
-
-def cache_hit(items):
-    # The share of the sessions' input read from the provider's cache, over all requests.
-    calls = [c for s in items for c in s["calls"]]
-    prompt = sum(c["prompt"] for c in calls)
-    return pct(sum(c["cache"] for c in calls) / prompt) if prompt else "-"
-
-
-def wait_per_turn(items):
-    # Your average wait over every counted turn of the sessions.
-    waits = [w for s in items for _, w in s["waits"]]
-    return duration(statistics.mean(waits)) if waits else "-"
-
-
-def startup_figures(items):
-    # The startup's tokens and skills, or their means over several sessions; its other
-    # sizes and counts are in the parts table's startup rows.
-    skills = statistics.mean(s["calls"][0]["skills"] for s in items)
-    return [
-        ("startup tokens", num(statistics.mean(sum(startup_of(s).values()) for s in items))),
-        ("skills", f"{round(skills, 1):g}"),
-    ]
-
-
-def startup_line(theme, items):
-    # The startup's parts as one bar; averaged part by part over several sessions.
-    tokens = defaultdict(float)
-    for session in items:
-        for name, value in startup_of(session).items():
-            tokens[name] += value / len(items)
-    return startup_bar(theme, tokens)
+def time_spent(items):
+    # Milliseconds per TIME_PARTS category, as means per session over several.
+    return {part: sum(s.spent.get(part, 0) for s in items) / len(items) for part in TIME_PARTS}
 
 
 def mean_duration(values):
@@ -1256,96 +1081,51 @@ def mean_duration(values):
     return duration(statistics.mean(known)) if known else "-"
 
 
-def compactions_summary(items):
-    # The compactions per session, then means over every compaction of the sessions.
-    every = [c for s in items for c in s["compaction_list"]]
+def compaction_figures(items):
+    # The compactions per session, then means over every compaction; None without any.
+    every = [c for s in items for c in s.compactions]
     if not every:
-        return ""
-    done = [c for c in every if c["after"] and c["before"]]
-    return "<h2>Compactions</h2>" + kpis(
-        [
-            ("compactions", f"{round(len(every) / len(items), 1):g}"),
-            ("context before", num(statistics.mean(c["before"] for c in every))),
-            ("context after", num(statistics.mean(c["after"] for c in done)) if done else "-"),
-            ("summary", num(statistics.mean(c["summary"] for c in done)) if done else "-"),
-            ("run tokens", num(statistics.mean(c["run"] for c in every))),
-            ("compaction time", mean_duration([c["time"] for c in every])),
-        ]
-    )
-
-
-def time_bar(theme, spent):
-    # One horizontal bar of the TIME_PARTS categories, in minutes, with a legend.
-    segments = [(spent.get(part, 0) / 60000, key, part) for part, key in TIME_PARTS.items()]
-    return hbar(theme, segments, "Minutes", (16, 2), legend=True)
-
-
-def time_section(theme, items):
-    # Time per category as a bar; averages show means per session.
-    spent = {
-        part: sum(s["spent"].get(part, 0) for s in items) / len(items) for part in TIME_PARTS
-    }
-    if not any(spent.values()):
-        return ""
-    return "<h2>Time</h2>" + time_bar(theme, spent)
+        return None
+    done = [c for c in every if c.after and c.before]
+    return [
+        ("compactions", f"{round(len(every) / len(items), 1):g}"),
+        ("context before", num(statistics.mean(c.before for c in every))),
+        ("context after", num(statistics.mean(c.after for c in done)) if done else "-"),
+        ("summary", num(statistics.mean(c.summary for c in done)) if done else "-"),
+        ("run tokens", num(statistics.mean(c.run for c in every))),
+        ("compaction time", mean_duration([c.time for c in every])),
+    ]
 
 
 def compression(row):
     # Tokens of the child's work per token of report, when both are known.
-    if not (row["consumed"] and row["tokens"]):
+    if not (row.consumed and row.tokens):
         return "-"
-    return f"{row['consumed'] / row['tokens']:.0f}x"
-
-
-def maybe(value, show):
-    return show(value) if value is not None else "-"
+    return f"{row.consumed / row.tokens:.0f}x"
 
 
 def parallelism(rows):
     # The children's summed active time over the wall-clock span they covered.
-    sessions = [r["session"] for r in rows if r["session"]]
-    span = max((s["end"] for s in sessions), default=0) - min(
-        (s["start"] for s in sessions), default=0
+    sessions = [r.session for r in rows if r.session]
+    span = max((s.end for s in sessions), default=0) - min(
+        (s.start for s in sessions), default=0
     )
-    active = sum(s["active"] for s in sessions)
+    active = sum(s.active for s in sessions)
     return f"{active / span:.1f}x" if span > 0 else "-"
 
 
-def delegations_section(session):
-    # A parent's subagent runs: figures for all of them, then one row per run.
-    rows = session["delegations"]
-    if not rows:
-        return ""
-    # The number of runs and their share are among the session figures.
-    head = kpis(
-        [
-            ("kept out", num(sum(r["kept"] or 0 for r in rows))),
-            ("parent re-send", num(sum(r["resent"] for r in rows))),
-            ("parallelism", parallelism(rows)),
-        ]
-    )
-    lines = [
-        (
-            [
-                row["agent"],
-                preview(row["task"]),
-                row["runs"],
-                maybe(row["requests"], str),
-                maybe(row["consumed"], num),
-                maybe(row["active"], duration),
-                maybe(row["overhead"], pct),
-                num(row["tokens"]),
-                compression(row),
-                maybe(row["kept"], num),
-                num(row["resent"]),
-                maybe(row["corrections"], str),
-                maybe(row["notes"], str),
-                OUTCOMES.get(row["state"], "-"),
-            ],
-            "",
-        )
-        for row in sorted(rows, key=lambda r: -(r["consumed"] or 0))
+def delegations_figures(session):
+    # A parent's subagent runs together; their number and share are among its figures.
+    rows = session.delegations
+    return [
+        ("kept out", num(sum(r.kept or 0 for r in rows))),
+        ("parent re-send", num(sum(r.resent for r in rows))),
+        ("parallelism", parallelism(rows)),
     ]
+
+
+def delegation_rows(session):
+    # One row per subagent run of a parent, most tokens first.
     headers = ["Agent", "Task", "Runs", "Requests", "Consumed", "Active", "Overhead"]
     headers += [
         "Report",
@@ -1356,241 +1136,406 @@ def delegations_section(session):
         "Notes",
         "Ending",
     ]
-    return "<h2>Subagents</h2>" + head + table(headers, lines)
-
-
-def delegation_section(session):
-    # A child's run as its parent saw it: who started it, what it returned, how it ended.
-    row = session["delegation"]
-    if not row:
-        return ""
-    parent = row["parent"]
-    task = row["task"].strip().split("\n")[0]
-    return (
-        "<h2>Delegation</h2>"
-        + f"<p>{esc(session_label(parent))}<br>{esc(task)}</p>"
-        + kpis(
-            [
-                ("runs", row["runs"]),
-                ("report", num(row["tokens"])),
-                ("compression", compression(row)),
-                ("kept out", maybe(row["kept"], num)),
-                ("parent re-send", num(row["resent"])),
-                ("overhead", maybe(row["overhead"], pct)),
-                ("corrections", maybe(row["corrections"], str)),
-                ("notes", maybe(row["notes"], str)),
-                ("ending", OUTCOMES.get(row["state"], "-")),
-            ]
-        )
-    )
-
-
-def efficiency_section(items):
-    # An agent type's runs: how much each returned token stands for, and how runs went.
-    rows = [s["delegation"] for s in items if s["delegation"]]
-    if not rows:
-        return ""
-    ratios = [r["consumed"] / r["tokens"] for r in rows if r["consumed"] and r["tokens"]]
-    overheads = [r["overhead"] for r in rows if r["overhead"] is not None]
-    kept = [r["kept"] for r in rows if r["kept"] is not None]
-    ends = sum((s["outcomes"] for s in items), Counter())
-    runs = sum(r["runs"] for r in rows)
-    return "<h2>Efficiency</h2>" + kpis(
+    rows = [
         [
-            ("linked runs", runs),
-            ("compression", f"{statistics.median(ratios):.0f}x" if ratios else "-"),
-            ("overhead", pct(statistics.mean(overheads)) if overheads else "-"),
-            ("kept out/run", num(sum(kept) / runs) if kept else "-"),
-            ("budget stops", pct(ends["budget"] / sum(ends.values())) if ends else "-"),
-            ("corrections/run", f"{sum(r['corrections'] or 0 for r in rows) / runs:.1f}"),
-            ("notes/run", f"{sum(r['notes'] or 0 for r in rows) / runs:.1f}"),
+            row.agent,
+            preview(row.task),
+            str(row.runs),
+            maybe(row.requests, str),
+            maybe(row.consumed, num),
+            maybe(row.active, duration),
+            maybe(row.overhead, pct),
+            num(row.tokens),
+            compression(row),
+            maybe(row.kept, num),
+            num(row.resent),
+            maybe(row.corrections, str),
+            maybe(row.notes, str),
+            OUTCOMES.get(row.state, "-"),
         ]
-    )
+        for row in sorted(session.delegations, key=lambda r: -(r.consumed or 0))
+    ]
+    return headers, rows
 
 
-def session_average(items, theme):
-    calls = [c for s in items for c in s["calls"]]
-    consumed = defaultdict(float)
-    for session in items:
-        for name, tokens in session["consumed"].items():
-            consumed[name] += tokens
-    history = stacked_chart(
-        theme,
-        [s["time"][:10] for s in items],
-        [grouped(s["consumed"]) for s in items],
-        "Consumed tokens",
-        "Session",
-    )
-    # Context size at each call number, averaged over the sessions that reached it.
+def delegation_figures(row):
+    # A child's run as its parent saw it: what it returned and how it ended.
+    return [
+        ("runs", str(row.runs)),
+        ("report", num(row.tokens)),
+        ("compression", compression(row)),
+        ("kept out", maybe(row.kept, num)),
+        ("parent re-send", num(row.resent)),
+        ("overhead", maybe(row.overhead, pct)),
+        ("corrections", maybe(row.corrections, str)),
+        ("notes", maybe(row.notes, str)),
+        ("ending", OUTCOMES.get(row.state, "-")),
+    ]
+
+
+def efficiency_figures(items):
+    # An agent type's runs: how much each returned token stands for, and how runs went.
+    rows = [s.delegation for s in items if s.delegation]
+    if not rows:
+        return None
+    ratios = [r.consumed / r.tokens for r in rows if r.consumed and r.tokens]
+    overheads = [r.overhead for r in rows if r.overhead is not None]
+    kept = [r.kept for r in rows if r.kept is not None]
+    ends = sum((s.outcomes for s in items), Counter())
+    runs = sum(r.runs for r in rows)
+    return [
+        ("linked runs", str(runs)),
+        ("compression", f"{statistics.median(ratios):.0f}x" if ratios else "-"),
+        ("overhead", pct(statistics.mean(overheads)) if overheads else "-"),
+        ("kept out/run", num(sum(kept) / runs) if kept else "-"),
+        ("budget stops", pct(ends["budget"] / sum(ends.values())) if ends else "-"),
+        ("corrections/run", f"{sum(r.corrections or 0 for r in rows) / runs:.1f}"),
+        ("notes/run", f"{sum(r.notes or 0 for r in rows) / runs:.1f}"),
+    ]
+
+
+def growth_series(items):
+    # The average context at each request number over the sessions that reached it, while
+    # at least GROWTH_MIN_SESSIONS did, with their number.
     average, running = [], []
-    for i in range(max(len(s["calls"]) for s in items)):
-        at = [s["calls"][i]["prompt"] for s in items if len(s["calls"]) > i]
+    for i in range(max(len(s.requests) for s in items)):
+        at = [s.requests[i].prompt for s in items if len(s.requests) > i]
         if len(at) < GROWTH_MIN_SESSIONS:
             break
         running.append(len(at))
         average.append(statistics.mean(at))
-    growth = (
-        combo_chart(
-            theme,
-            [str(i + 1) for i in range(len(running))],
-            ("Sessions", running),
-            [("Average context", average, "p", "Context tokens")],
-            "Request",
-            axis="lines",
-        )
-        if running
-        else ""
-    )
-    return (
-        session_kpis(items, average=True)
-        + history
-        + startup_line(theme, items)
-        + session_table(
-            theme,
-            mean_dict([c["parts"] for c in calls]),
-            {name: tokens / len(items) for name, tokens in consumed.items()},
-            mean_dict([c["sizes"] for c in calls]),
-            {
-                n: c / len(items)
-                for n, c in sum((s["counts"] for s in items), Counter()).items()
-            },
-            [set(s["consumed"]) for s in items],
-            mean_shares(calls),
-        )
-        + time_section(theme, items)
-        + compactions_summary(items)
-        + efficiency_section(items)
-        + growth
-    )
+    return running, average
 
 
-def session_single(session, theme):
-    calls = session["calls"]
-    peak = max(calls, key=lambda c: c["prompt"])
-    tokens = stacked_chart(
-        theme,
-        [str(c["index"] + 1) for c in calls],
-        [grouped(c["parts"]) for c in calls],
-        "Context tokens",
-        "Request",
-        marks=session["marks"],
-    )
-    return (
-        session_kpis([session], average=False)
-        + tokens
-        + startup_line(theme, [session])
-        + session_table(
-            theme, peak["parts"], session["consumed"], peak["sizes"], session["counts"]
-        )
-        + time_section(theme, [session])
-        + compactions_summary([session])
-        + delegations_section(session)
-        + delegation_section(session)
-    )
+# App state: the theme, and the sessions read at start and on reload.
 
 
-def session_panels(sessions, theme):
-    """One selector: an average per agent, then every session newest first, each followed by
-    the subagent runs it started, then subagent runs whose parent is not in the report.
-    """
-    by_agent = defaultdict(list)
-    for session in sorted(sessions, key=lambda s: s["time"]):
-        by_agent[session["agent"]].append(session)
-    averages = [
-        (f"avg-{agent}", f"{agent} · {len(items)} sessions", session_average(items, theme))
-        for agent, items in sorted(by_agent.items(), key=lambda kv: (kv[0] != "main", kv[0]))
-    ]
-    newest = sorted(sessions, key=lambda s: s["time"], reverse=True)
-    ids = {s["id"] for s in sessions}
-    children = defaultdict(list)
-    for session in newest[::-1]:
-        if session["parent"] in ids:
-            children[session["parent"]].append(session)
-    entries = []
-    for session in newest:
-        if session["child"]:
-            continue
-        entries.append((f"s-{session['id']}", session_label(session, children), session))
-        entries += [
-            (f"s-{child['id']}", child_label(child), child) for child in children[session["id"]]
-        ]
-    unlinked = [s for s in newest if s["child"] and s["parent"] not in ids]
-    return selector(
+@dataclass
+class Store:
+    theme: dict = field(default_factory=dict)
+    sessions: list[Session] = field(default_factory=list)
+    by_id: dict[str, Session] = field(default_factory=dict)
+    # Agent -> its sessions, oldest first.
+    by_agent: dict[str, list[Session]] = field(default_factory=dict)
+
+    def load(self, sessions):
+        self.sessions = sessions
+        self.by_id = {s.id: s for s in sessions}
+        self.by_agent = defaultdict(list)
+        for session in sorted(sessions, key=lambda s: s.time):
+            self.by_agent[session.agent].append(session)
+
+
+store = Store()
+
+
+def color(key):
+    return f"#{store.theme['colors'][key]}"
+
+
+def px(points):
+    return points * 96 / 72
+
+
+# Charts: ECharts options in the theme's colors.
+
+# Axis labels in the same short form as num(); tooltips show exact values.
+SHORT_NUMBER = """v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M'
+  : v >= 1e4 ? (v / 1e3).toFixed(0) + 'k' : Math.round(v).toLocaleString('en-US')"""
+EXACT_NUMBER = "v => v == null ? '-' : Math.round(v).toLocaleString('en-US')"
+DECIMAL = "v => v == null ? '-' : v.toFixed(1)"
+
+
+def chart_theme():
+    # Fonts and axes in the page's colors, without grid lines.
+    axis = {
+        "axisLine": {"lineStyle": {"color": color("o")}},
+        "axisTick": {"lineStyle": {"color": color("o")}},
+        "axisLabel": {"color": color("m")},
+        "nameTextStyle": {"color": color("m")},
+        "splitLine": {"show": False},
+    }
+    return {
+        "backgroundColor": "transparent",
+        "textStyle": {
+            "fontFamily": store.theme["fonts"]["mono"],
+            "fontSize": px(store.theme["fontSize"]["s"]),
+            "color": color("f"),
+        },
+        "categoryAxis": axis,
+        "valueAxis": axis,
+        "legend": {"textStyle": {"color": color("f")}},
+        "tooltip": {
+            "backgroundColor": color("b"),
+            "borderColor": color("o"),
+            "textStyle": {"color": color("f")},
+        },
+    }
+
+
+def value_axis(name=None, show=True, tokens=True):
+    # A zero-based axis; token axes label in the short form, others with ECharts' numbers.
+    return {
+        "type": "value",
+        "min": 0,
+        "show": show,
+        "name": name,
+        "nameLocation": "middle",
+        "nameGap": 56,
+    } | ({"axisLabel": {":formatter": SHORT_NUMBER}} if tokens else {})
+
+
+def column_options(labels, xlabel, yaxes, series):
+    # Columns and lines over category labels, with the legend in the top left.
+    return {
+        "grid": {"left": 72, "right": 72, "top": 40, "bottom": 48},
+        "tooltip": {"trigger": "axis", ":valueFormatter": EXACT_NUMBER},
+        "legend": {"left": 0, "top": 0},
+        "xAxis": {
+            "type": "category",
+            "data": labels,
+            "name": xlabel,
+            "nameLocation": "middle",
+            "nameGap": 32,
+        },
+        "yAxis": yaxes,
+        "series": series,
+    }
+
+
+def line(name, values, key, axis, formatter=None):
+    return {
+        "type": "line",
+        "name": name,
+        "data": values,
+        "yAxisIndex": axis,
+        "showSymbol": False,
+        "color": color(key),
+    } | ({"tooltip": {":valueFormatter": formatter}} if formatter else {})
+
+
+def daily_options(series):
+    # Tokens per day as columns with their average on the same axis, and the averages of
+    # active hours and your wait per turn on their own axes, the wait's hidden.
+    return column_options(
+        series["days"],
+        "Day",
+        [value_axis("Tokens"), value_axis("Hours", tokens=False), value_axis(show=False)],
         [
-            ("Averages", averages),
-            ("Sessions", [(key, label, session_single(s, theme)) for key, label, s in entries]),
-            (
-                "Unlinked subagents",
-                [
-                    (f"s-{s['id']}", session_label(s), session_single(s, theme))
-                    for s in unlinked
-                ],
-            ),
+            {"type": "bar", "name": "Tokens", "data": series["tokens"], "color": color("o")},
+            line("Tokens EMA", series["tokens_ema"], "m", 0),
+            line("Active hours EMA", series["hours_ema"], "p", 1, DECIMAL),
+            line("Wait/turn minutes EMA", series["wait_ema"], "s", 2, DECIMAL),
         ],
     )
 
 
-def session_label(session, children=None):
-    count = len((children or {}).get(session["id"], []))
-    runs = f" · {count} subagent{'s' if count > 1 else ''}" if count else ""
-    return (
-        f"{session['time'][:16].replace('T', ' ')} · {Path(session['cwd']).name}"
-        f" · {session['agent']} · {len(session['calls'])} requests"
-        f" · peak {num(session['peak'])}{runs}"
-    )
+# Pages
 
 
-def child_label(session):
-    # Indented under its parent; option text keeps non-breaking spaces only.
-    task = preview(session["task"])
-    return f"\u00a0\u00a0\u00a0└ {session['agent']} · {task} · {len(session['calls'])} requests"
+def chart(options, height):
+    ui.echart(options, theme=chart_theme()).classes("w-full").style(f"height:{height}px")
 
 
-def selector(groups):
-    # A select over grouped panels (key, label, content); the first panel is shown.
-    panels = [panel for _, items in groups for panel in items]
-    options = "".join(
-        f'<optgroup label="{esc(group)}">'
-        + "".join(
-            f'<option value="session-{esc(key)}">{esc(label)}</option>'
-            for key, label, _ in items
+def kpis(items):
+    with ui.element("div").classes("kpis"):
+        for label, value in items:
+            with ui.element("div"):
+                ui.label(label).classes("kpi-label")
+                ui.label(value).classes("kpi-value")
+
+
+def table(headers, rows, wrap=None):
+    # A plain table; the first column and the wrap column hold left-aligned text.
+    columns = [
+        {
+            "name": f"c{i}",
+            "label": header,
+            "field": f"c{i}",
+            "align": "left" if i in (0, wrap) else "right",
+        }
+        | ({"classes": "wrap"} if i == wrap else {})
+        for i, header in enumerate(headers)
+    ]
+    data = [
+        {"id": n} | {f"c{i}": cell for i, cell in enumerate(row)} for n, row in enumerate(rows)
+    ]
+    ui.table(columns=columns, rows=data).props("flat dense square").classes("w-full")
+
+
+def overview_page():
+    sessions = store.sessions
+    with ui.column().classes("page"):
+        kpis(overview_figures(sessions))
+        chart(daily_options(daily_series(sessions)), 420)
+        table(*model_rows(sessions))
+
+
+def session_page(session_id: str):
+    session = store.by_id.get(session_id)
+    with ui.column().classes("page"):
+        if session is None:
+            ui.label("No such session.")
+            return
+        ui.label(session_label(session)).classes("title")
+
+
+def average_page(agent: str):
+    items = store.by_agent.get(agent)
+    with ui.column().classes("page"):
+        if not items:
+            ui.label("No such agent.")
+            return
+        ui.label(f"{agent} · {len(items)} sessions").classes("title")
+
+
+def navigation():
+    """The drawer's tree: the overview, an average per agent, every session newest first
+    with the subagent runs it started, then subagent runs whose parent is not in the app.
+
+    Node IDs are the pages' paths; group nodes cannot be selected.
+    """
+    newest = sorted(store.sessions, key=lambda s: s.time, reverse=True)
+    children = defaultdict(list)
+    for session in newest[::-1]:
+        if session.parent in store.by_id:
+            children[session.parent].append(session)
+
+    def node(session):
+        size = f"{len(session.requests)} requests · peak {num(session.peak.prompt)}"
+        if session.child:
+            label, caption = f"{session.agent} · {preview(session.task)}", size
+        else:
+            label = f"{session.time[:16].replace('T', ' ')} · {Path(session.cwd).name}"
+            caption = f"{session.agent} · {size}"
+        runs = [node(child) for child in children[session.id]]
+        return {"id": f"/session/{session.id}", "label": label, "caption": caption} | (
+            {"children": runs} if runs else {}
         )
-        + "</optgroup>"
-        for group, items in groups
-        if items
-    )
-    shown = "".join(
-        f'<div class="panel" id="session-{esc(key)}"{" hidden" if n else ""}>{content}</div>'
-        for n, (key, _, content) in enumerate(panels)
-    )
-    return f"<div><select data-panels>{options}</select>{shown}</div>"
+
+    def group(key, label, nodes):
+        return (
+            [{"id": key, "label": label, "selectable": False, "children": nodes}]
+            if nodes
+            else []
+        )
+
+    agents = sorted(store.by_agent.items(), key=lambda kv: (kv[0] != "main", kv[0]))
+    averages = [
+        {"id": f"/average/{agent}", "label": agent, "caption": f"{len(items)} sessions"}
+        for agent, items in agents
+    ]
+    unlinked = [s for s in newest if s.child and s.parent not in store.by_id]
+    return [
+        {"id": "/", "label": "Overview"},
+        *group("averages", "Averages", averages),
+        *group("sessions", "Sessions", [node(s) for s in newest if not s.child]),
+        *group("unlinked", "Unlinked subagents", [node(s) for s in unlinked]),
+    ]
 
 
-def report(sessions, theme, title):
-    # One page: the overview, then the session dropdown and its panels.
-    calls = [call for session in sessions for call in session["calls"]]
-    body = overview(sessions, calls, theme) + session_panels(sessions, theme)
-    return f"""<!doctype html><html><head><meta charset="utf-8"><title>{esc(title)}</title>
-<style>{style(theme)}</style></head><body><main>{body}</main><script>{SCRIPT}</script>
-</body></html>"""
+def root():
+    # The drawer with reload and the tree, and the page of the current path beside it.
+    async def reload():
+        button.props("loading")
+        store.load(await run.io_bound(collect))
+        ui.navigate.reload()
+
+    with ui.left_drawer(value=True, fixed=True).props("width=400 bordered"):
+        button = ui.button("Reload", icon="refresh", on_click=reload).props("flat dense")
+        tree = ui.tree(navigation(), on_select=lambda e: e.value and ui.navigate.to(e.value))
+        tree.add_slot(
+            "default-header",
+            """<div class="column no-wrap">
+              <span>{{ props.node.label }}</span>
+              <span v-if="props.node.caption" class="caption">{{ props.node.caption }}</span>
+            </div>""",
+        )
+        tree.expand(["averages", "sessions", "unlinked"])
+    ui.sub_pages(
+        {
+            "/": overview_page,
+            "/session/{session_id}": session_page,
+            "/average/{agent}": average_page,
+        }
+    )
+    # The tree follows the shown page, also one opened from a link.
+    router = ui.context.client.sub_pages_router
+    tree.select(router.current_path)
+    router.on_path_changed(tree.select)
+
+
+def style():
+    # The page in the theme's colors, fonts, and sizes: 12 px between blocks, 24 px before
+    # a section.
+    theme = store.theme
+    c, size, dim, fonts = theme["colors"], theme["fontSize"], theme["dim"], theme["fonts"]
+    return f"""
+:root {{ --p:#{c["p"]}; --s:#{c["s"]}; --f:#{c["f"]}; --m:#{c["m"]}; --o:#{c["o"]};
+  --b:#{c["b"]}; }}
+body, body.body--dark {{ background:var(--b); color:var(--f);
+  font:{px(size["m"])}px "{fonts["sans"]}"; }}
+.nicegui-content {{ padding:0; }}
+.nicegui-sub-pages {{ width:100%; }}
+.page {{ width:100%; gap:{dim["s"]}px; padding:{dim["m"]}px; }}
+.title {{ color:var(--m); }}
+.section {{ width:100%; font-size:{px(size["s"])}px; color:var(--m); text-transform:uppercase;
+  border-bottom:1px solid var(--o); margin-top:{dim["s"]}px; }}
+.kpis {{ width:100%; display:grid; grid-template-columns:repeat(6, minmax(0, 1fr));
+  row-gap:{dim["s"]}px; text-align:center; }}
+.kpi-label {{ color:var(--m); font-size:{px(size["s"])}px; }}
+.kpi-value {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
+.q-table__card, .q-table {{ background:transparent; color:var(--f); box-shadow:none; }}
+.q-table {{ font:{px(size["l"])}px "{fonts["mono"]}"; }}
+.q-table th {{ font:{px(size["l"])}px "{fonts["sans"]}"; color:var(--m); }}
+.q-table th, .q-table td {{ padding:{dim["t"]}px {dim["s"]}px; height:auto;
+  font-size:inherit; white-space:nowrap; border-color:var(--o); }}
+.q-table td.wrap {{ white-space:normal; color:var(--m); font-size:{px(size["m"])}px; }}
+.q-table tbody tr.branch {{ cursor:pointer; }}
+.square {{ margin-right:{dim["t"] * 2}px; }}
+.q-drawer {{ background:var(--b); }}
+.q-drawer--bordered {{ border-color:var(--o) !important; }}
+.q-drawer .q-tree {{ color:var(--f); padding:{dim["s"]}px; }}
+.q-tree__node--selected {{ color:var(--p); }}
+.caption {{ color:var(--m); font-size:{px(size["s"])}px; }}
+"""
+
+
+def free_port():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Pi context statistics as an HTML report.")
-    parser.add_argument("theme", type=Path, help="theme JSON supplied by Nix")
-    parser.add_argument("--since", help="only sessions started from this date (YYYY-MM-DD)")
-    parser.add_argument("--project", help="only sessions whose directory contains this text")
-    parser.add_argument("--out", type=Path, default=Path("/tmp/pi-stats.html"))
-    args = parser.parse_args()
-
-    theme = json.loads(args.theme.read_text())
-    sessions = collect(args.since, args.project)
-    if not sessions:
+    theme, browser = Path(sys.argv[1]), sys.argv[2]
+    store.theme = json.loads(theme.read_text())
+    store.load(collect())
+    if not store.sessions:
         raise SystemExit("No sessions found.")
-    filters = " ".join(f for f in [args.project, args.since and f"since {args.since}"] if f)
-    title = f"Pi stats {filters}".strip()
-    args.out.write_text(report(sessions, theme, title))
-    print(args.out)
+    port = free_port()
+    url = f"http://127.0.0.1:{port}/"
+    # The browser runs in its own session, so Ctrl+C stops only the app.
+    app.on_startup(
+        lambda: subprocess.Popen(
+            [browser, url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    )
+    c = store.theme["colors"]
+    app.colors(primary=f"#{c['p']}", secondary=f"#{c['s']}", dark=f"#{c['b']}")
+    ui.add_css(style(), shared=True)
+    ui.run(
+        root,
+        host="127.0.0.1",
+        port=port,
+        title="Pi stats",
+        dark=store.theme["dark"],
+        show=False,
+        reload=False,
+    )
 
 
 if __name__ == "__main__":
