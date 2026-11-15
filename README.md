@@ -99,8 +99,8 @@ Files are exposed through `/etc/home-files/<user>` and linked into the user's ho
 systemd-tmpfiles. Invalid paths and conflicting targets are rejected. On a switch, links that
 left the config and their emptied folders are removed, as listed in each generation's
 `/etc/home-files/.<user>.manifest`; files and changed links are kept, and targets occupied by
-them are reported. Folders that are still links from an earlier target are replaced. All managed
-files are public and store-backed; profiles must not contain secrets.
+them are reported. All managed files are public and store-backed; profiles must not contain
+secrets.
 
 ## Development
 
