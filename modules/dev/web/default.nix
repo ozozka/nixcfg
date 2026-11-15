@@ -44,10 +44,7 @@ let
   };
 in
 {
-  imports = with self.nixosModules; [
-    home
-    options
-  ];
+  imports = [ self.nixosModules.options ];
 
   # Local metasearch for agents: queries several engines, so one engine throttling or
   # asking for a CAPTCHA does not stop search.
@@ -72,9 +69,8 @@ in
     };
   };
 
-  # Browser CLI for agents: reads pages over HTTP and drives Chromium when needed.
+  # Web tools for agents: search, page reading over HTTP, and the browser.
   environment.systemPackages = [
-    pkgs.agent-browser
     playwrightCli
     webFetch
     webSearch
@@ -83,20 +79,4 @@ in
   # Snapshots and screenshots of playwright-cli, kept in the project it ran in.
   programs.git.config.core.excludesFile = pkgs.writeText "git-ignore" ".playwright-cli/\n";
 
-  ozozka.home.profiles.web.files.".agent-browser"."config.json" =
-    settingsFormat.generate "agent-browser.json"
-      {
-        # The package does not wire a browser.
-        executablePath = "${pkgs.chromium}/bin/chromium";
-        # A visible window shows what agents do; `--headed false` for a single run.
-        headed = true;
-        # Own window class, so Hyprland places it on its workspace.
-        args = "--class=agent-browser";
-        # Headed browsers otherwise stay open until closed.
-        idleTimeout = "30m";
-        colorScheme = if config.ozozka.col.isDark then "dark" else "light";
-        # Marks page text as untrusted against prompt injection.
-        contentBoundaries = true;
-        maxOutput = 40000;
-      };
 }

@@ -263,12 +263,6 @@ hl.window_rule {
 }
 
 hl.window_rule {
-  name = "agent-browser-workspace",
-  match = { class = "^agent-browser$" },
-  workspace = "6 silent",
-}
-
-hl.window_rule {
   name = "playwright-cli-workspace",
   match = { class = "^playwright-cli$" },
   workspace = "6 silent",
