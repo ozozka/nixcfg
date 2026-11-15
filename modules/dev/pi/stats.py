@@ -354,6 +354,8 @@ class Session:
     cwd: str
     child: bool
     requests: list[Request]
+    # Navigation and average-chart ordering only; time remains the first request.
+    last_prompt_time: str
     # Part -> tokens over the session, prompt and output parts of every request.
     consumed: dict[str, float]
     compactions: list[Compaction]
@@ -408,6 +410,15 @@ class Session:
         # The first request's parts before any conversation, in tokens.
         parts = self.requests[0].parts
         return {n: v for n, v in parts.items() if n.split(":")[0] in STARTUP_GROUPS}
+
+
+def session_order(session):
+    # Compare instants, with stable tie-breakers independent of file discovery order.
+    return (
+        milliseconds(session.last_prompt_time),
+        milliseconds(session.time),
+        session.id,
+    )
 
 
 def requests_of(header, entries, uses):
@@ -634,6 +645,15 @@ def session_of(header, entries, requests, uses, links, child):
         cwd=header.get("cwd", ""),
         child=child,
         requests=requests,
+        last_prompt_time=max(
+            (
+                e["timestamp"]
+                for e in entries
+                if e["type"] == "message" and e["message"].get("role") == "user"
+            ),
+            key=milliseconds,
+            default=requests[0].time,
+        ),
         consumed=consumed,
         compactions=[
             compaction_of(e, requests, previous)
@@ -987,7 +1007,7 @@ def context_columns(session):
 
 
 def history_columns(items):
-    # Each session's consumption stacked by chart group, by start day.
+    # Columns follow the supplied session order; day labels remain the stable start day.
     return [s.time[:10] for s in items], [grouped(s.consumed) for s in items]
 
 
@@ -1259,14 +1279,14 @@ class Store:
     theme: dict = field(default_factory=dict)
     sessions: list[Session] = field(default_factory=list)
     by_id: dict[str, Session] = field(default_factory=dict)
-    # Agent -> its sessions, oldest first.
+    # Agent -> its sessions, oldest last prompt first.
     by_agent: dict[str, list[Session]] = field(default_factory=dict)
 
     def load(self, sessions):
         self.sessions = sessions
         self.by_id = {s.id: s for s in sessions}
         self.by_agent = defaultdict(list)
-        for session in sorted(sessions, key=lambda s: s.time):
+        for session in sorted(sessions, key=session_order):
             self.by_agent[session.agent].append(session)
 
 
@@ -1658,14 +1678,15 @@ def compactions_section(items):
 
 
 def navigation():
-    """The drawer's tree: the overview, an average per agent, every session newest first
-    with the subagent runs it started, then subagent runs whose parent is not in the app.
+    """The drawer's tree: overview, averages, sessions by newest prompt, unlinked children.
+
+    Nested subagent runs retain their start-time order, oldest first.
 
     Node IDs are the pages' paths; group nodes cannot be selected.
     """
-    newest = sorted(store.sessions, key=lambda s: s.time, reverse=True)
+    newest = sorted(store.sessions, key=session_order, reverse=True)
     children = defaultdict(list)
-    for session in newest[::-1]:
+    for session in sorted(store.sessions, key=lambda s: s.time):
         if session.parent in store.by_id:
             children[session.parent].append(session)
 
