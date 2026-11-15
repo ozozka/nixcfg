@@ -1,18 +1,16 @@
 /**
- * Desktop notifications over D-Bus: "Done" with the first line of the final message when a run
+ * Notifications through the terminal: "Done" with the first line of the final message when a run
  * settles, "Failed" with the error when it ended in one (nothing after Escape), "Input required"
  * when a dialog waits during a run.
  *
- * Each session keeps one notification and replaces it in place (Notify's replaces_id), since
- * the notification server keeps cards until they are dismissed; a replaced card moves back to
- * the top. Sends are serialized, so a quick second notification still replaces the first.
+ * Pi writes an OSC 777 sequence and the terminal decides what a notification is: Emacs sends a
+ * desktop card that shows the terminal on click; terminals without support ignore it.
  */
 
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { assistantText } from "./lib/shared.ts";
 
-const NOTIFICATION_ID = /^u (\d+)/;
 // Longest summary shown after "Done: " or "Failed: ".
 const SUMMARY_LENGTH = 80;
 
@@ -27,48 +25,11 @@ function firstLine(text: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  // The session's notification ID; 0 creates a new one.
-  let cardId = 0;
-  let queue = Promise.resolve();
-
-  async function send(ctx: ExtensionContext, message: string) {
-    try {
-      const projectName = basename(ctx.cwd) || ctx.cwd;
-
-      // NixOS supplies busctl through systemd; no terminal protocol or libnotify.
-      const result = await pi.exec(
-        "busctl",
-        [
-          "--user",
-          "--timeout=3",
-          "--", // The expiration argument below is a negative number.
-          "call",
-          "org.freedesktop.Notifications",
-          "/org/freedesktop/Notifications",
-          "org.freedesktop.Notifications",
-          "Notify",
-          "susssasa{sv}i",
-          "Pi", // Application name.
-          String(cardId), // The notification to replace; 0 creates one.
-          "", // Use the notification service's default icon.
-          projectName,
-          message,
-          "0", // No actions.
-          "0", // No hints.
-          "-1", // Use the notification service's default expiration.
-        ],
-        { timeout: 5000 },
-      );
-      if (result.code !== 0) {
-        ctx.ui.notify("Could not send desktop notification", "warning");
-        return;
-      }
-      const id = NOTIFICATION_ID.exec(result.stdout.trim());
-      if (id) cardId = Number(id[1]);
-    } catch {
-      // A missing bus or notification service must not interrupt the agent.
-      ctx.ui.notify("Could not send desktop notification", "warning");
-    }
+  // OSC 777 `notify;title;body`: control characters would end the sequence, `;` the title.
+  function send(ctx: ExtensionContext, message: string) {
+    const clean = (text: string) => text.replace(/\p{Cc}/gu, " ");
+    const title = clean(`Pi · ${basename(ctx.cwd) || ctx.cwd}`).replaceAll(";", ",");
+    process.stdout.write(`\x1b]777;notify;${title};${clean(message)}\x07`);
   }
 
   // "Failed: <error>" or "Done: <first line of the final message>", from the last assistant message.
@@ -86,15 +47,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   function notify(ctx: ExtensionContext, message: string) {
-    if (ctx.mode !== "tui") return;
-    queue = queue.then(() => send(ctx, message));
-    return queue;
+    if (ctx.mode === "tui") send(ctx, message);
   }
-
-  // A new or resumed session starts its own notification.
-  pi.on("session_start", () => {
-    cardId = 0;
-  });
 
   // Unlike agent_end, this fires only after retries and queued work finish.
   pi.on("agent_settled", (event, ctx) => {

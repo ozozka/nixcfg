@@ -1,8 +1,13 @@
-"""Claude Code desktop notification hook. The busctl path is supplied by Nix."""
+"""Claude Code notification hook: an OSC 777 sequence to the terminal Claude runs in.
+
+The terminal decides what a notification is: Emacs sends a desktop card that shows the terminal
+on click; terminals without support ignore it. Hook output goes to Claude, so the sequence is
+written to the controlling terminal.
+"""
 
 import json
 import os
-import subprocess
+import re
 import sys
 from pathlib import Path
 
@@ -22,11 +27,15 @@ def summarized(label, text):
     return f"{label}: {summary}" if summary else label
 
 
-def notify(event, cwd, busctl):
-    # Match Pi's desktop presentation: application name, project title, short body.
-    # Payloads do not reliably identify headless sessions: local automation with
-    # a desktop bus may also notify. Exclude subagents, CI, and remote web sessions.
-    # Missing D-Bus/services and timeouts must never interrupt the agent.
+def clean(text):
+    """Replace control characters, which would end the sequence."""
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
+
+
+def notify(event, cwd):
+    # Match Pi's presentation: agent and project as the title, a short body.
+    # Exclude subagents, CI, and remote web sessions; a missing terminal must never
+    # interrupt the agent.
     if event.get("agent_id") or os.environ.get("CI") or os.environ.get("CLAUDE_CODE_REMOTE"):
         return
     name = event.get("hook_event_name")
@@ -44,43 +53,19 @@ def notify(event, cwd, busctl):
             return
     else:
         return
+    title = clean(f"Claude · {cwd.name or cwd}").replace(";", ",")
     try:
-        result = subprocess.run(
-            [
-                busctl,
-                "--user",
-                "--timeout=3",
-                "--",
-                "call",
-                "org.freedesktop.Notifications",
-                "/org/freedesktop/Notifications",
-                "org.freedesktop.Notifications",
-                "Notify",
-                "susssasa{sv}i",
-                "Claude",
-                "0",
-                "",
-                cwd.name or str(cwd),
-                message,
-                "0",
-                "0",
-                "-1",
-            ],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-        if result.returncode:
-            print("Claude Code: could not send desktop notification", file=sys.stderr)
-    except OSError, subprocess.TimeoutExpired:
-        print("Claude Code: could not send desktop notification", file=sys.stderr)
+        with Path("/dev/tty").open("w", encoding="utf-8") as tty:
+            tty.write(f"\x1b]777;notify;{title};{clean(message)}\x07")
+    except OSError:
+        pass
 
 
 def main():
     try:
         event = json.load(sys.stdin)
         cwd = Path(event["cwd"]).resolve()
-        notify(event, cwd, sys.argv[1])
+        notify(event, cwd)
         # Never approve, deny, or continue a turn from a notification hook.
         print("{}")
     except (OSError, ValueError, KeyError, TypeError) as error:

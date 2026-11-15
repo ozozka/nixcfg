@@ -8,7 +8,7 @@ let
   python = "${pkgs.python3}/bin/python3";
   notification = {
     type = "command";
-    command = "${python} ${./notify.py} ${pkgs.systemd}/bin/busctl";
+    command = "${python} ${./notify.py}";
     timeout = 6;
   };
   # Project docs as context, only for wclaude; Claude adds these hooks to the managed ones.
