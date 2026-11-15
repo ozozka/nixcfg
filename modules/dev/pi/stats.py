@@ -1244,6 +1244,8 @@ SHORT_NUMBER = """v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M'
   : v >= 1e4 ? (v / 1e3).toFixed(0) + 'k' : Math.round(v).toLocaleString('en-US')"""
 EXACT_NUMBER = "v => v == null ? '-' : Math.round(v).toLocaleString('en-US')"
 DECIMAL = "v => v == null ? '-' : v.toFixed(1)"
+DENSE_COLUMNS = 60
+BAR_GAP = "28%"
 
 
 def chart_theme():
@@ -1285,12 +1287,13 @@ def value_axis(name=None, show=True, tokens=True):
     } | ({"axisLabel": {":formatter": SHORT_NUMBER}} if tokens else {})
 
 
-def column_options(labels, xlabel, yaxes, series):
-    # Columns and lines over category labels, with the legend in the top left.
+def column_options(labels, xlabel, yaxes, series, legend=None):
+    # Columns and lines over category labels, with the legend in the top left, in the
+    # series' order or legend's.
     return {
         "grid": {"left": 72, "right": 72, "top": 40, "bottom": 48},
         "tooltip": {"trigger": "axis", ":valueFormatter": EXACT_NUMBER},
-        "legend": {"left": 0, "top": 0},
+        "legend": {"left": 0, "top": 0} | ({"data": legend} if legend else {}),
         "xAxis": {
             "type": "category",
             "data": labels,
@@ -1330,6 +1333,73 @@ def daily_options(series):
     )
 
 
+def stacked_options(labels, columns, ylabel, xlabel, marks=()):
+    """Columns stacked by CHART_GROUPS, in their order from the bottom: each column's height
+    is its total, each color a group's tokens, and a group's colored area over all columns
+    its sum.
+
+    columns: group name -> tokens, one per label; marks: positions of dashed vertical rules.
+    """
+    # Above DENSE_COLUMNS, columns touch, so dense sessions read as a stepped area; a
+    # hairline edge in each column's color closes the seams between them.
+    dense = len(columns) > DENSE_COLUMNS
+    series = [
+        {
+            "type": "bar",
+            "stack": "total",
+            "name": group,
+            "data": [column.get(group, 0) for column in columns],
+            "color": color(key),
+            "barCategoryGap": "0%" if dense else BAR_GAP,
+        }
+        | ({"itemStyle": {"borderColor": color(key), "borderWidth": 0.5}} if dense else {})
+        for group, key in CHART_GROUPS.items()
+    ]
+    if marks:
+        series[0]["markLine"] = {
+            "symbol": "none",
+            "silent": True,
+            "label": {"show": False},
+            "lineStyle": {"color": color("f"), "type": "dashed", "width": 1},
+            "data": [{"xAxis": mark} for mark in marks],
+        }
+    return column_options(
+        labels, xlabel, [value_axis(ylabel)], series, legend=list(CHART_GROUPS)[::-1]
+    )
+
+
+def bar_options(segments, xlabel, tokens=True, legend=False):
+    """One horizontal bar of segments (value, theme color key, name) from the left.
+
+    With a legend, the segments are named below the bar and touch; without one, thin lines
+    in the background color separate them.
+    """
+    edge = {} if legend else {"itemStyle": {"borderColor": color("b"), "borderWidth": 1}}
+    return {
+        "grid": {"left": 0, "right": 0, "top": 0, "bottom": 64 if legend else 40},
+        "tooltip": {
+            "trigger": "item",
+            ":valueFormatter": EXACT_NUMBER if tokens else DECIMAL,
+        },
+        "legend": {"show": legend, "bottom": 0},
+        "xAxis": value_axis(xlabel, tokens=tokens)
+        | {"max": sum(v for v, _, _ in segments) or 1, "nameGap": 24},
+        "yAxis": {"type": "category", "data": [""], "show": False},
+        "series": [
+            {
+                "type": "bar",
+                "stack": "all",
+                "name": name,
+                "data": [value],
+                "color": color(key),
+                "barWidth": "100%",
+            }
+            | edge
+            for value, key, name in segments
+        ],
+    }
+
+
 # Pages
 
 
@@ -1363,6 +1433,73 @@ def table(headers, rows, wrap=None):
     ui.table(columns=columns, rows=data).props("flat dense square").classes("w-full")
 
 
+# A row of the parts table: an arrow on the rows that open, the section's color, and the
+# part name indented by depth; the rows that open emit toggle with their ID.
+PARTS_ROW = """
+<q-tr :props="props" :class="props.row.branch ? 'branch' : ''"
+      @click="() => props.row.branch && $parent.$emit('toggle', props.row.id)">
+  <q-td v-for="col in props.cols" :key="col.name" :props="props">
+    <span v-if="col.name === 'c0'" :style="{paddingLeft: props.row.depth * INDENT + 'px'}">
+      <span v-if="props.row.branch" class="marker">{{ props.row.open ? '▾ ' : '▸ ' }}</span>
+      <span v-if="props.row.color" class="square" :style="{color: props.row.color}">■</span>
+      <b v-if="props.row.branch">{{ col.value }}</b>
+      <template v-else>{{ col.value }}</template>
+    </span>
+    <template v-else>{{ col.value }}</template>
+  </q-td>
+</q-tr>
+"""
+
+
+def parts_table(headers, rows):
+    """The parts table, collapsed to its sections; a section row opens its direct children
+    and closes all its descendants.
+    """
+    opened = set()
+    children = defaultdict(list)
+    for row in rows:
+        children[row["parent"]].append(row["id"])
+
+    def close(node):
+        opened.discard(node)
+        for child in children[node]:
+            close(child)
+
+    def shown():
+        visible = {None}
+        data = []
+        for row in rows:
+            if row["parent"] in visible and (row["parent"] is None or row["parent"] in opened):
+                visible.add(row["id"])
+                data.append(
+                    {
+                        "id": row["id"],
+                        "depth": row["depth"],
+                        "branch": row["branch"],
+                        "open": row["id"] in opened,
+                        "color": row["color"] and color(row["color"]),
+                    }
+                    | {f"c{i}": cell for i, cell in enumerate(row["cells"])}
+                )
+        return data
+
+    def toggle(event):
+        node = event.args
+        if node in opened:
+            close(node)
+        else:
+            opened.add(node)
+        grid.update_rows(shown())
+
+    columns = [
+        {"name": f"c{i}", "label": h, "field": f"c{i}", "align": "left" if i == 0 else "right"}
+        for i, h in enumerate(headers)
+    ]
+    grid = ui.table(columns=columns, rows=shown()).props("flat dense square").classes("w-full")
+    grid.add_slot("body", PARTS_ROW.replace("INDENT", str(store.theme["dim"]["m"])))
+    grid.on("toggle", toggle)
+
+
 def overview_page():
     sessions = store.sessions
     with ui.column().classes("page"):
@@ -1378,6 +1515,11 @@ def session_page(session_id: str):
             ui.label("No such session.")
             return
         ui.label(session_label(session)).classes("title")
+        kpis(session_figures([session], False))
+        labels, columns, marks = context_columns(session)
+        chart(stacked_options(labels, columns, "Context tokens", "Request", marks), 420)
+        chart(bar_options(startup_segments([session]), "Tokens"), 96)
+        parts_table(*session_parts(session))
 
 
 def average_page(agent: str):
@@ -1387,6 +1529,11 @@ def average_page(agent: str):
             ui.label("No such agent.")
             return
         ui.label(f"{agent} · {len(items)} sessions").classes("title")
+        kpis(session_figures(items, True))
+        labels, columns = history_columns(items)
+        chart(stacked_options(labels, columns, "Consumed tokens", "Session"), 420)
+        chart(bar_options(startup_segments(items), "Tokens"), 96)
+        parts_table(*average_parts(items))
 
 
 def navigation():
@@ -1493,6 +1640,7 @@ body, body.body--dark {{ background:var(--b); color:var(--f);
 .q-table td.wrap {{ white-space:normal; color:var(--m); font-size:{px(size["m"])}px; }}
 .q-table tbody tr.branch {{ cursor:pointer; }}
 .square {{ margin-right:{dim["t"] * 2}px; }}
+.marker {{ color:var(--m); }}
 .q-drawer {{ background:var(--b); }}
 .q-drawer--bordered {{ border-color:var(--o) !important; }}
 .q-drawer .q-tree {{ color:var(--f); padding:{dim["s"]}px; }}
