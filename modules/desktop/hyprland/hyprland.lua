@@ -269,6 +269,20 @@ hl.window_rule {
 }
 
 hl.window_rule {
+  name = "playwright-cli-workspace",
+  match = { class = "^playwright-cli$" },
+  workspace = "6 silent",
+}
+
+-- The dashboard (`playwright-cli show`) is for the user, so it takes focus. Chromium derives the
+-- class from its app URL.
+hl.window_rule {
+  name = "playwright-dashboard-workspace",
+  match = { class = "^chrome-_text_html,-Default$" },
+  workspace = "6",
+}
+
+hl.window_rule {
   name = "move-hyprland-run",
   match = { class = "hyprland-run" },
   move = "20 monitor_h-120",
