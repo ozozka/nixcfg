@@ -27,6 +27,30 @@
   ("S-<right>" . tab-line-switch-to-next-tab)
   ("C-S-<left>" . tab-line-move-tab-backward)
   ("C-S-<right>" . tab-line-move-tab-forward)
+  ("C-<tab>" . completion-at-point)
+  ("C-S-<tab>" . tab-next)
+  ("C-S-<iso-lefttab>" . tab-next)
+  ("M-c" . whitespace-cleanup)
+  ("M-o" . count-words)
+  ("M-O" . toggle-frame-tab-bar)
+  ("C-s" . save-buffer)
+  ("C-f" . isearch-forward)
+  ("C-S-f" . isearch-backward)
+  ("C-c m" . (lambda () (interactive) (flymake-start t)))
+  ("C-c C-m" . (lambda (directory)
+                 (interactive (list (read-directory-name "Trust directory: " default-directory default-directory t)))
+                 ;; Saved to `custom-file', so trust survives restarts.
+                 (let ((trusted (abbreviate-file-name (file-name-as-directory (file-truename directory))))
+                       (current (if (listp trusted-content) trusted-content nil)))
+                   (customize-save-variable
+                    'trusted-content
+                    (if (member trusted current) current (cons trusted current))))
+                 (when (fboundp 'my-env-refresh)
+                   (my-env-refresh))
+                 (message "Trusted content: %s" trusted-content)))
+
+  :bind*
+  ;; Shared application shortcuts override mode maps, including `term-raw-map'.
   ;; The window's own previous buffer, matching its tab line, not the frame-wide one.
   ("M-<tab>" . (lambda ()
                  (interactive)
@@ -36,9 +60,6 @@
                                               (window-prev-buffers))))
                    (switch-to-buffer (car entry)))))
   ("M-`" . other-window)
-  ("C-<tab>" . completion-at-point)
-  ("C-S-<tab>" . tab-next)
-  ("C-S-<iso-lefttab>" . tab-next)
 
   ;; Commands: M-<key> for the common case, Shift for a second variant.
   ("M-z" . project-recompile)
@@ -68,24 +89,6 @@
   ("M-Q" . tab-line-close-tab)
   ("M-'" . project-find-regexp)
   ("M-\"" . project-vc-dir)
-  ("M-c" . whitespace-cleanup)
-  ("M-o" . count-words)
-  ("M-O" . toggle-frame-tab-bar)
-  ("C-s" . save-buffer)
-  ("C-f" . isearch-forward)
-  ("C-S-f" . isearch-backward)
-  ("C-c m" . (lambda () (interactive) (flymake-start t)))
-  ("C-c C-m" . (lambda (directory)
-                 (interactive (list (read-directory-name "Trust directory: " default-directory default-directory t)))
-                 ;; Saved to `custom-file', so trust survives restarts.
-                 (let ((trusted (abbreviate-file-name (file-name-as-directory (file-truename directory))))
-                       (current (if (listp trusted-content) trusted-content nil)))
-                   (customize-save-variable
-                    'trusted-content
-                    (if (member trusted current) current (cons trusted current))))
-                 (when (fboundp 'my-env-refresh)
-                   (my-env-refresh))
-                 (message "Trusted content: %s" trusted-content)))
 
   :config
   (menu-bar-mode -1)
@@ -239,7 +242,7 @@ function itself."
   (dotimes (index 9)
     (let ((number (1+ index)))
       (keymap-set
-       global-map
+       override-global-map
        (format "M-%d" number)
        (lambda ()
          (interactive)
@@ -521,16 +524,13 @@ scrollback are gone."
   :config
   (add-to-list 'desktop-buffer-mode-handlers '(term-mode . my-term-desktop-restore))
   (add-to-list 'term-osc-handlers '("777" . my-term-notify))
+  ;; Preserve the numeric argument shortcut previously copied from `global-map'.
+  (keymap-set term-raw-map "M-0" #'digit-argument)
   (keymap-set term-raw-map "C-S-c" #'kill-ring-save)
   (keymap-set term-raw-map "C-S-v" #'term-paste)
   (keymap-set term-raw-map "<escape>" (lambda () (interactive) (term-send-raw-string "\e")))
   (keymap-set term-raw-map "<backtab>" (lambda () (interactive) (term-send-raw-string "\e[Z")))
-  (keymap-set term-raw-map "S-<return>" (lambda () (interactive) (term-send-raw-string "\026\n")))
-  ;; Global keys that also work inside terminals; the program there loses them.
-  (dolist (key (append '("M-<tab>" "M-`" "M-z" "M-Z" "M-a" "M-A" "M-f" "M-F" "M-b" "M-B"
-                         "M-q" "M-Q" "M-'" "M-\"")
-                       (mapcar (lambda (number) (format "M-%d" number)) (number-sequence 0 9))))
-    (keymap-set term-raw-map key (keymap-lookup global-map key))))
+  (keymap-set term-raw-map "S-<return>" (lambda () (interactive) (term-send-raw-string "\026\n"))))
 
 (use-package compile
   :ensure nil
