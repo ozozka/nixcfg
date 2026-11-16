@@ -46,10 +46,11 @@
   ;; Async and terminal buffers are named after the project, like `project-shell':
   ;; *ol-async*, *ol-term*, numbered when several exist.
   ("M-a" . (lambda ()
-             (interactive)
-             (require 'project)
-             (let ((shell-command-buffer-name-async (project-prefixed-buffer-name "async")))
-               (call-interactively #'project-async-shell-command))))
+           (interactive)
+           (require 'project)
+           (let ((shell-command-buffer-name-async (project-prefixed-buffer-name "async")))
+             (minibuffer-with-setup-hook (lambda () (insert "r"))
+               (call-interactively #'project-async-shell-command)))))
   ("M-A" . (lambda ()
              (interactive)
              (require 'project)
@@ -103,7 +104,7 @@
   (fringe-mode '(0 . 0))
   (add-to-list
    'display-buffer-alist
-   '((derived-mode . (vc-dir-mode log-view-mode dired-mode ibuffer-mode term-mode))
+   '((derived-mode . (vc-dir-mode log-view-mode dired-mode ibuffer-mode term-mode shell-command-mode vc-compilation-mode))
      (display-buffer-reuse-window
       display-buffer-same-window)))
 
