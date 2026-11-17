@@ -1,8 +1,8 @@
 """Claude Code notification hook: an OSC 777 sequence to the terminal Claude runs in.
 
 The terminal decides what a notification is: Emacs sends a desktop card that shows the terminal
-on click; terminals without support ignore it. Hook output goes to Claude, so the sequence is
-written to the controlling terminal.
+on click; terminals without support ignore it. Hook output goes to Claude and hooks have no
+controlling terminal, so the sequence is written to the terminal of Claude itself.
 """
 
 import json
@@ -32,6 +32,17 @@ def clean(text):
     return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
 
 
+def terminal():
+    """Return the terminal of the nearest ancestor that writes to one: hooks run without a controlling terminal."""
+    pid = os.getppid()
+    while pid > 1:
+        target = os.readlink(f"/proc/{pid}/fd/1")
+        if target.startswith("/dev/pts/"):
+            return Path(target)
+        pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+    raise OSError("no terminal")
+
+
 def notify(event, cwd):
     # Match Pi's presentation: agent and project as the title, a short body.
     # Exclude subagents, CI, and remote web sessions; a missing terminal must never
@@ -55,7 +66,7 @@ def notify(event, cwd):
         return
     title = clean(f"Claude · {cwd.name or cwd}").replace(";", ",")
     try:
-        with Path("/dev/tty").open("w", encoding="utf-8") as tty:
+        with terminal().open("w", encoding="utf-8") as tty:
             tty.write(f"\x1b]777;notify;{title};{clean(message)}\x07")
     except OSError:
         pass
