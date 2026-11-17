@@ -99,7 +99,7 @@ in
         };
       in
       {
-        emoji = mkFont "Noto Color Emoji" pkgs.noto-fonts-color-emoji "Emoji font";
+        emoji = mkFont "Noto Emoji" pkgs.noto-fonts-monochrome-emoji "Emoji font";
         serifa = mkFont "Spectral" pkgs.spectral "Alternative serif font";
         serif = mkFont "Manuale" ozpkgs.manuale "Serif font";
         sansa = mkFont "Inter" pkgs.inter "Alternative sans font";
