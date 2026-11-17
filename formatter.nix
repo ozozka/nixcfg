@@ -137,8 +137,8 @@ pkgs.treefmt.withConfig {
         excludes = [
           "modules/dev/agents/prompts/**"
           "modules/dev/agents/skills/**"
-          "modules/dev/pi/agents/**"
-          "modules/dev/pi/modes/**"
+          "modules/dev/agents/pi/agents/**"
+          "modules/dev/agents/pi/modes/**"
         ];
         options = [
           "check"
