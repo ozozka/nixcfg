@@ -5,8 +5,11 @@ self:
 let
   searxPort = 8888;
 
-  # Search command for agents (the web skill); Python only, no extra packages.
+  # Search command for agents (the web skill); Python only, no extra packages. Agent sandboxes
+  # exempt local addresses from their proxy but have no route to the host's SearXNG, so the
+  # request goes through the proxy, whose policy can allow it.
   webSearch = pkgs.writeShellScriptBin "web-search" ''
+    unset no_proxy NO_PROXY
     WEB_SEARCH_ENDPOINT=http://127.0.0.1:${toString searxPort} \
       exec ${pkgs.python3}/bin/python3 -I ${./web-search.py} "$@"
   '';

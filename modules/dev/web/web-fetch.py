@@ -143,7 +143,13 @@ def read(url, render_page):
         raise ValueError(f"unsupported content type {content_type}")
     text = extract(body, url).strip()
     if len(text) < SHORT_CHARS:
-        rendered_url, html = render(url)
+        # Rendering is a best effort here: where the browser cannot run or connect (such as an
+        # agent sandbox), the HTML text stands, and its short-page hint points to the browser.
+        try:
+            rendered_url, html = render(url)
+        except Exception as error:  # noqa: BLE001 - Playwright raises its own errors.
+            print(f"web-fetch: cannot render {url}: {error}", file=sys.stderr)
+            return url, text
         rendered = extract(html, rendered_url).strip()
         if len(rendered) > len(text):
             return rendered_url, rendered
