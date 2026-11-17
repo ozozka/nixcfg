@@ -12,9 +12,17 @@ let
       exec ${pkgs.python3}/bin/python3 -I ${./web-search.py} "$@"
   '';
 
-  # Page reader for agents (the web skill); trafilatura extracts the main text.
+  # Page reader for agents (the web skill): trafilatura extracts the main text, Playwright
+  # renders pages built by JavaScript in playwright-cli's Chromium, PyMuPDF reads PDFs.
   webFetch = pkgs.writeShellScriptBin "web-fetch" ''
-    exec ${pkgs.python3.withPackages (p: [ p.trafilatura ])}/bin/python3 -I ${./web-fetch.py} "$@"
+    WEB_FETCH_CHROMIUM=${pkgs.playwright-driver.browsers-chromium}/chromium-${pkgs.playwright-driver.browsersJSON.chromium.revision}/chrome-linux64/chrome \
+      exec ${
+        pkgs.python3.withPackages (p: [
+          p.trafilatura
+          p.playwright
+          p.pymupdf4llm
+        ])
+      }/bin/python3 -I ${./web-fetch.py} "$@"
   '';
 
   # Playwright's browser CLI from the nixpkgs driver, under the command name its skill and help
