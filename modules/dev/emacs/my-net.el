@@ -5,16 +5,15 @@
 
 (require 'cl-lib)
 (require 'my-options)
+(eval-when-compile (require 'gnus)) ; gnus-group-entry and gnus-set-active are macros
 
 (defvar gnus-secondary-select-methods)
 (defvar gnus-topic-alist)
 (defvar gnus-topic-topology)
 
 (declare-function gnus-close-server "gnus-int" (method))
-(declare-function gnus-group-entry "gnus" (group))
 (declare-function gnus-group-prefixed-name "gnus" (group method))
 (declare-function gnus-method-to-server "gnus" (method &optional nocache no-enter-cache))
-(declare-function gnus-set-active "gnus" (group active))
 (declare-function gnus-subscribe-group "gnus-start" (group &optional previous method))
 (declare-function gnus-subscribe-topics "gnus-topic" (newsgroup))
 (declare-function gnus-topic-check-topology "gnus-topic" ())
