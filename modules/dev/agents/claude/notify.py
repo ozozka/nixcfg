@@ -36,9 +36,9 @@ def terminal():
     """Return the terminal of the nearest ancestor that writes to one: hooks run without a controlling terminal."""
     pid = os.getppid()
     while pid > 1:
-        target = os.readlink(f"/proc/{pid}/fd/1")
-        if target.startswith("/dev/pts/"):
-            return Path(target)
+        target = Path(f"/proc/{pid}/fd/1").readlink()
+        if target.is_relative_to("/dev/pts"):
+            return target
         pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
     raise OSError("no terminal")
 
