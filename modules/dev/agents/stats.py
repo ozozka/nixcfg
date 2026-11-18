@@ -39,7 +39,7 @@ from pathlib import Path
 
 from nicegui import app, run, ui
 
-AGENT_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
+PI_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
 # Image blocks carry base64 data; count each as a fixed size instead.
 IMAGE_BYTES = 6000
 CONTEXT_FILE = re.compile(
@@ -101,39 +101,12 @@ STARTUP_GROUPS = {
 }
 
 
-# Session files
-
-
-def read_session(path):
-    entries = []
-    for line in path.read_text().splitlines():
-        # A line cut off by an interrupted write is skipped.
-        try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    header = next((e for e in entries if e["type"] == "session"), {})
-    return header, [e for e in entries if "id" in e]
+# Data
 
 
 def size(text):
     # Sizes are UTF-8 bytes.
     return len(text.encode())
-
-
-def text_size(content):
-    if isinstance(content, str):
-        return size(content)
-    return sum(
-        IMAGE_BYTES if block.get("type") == "image" else size(block.get("text", ""))
-        for block in content
-    )
-
-
-def text_of(content):
-    if isinstance(content, str):
-        return content
-    return "".join(block.get("text", "") for block in content or [])
 
 
 def milliseconds(stamp):
@@ -148,107 +121,6 @@ def section_of(part):
     if group in ("call", "result"):
         return GROUPS[group], None
     return ("conversation" if part in CONVERSATION_PARTS else "other"), None
-
-
-def message_parts(entry, content=None):
-    # (part, bytes) for one context entry; content overrides it after a context edit.
-    if entry["type"] == "compaction":
-        return [("conversation:compaction summary", size(entry["summary"]))]
-    if entry["type"] == "branch_summary":
-        return [("conversation:branch summary", size(entry.get("summary", "")))]
-    if entry["type"] == "custom_message":
-        return [(f"conversation:custom {entry['customType']}", text_size(entry["content"]))]
-    if entry["type"] != "message":
-        return []
-    message = entry["message"]
-    content = message.get("content") if content is None else content
-    role = message["role"]
-    if role == "user":
-        return [("conversation:user", text_size(content))]
-    if role == "toolResult":
-        return [(f"result:{message['toolName']}", text_size(content))]
-    if role != "assistant":
-        return []
-    if isinstance(content, str):
-        return [("conversation:assistant", size(content))]
-    parts = []
-    for block in content:
-        kind = block.get("type")
-        if kind == "text":
-            parts.append(("conversation:assistant", size(block["text"])))
-        elif kind == "thinking":
-            parts.append(("conversation:thinking", size(block.get("thinking", ""))))
-        elif kind == "toolCall":
-            parts.append((f"call:{block['name']}", size(json.dumps(block["arguments"]))))
-    return parts
-
-
-def output_parts(message):
-    # The response's output tokens split over its own blocks; reasoning tokens go to thinking.
-    usage = message["usage"]
-    output = usage.get("output", 0)
-    reasoning = min(usage.get("reasoning", 0) or 0, output)
-    parts = defaultdict(int)
-    for name, length in message_parts({"type": "message", "message": message}):
-        parts[name] += length
-    length = sum(parts.values())
-    if not length:
-        return {"conversation:thinking": output} if output else {}
-    shares = {name: (output - reasoning) * value / length for name, value in parts.items()}
-    if reasoning:
-        shares["conversation:thinking"] = shares.get("conversation:thinking", 0) + reasoning
-    return shares
-
-
-def apply_system(state, message):
-    for name, value in (message.get("sections") or {}).items():
-        if value is None:
-            state["sections"].pop(name, None)
-        else:
-            state["sections"][name] = value
-    for tool in message.get("toolsAdded") or []:
-        state["tools"][tool["name"]] = size(json.dumps(tool))
-    for tool in message.get("toolsRemoved") or []:
-        state["tools"].pop(tool["name"], None)
-
-
-def context_file_name(path, cwd):
-    if cwd and path.startswith(cwd.rstrip("/") + "/"):
-        return path[len(cwd.rstrip("/")) + 1 :]
-    return path.replace(str(Path.home()), "~")
-
-
-@cache
-def context_parts(text, cwd):
-    # The project_context section split into its files and the wrapper text around them.
-    files = CONTEXT_FILE.findall(text)
-    parts = [(f"context:{context_file_name(path, cwd)}", size(body)) for path, body in files]
-    wrapper = size(text) - sum(size(body) for _, body in files)
-    return [*parts, ("system:project_context", wrapper)]
-
-
-def system_parts(state, cwd):
-    parts = []
-    for name, text in state["sections"].items():
-        if name == "project_context":
-            parts += context_parts(text, cwd)
-        else:
-            parts.append((f"system:{name}", size(text)))
-    parts.extend((f"tool:{name}", length) for name, length in state["tools"].items())
-    return parts
-
-
-def subagent_records(entries):
-    # The subagent tool's results and messages in a session, as (entry, details, content).
-    for entry in entries:
-        message = entry.get("message") or {}
-        if message.get("toolName") == "subagent":
-            yield entry, message.get("details") or {}, message.get("content")
-        elif entry.get("customType") == "subagent":
-            yield entry, entry.get("details") or {}, entry.get("content")
-
-
-# Data
 
 
 @dataclass
@@ -350,6 +222,9 @@ class Delegation:
 @dataclass
 class Session:
     id: str
+    # The coding agent that wrote the session: pi or claude.
+    harness: str
+    # The agent type: main for a session you started, or the subagent's type.
     agent: str
     cwd: str
     child: bool
@@ -419,6 +294,134 @@ def session_order(session):
         milliseconds(session.time),
         session.id,
     )
+
+
+# Pi sessions
+
+
+def read_session(path):
+    entries = []
+    for line in path.read_text().splitlines():
+        # A line cut off by an interrupted write is skipped.
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    header = next((e for e in entries if e["type"] == "session"), {})
+    return header, [e for e in entries if "id" in e]
+
+
+def text_size(content):
+    if isinstance(content, str):
+        return size(content)
+    return sum(
+        IMAGE_BYTES if block.get("type") == "image" else size(block.get("text", ""))
+        for block in content
+    )
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    return "".join(block.get("text", "") for block in content or [])
+
+
+def message_parts(entry, content=None):
+    # (part, bytes) for one context entry; content overrides it after a context edit.
+    if entry["type"] == "compaction":
+        return [("conversation:compaction summary", size(entry["summary"]))]
+    if entry["type"] == "branch_summary":
+        return [("conversation:branch summary", size(entry.get("summary", "")))]
+    if entry["type"] == "custom_message":
+        return [(f"conversation:custom {entry['customType']}", text_size(entry["content"]))]
+    if entry["type"] != "message":
+        return []
+    message = entry["message"]
+    content = message.get("content") if content is None else content
+    role = message["role"]
+    if role == "user":
+        return [("conversation:user", text_size(content))]
+    if role == "toolResult":
+        return [(f"result:{message['toolName']}", text_size(content))]
+    if role != "assistant":
+        return []
+    if isinstance(content, str):
+        return [("conversation:assistant", size(content))]
+    parts = []
+    for block in content:
+        kind = block.get("type")
+        if kind == "text":
+            parts.append(("conversation:assistant", size(block["text"])))
+        elif kind == "thinking":
+            parts.append(("conversation:thinking", size(block.get("thinking", ""))))
+        elif kind == "toolCall":
+            parts.append((f"call:{block['name']}", size(json.dumps(block["arguments"]))))
+    return parts
+
+
+def output_parts(message):
+    # The response's output tokens split over its own blocks; reasoning tokens go to thinking.
+    usage = message["usage"]
+    output = usage.get("output", 0)
+    reasoning = min(usage.get("reasoning", 0) or 0, output)
+    parts = defaultdict(int)
+    for name, length in message_parts({"type": "message", "message": message}):
+        parts[name] += length
+    length = sum(parts.values())
+    if not length:
+        return {"conversation:thinking": output} if output else {}
+    shares = {name: (output - reasoning) * value / length for name, value in parts.items()}
+    if reasoning:
+        shares["conversation:thinking"] = shares.get("conversation:thinking", 0) + reasoning
+    return shares
+
+
+def apply_system(state, message):
+    for name, value in (message.get("sections") or {}).items():
+        if value is None:
+            state["sections"].pop(name, None)
+        else:
+            state["sections"][name] = value
+    for tool in message.get("toolsAdded") or []:
+        state["tools"][tool["name"]] = size(json.dumps(tool))
+    for tool in message.get("toolsRemoved") or []:
+        state["tools"].pop(tool["name"], None)
+
+
+def context_file_name(path, cwd):
+    if cwd and path.startswith(cwd.rstrip("/") + "/"):
+        return path[len(cwd.rstrip("/")) + 1 :]
+    return path.replace(str(Path.home()), "~")
+
+
+@cache
+def context_parts(text, cwd):
+    # The project_context section split into its files and the wrapper text around them.
+    files = CONTEXT_FILE.findall(text)
+    parts = [(f"context:{context_file_name(path, cwd)}", size(body)) for path, body in files]
+    wrapper = size(text) - sum(size(body) for _, body in files)
+    return [*parts, ("system:project_context", wrapper)]
+
+
+def system_parts(state, cwd):
+    parts = []
+    for name, text in state["sections"].items():
+        if name == "project_context":
+            parts += context_parts(text, cwd)
+        else:
+            parts.append((f"system:{name}", size(text)))
+    parts.extend((f"tool:{name}", length) for name, length in state["tools"].items())
+    return parts
+
+
+def subagent_records(entries):
+    # The subagent tool's results and messages in a session, as (entry, details, content).
+    for entry in entries:
+        message = entry.get("message") or {}
+        if message.get("toolName") == "subagent":
+            yield entry, message.get("details") or {}, message.get("content")
+        elif entry.get("customType") == "subagent":
+            yield entry, entry.get("details") or {}, entry.get("content")
 
 
 def requests_of(header, entries, uses):
@@ -641,6 +644,7 @@ def session_of(header, entries, requests, uses, links, child):
     spent, waits = timing(entries)
     return Session(
         id=session_id,
+        harness="pi",
         agent=agents.get(session_id, "subagent") if child else "main",
         cwd=header.get("cwd", ""),
         child=child,
@@ -693,32 +697,10 @@ def session_of(header, entries, requests, uses, links, child):
     )
 
 
-def delegations_of(session, children):
-    # One delegation per child session: its runs' reports summed, with the child's totals.
-    rows = {}
-    for report in session.reports:
-        row = rows.setdefault(
-            report.child,
-            Delegation(
-                child=report.child,
-                agent=report.agent,
-                task=report.task,
-                state=report.state,
-                parent=session,
-                session=children.get(report.child),
-            ),
-        )
-        row.runs += 1
-        row.tokens += report.tokens
-        row.resent += report.resent
-        row.state = report.state
-    return list(rows.values())
-
-
-def collect():
-    """Every session with requests, children linked to their parents."""
-    main_files = sorted(AGENT_DIR.glob("sessions/*/*.jsonl"))
-    child_files = sorted(AGENT_DIR.glob("subagent-sessions/*.jsonl"))
+def pi_sessions():
+    """Every Pi session with requests."""
+    main_files = sorted(PI_DIR.glob("sessions/*/*.jsonl"))
+    child_files = sorted(PI_DIR.glob("subagent-sessions/*.jsonl"))
     files = [(*read_session(path), False) for path in main_files]
     # Child session ID -> agent name, parent session ID, task, and run endings, from the
     # parents' subagent results and messages. A run's end is delivered once, in a wait result
@@ -743,6 +725,37 @@ def collect():
         requests = list(requests_of(header, entries, uses))
         if requests:
             sessions.append(session_of(header, entries, requests, uses, links, child))
+    return sessions
+
+
+# Sessions
+
+
+def delegations_of(session, children):
+    # One delegation per child session: its runs' reports summed, with the child's totals.
+    rows = {}
+    for report in session.reports:
+        row = rows.setdefault(
+            report.child,
+            Delegation(
+                child=report.child,
+                agent=report.agent,
+                task=report.task,
+                state=report.state,
+                parent=session,
+                session=children.get(report.child),
+            ),
+        )
+        row.runs += 1
+        row.tokens += report.tokens
+        row.resent += report.resent
+        row.state = report.state
+    return list(rows.values())
+
+
+def collect():
+    """Every session of every agent, children linked to their parents."""
+    sessions = pi_sessions()
     # Each parent's subagent runs, with the child sessions' own totals; each child keeps its
     # delegation, which knows its parent.
     children = {s.id: s for s in sessions if s.child}
