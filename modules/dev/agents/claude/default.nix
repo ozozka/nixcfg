@@ -30,6 +30,8 @@ let
     theme = if config.ozozka.col.isDark then "dark-ansi" else "light-ansi";
     tui = "default";
     disableAgentView = true;
+    # Keep transcripts for two years (default 30 days); agent-stats reads them.
+    cleanupPeriodDays = 730;
     # Commands of the shared browser skill.
     permissions.allow = [ "Bash(playwright-cli:*)" ];
     attribution = {

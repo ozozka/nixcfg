@@ -43,3 +43,5 @@ transcripts lack detail:
 - Compaction runs' tokens, subagent notes and corrections, and permission prompt waits are not
   recorded; the latter count as tool time.
 - `claude -p` (SDK) runs are left out.
+- Claude Code deletes transcripts after `cleanupPeriodDays`;
+  [claude/default.nix](claude/default.nix) keeps them for two years.
