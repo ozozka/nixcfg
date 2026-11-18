@@ -11,8 +11,8 @@ Claude Code (`~/.claude/projects`), then serves a NiceGUI app on `127.0.0.1` and
 Zen; Ctrl+C stops it. It is styled with the system theme, and the reload button reads the
 session files again. A tree on the left opens each page, with its own URL:
 
-- The overview: totals of your usage, tokens per calendar day with moving averages (weight 1/12)
-  of tokens, active hours, and your wait per turn, then totals per agent and per model.
+- The overview: totals of your usage, size per calendar day with moving averages (weight 1/12)
+  of size, active hours, and your wait per turn, then totals per agent and per model.
 - An average per agent type of each agent (`Pi · main`, `Claude Code · web-fetch`), then each
   agent's sessions ordered by their latest user prompt, newest first, with the subagent runs
   they started nested in start-time order (oldest first), then subagent runs whose parent is
@@ -23,25 +23,32 @@ prompts fall back to their first counted model request. Displayed dates and dail
 keep using the first counted model request, independently of ordering; assistant responses, tool
 results, and metadata do not move a session.
 
-Each session page shows figures (including the startup's tokens, KiB, tools, context files, and
-skills), the context per request stacked by section, the startup's parts as one bar, and a parts
-table nested by section (startup, conversation, tool calls, tool results, other) that opens on
-click, with context and consumed tokens, their shares and ratio, KiB, how many times each part
-occurred, and, for averages, how many sessions it appeared in. Then where time goes, and
-compaction summaries. A parent shows its subagent runs (cost, report, compression, kept out,
-parent re-send, ending, parallelism), a run shows its delegation, and an agent's average shows
-its efficiency (median compression, startup overhead, budget stops).
+A session's size is the tokens that entered it, each counted once: its first prompt, each later
+prompt's growth beyond the previous prompt and output, and all output, from the recorded token
+counts. Cache misses and compactions do not change it, and a subagent run's size is its own;
+compaction runs count in cost, where recorded, but not in size. Peak context and requests are
+details of a session page.
+
+Each session page shows figures (size, size with subagents, cost, and the startup's tokens, KiB,
+tools, context files, and skills), the context per request stacked by section, the startup's
+parts as one bar, and a parts table nested by section (startup, conversation, tool calls, tool
+results, other) that opens on click, with context and size tokens, their shares, KiB, how many
+times each part occurred, and, for averages, how many sessions it appeared in. Then where time
+goes, and compaction summaries. A parent shows its subagent runs (cost, report, compression,
+kept out, parent re-send, ending, parallelism), a run shows its delegation, and an agent's
+average shows its efficiency (median compression, startup overhead, budget stops).
 
 Figures an agent does not record show `-`. Claude Code's figures are approximate where its
 transcripts lack detail:
 
 - The context is the transcript path plus the recorded system prompt and tools; the server's
   context edits are not recorded.
-- Thinking text is not kept; its context size is estimated from its tokens.
+- Thinking text is not kept; its context size is estimated from its tokens. Sizes are exact;
+  their split into parts uses these measured bytes.
 - Cost is the API-equivalent price: each request's tokens at per-model rates derived from the
   session cost totals Claude Code records.
-- Compaction runs' tokens, subagent notes and corrections, and permission prompt waits are not
-  recorded; the latter count as tool time.
+- Compaction requests (their tokens and cost), subagent notes and corrections, and permission
+  prompt waits are not recorded; the latter count as tool time.
 - `claude -p` (SDK) runs are left out.
 - Claude Code deletes transcripts after `cleanupPeriodDays`;
   [claude/default.nix](claude/default.nix) keeps them for two years.

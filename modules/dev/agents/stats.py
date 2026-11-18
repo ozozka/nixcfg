@@ -6,8 +6,9 @@ Usage: stats.py THEME BROWSER
 Parts are measured in UTF-8 bytes; their tokens are the part's share of the request's real
 prompt tokens (input + cache read + cache write) from the response usage. Output tokens are
 split over the response's own text, thinking, and tool calls the same way; reported reasoning
-tokens go to thinking. A session's consumption is the sum of its requests' prompt and output
-parts, so a part sent with every request weighs more than its context share.
+tokens go to thinking. A session's size is the tokens that entered it, each counted once,
+from the recorded prompt and output tokens (size_parts); caching and compactions do not
+change it.
 
 Pi: each assistant message is one model request. Its context is the path from the session root
 to that message: system messages patch the prompt sections and tool declarations, the latest
@@ -123,6 +124,13 @@ SECTIONS = ["other", "tool results", "tool calls", "conversation", "startup"]
 STARTUP_SECTIONS = ["tool definitions", "context files", "system prompt"]
 # The conversation's own parts, in table order; its other parts are listed under other.
 CONVERSATION_PARTS = ["conversation:thinking", "conversation:assistant", "conversation:user"]
+# Context parts that never enter a session between requests: the previous response's own
+# parts (with every call: part), and summaries that restate counted content.
+NOT_INCOMING = {
+    "conversation:thinking",
+    "conversation:assistant",
+    "conversation:compaction summary",
+}
 # The parts table SECTIONS as the chart stacks them, bottom to top, with their theme colors.
 CHART_GROUPS = {
     "startup": "o",
@@ -178,7 +186,45 @@ def split_output(parts, output, reasoning):
     return shares
 
 
-def occurrences(entry_parts, consumed, compactions, bytes_per_token):
+def size_parts(requests):
+    """The session's size by part: the tokens that entered it, each counted once.
+
+    The size is the first request's prompt, then each later request's incoming tokens, its
+    prompt's growth beyond the previous prompt and output (none after a compaction shrinks
+    it), then every response's output parts. Incoming tokens are split over the parts that
+    grew, by their bytes, leaving out output parts and compaction summaries, which restate
+    what was counted; tokens without grown parts are unmeasured. Each request's share is set
+    as its added tokens. Compaction runs are not part of the size.
+    """
+    size = defaultdict(float)
+    previous = None
+    for request in requests:
+        if previous is None:
+            incoming = dict(request.parts)
+        else:
+            tokens = max(0, request.prompt - previous.prompt - previous.output)
+            grown = {
+                name: length - previous.sizes.get(name, 0)
+                for name, length in request.sizes.items()
+                if length > previous.sizes.get(name, 0)
+                and name not in NOT_INCOMING
+                and not name.startswith("call:")
+            }
+            length = sum(grown.values())
+            incoming = (
+                {name: tokens * value / length for name, value in grown.items()}
+                if length
+                else {"conversation:unmeasured": tokens}
+            )
+        for parts in (incoming, request.out):
+            for name, tokens in parts.items():
+                size[name] += tokens
+        request.added = sum(incoming.values()) + sum(request.out.values())
+        previous = request
+    return dict(size)
+
+
+def occurrences(entry_parts, size, compactions, bytes_per_token):
     """How many times each part occurred, and its tokens with each occurrence counted once.
 
     entry_parts holds each entry's (part, bytes): every message block, custom message, and
@@ -191,7 +237,7 @@ def occurrences(entry_parts, consumed, compactions, bytes_per_token):
             counts[name] += 1
             once[name] += length / bytes_per_token
     counts["conversation:compaction runs"] = compactions
-    for name in consumed:
+    for name in size:
         if section_of(name)[0] == "startup":
             counts[name] = 1
     return +counts, once
@@ -218,13 +264,16 @@ class Request:
     sizes: dict[str, int]
     parts: dict[str, float]
     out: dict[str, float]
+    # The request's share of its session's size, set by size_parts.
+    added: float = 0.0
 
 
 @dataclass
 class Compaction:
     """One compaction: the context before it (the agent's count), the context of the first
     request after it and the summary's tokens in that request (None when none followed), the
-    tokens of its own run (None when not recorded), and its time (None when unknown).
+    tokens of its own run (None when not recorded), its time (None when unknown), and its
+    run's cost (0 when not recorded).
     """
 
     before: int
@@ -232,6 +281,7 @@ class Compaction:
     summary: float | None
     run: int | None
     time: float | None
+    cost: float = 0.0
 
 
 @dataclass
@@ -265,8 +315,8 @@ class Delegation:
         return len(self.session.requests) if self.session else None
 
     @property
-    def consumed(self):
-        return self.session.total if self.session else None
+    def size(self):
+        return self.session.total_size if self.session else None
 
     @property
     def active(self):
@@ -274,10 +324,10 @@ class Delegation:
 
     @property
     def overhead(self):
-        # The fixed price of an agent: its startup tokens, sent with every request.
-        if not (self.session and self.consumed):
+        # The fixed price of an agent: its startup's share of its size.
+        if not (self.session and self.size):
             return None
-        return sum(self.session.startup.values()) * len(self.session.requests) / self.consumed
+        return sum(self.session.startup.values()) / self.size
 
     @property
     def kept(self):
@@ -305,8 +355,8 @@ class Session:
     requests: list[Request]
     # Navigation and average-chart ordering only; time remains the first request.
     last_prompt_time: str
-    # Part -> tokens over the session, prompt and output parts of every request.
-    consumed: dict[str, float]
+    # Part -> tokens that entered the session, each counted once (size_parts).
+    size: dict[str, float]
     compactions: list[Compaction]
     # The index of the first request after each compaction.
     marks: list[int]
@@ -345,11 +395,16 @@ class Session:
 
     @property
     def cost(self):
-        return sum(r.cost for r in self.requests)
+        return sum(r.cost for r in self.requests) + sum(c.cost for c in self.compactions)
 
     @property
-    def total(self):
-        return sum(self.consumed.values())
+    def total_size(self):
+        return sum(self.size.values())
+
+    @property
+    def family_size(self):
+        # The session's size with its subagent runs' sizes.
+        return self.total_size + sum(d.size or 0 for d in self.delegations)
 
     @property
     def active(self):
@@ -639,6 +694,7 @@ def compaction_of(entry, requests, previous):
         summary=after.parts.get("conversation:compaction summary") if after else None,
         run=run_tokens(entry),
         time=gap if gap <= COMPACTION_MAX_MS else None,
+        cost=((entry.get("usage") or {}).get("cost") or {}).get("total", 0),
     )
 
 
@@ -675,21 +731,13 @@ def reports_of(entries, bytes_per_token, uses):
 
 
 def session_of(header, entries, requests, uses, links, child):
-    # Session totals; consumption sums every request's prompt parts and output parts.
     agents, parents, tasks, outcomes = links
     session_id = header.get("id")
-    consumed = defaultdict(float)
-    for request in requests:
-        for parts in (request.parts, request.out):
-            for name, tokens in parts.items():
-                consumed[name] += tokens
+    size = size_parts(requests)
     compactions = [e for e in entries if e["type"] == "compaction"]
-    for compaction in compactions:
-        consumed["conversation:compaction runs"] += run_tokens(compaction)
-    consumed = dict(consumed)
     bytes_per_token = statistics.median(r.bytes / r.prompt for r in requests)
     counts, once = occurrences(
-        map(message_parts, entries), consumed, len(compactions), bytes_per_token
+        map(message_parts, entries), size, len(compactions), bytes_per_token
     )
     messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
     spent, waits = timing(entries)
@@ -709,7 +757,7 @@ def session_of(header, entries, requests, uses, links, child):
             key=milliseconds,
             default=requests[0].time,
         ),
-        consumed=consumed,
+        size=size,
         compactions=[
             compaction_of(e, requests, previous)
             for previous, e in pairwise(entries)
@@ -1162,12 +1210,7 @@ def claude_session(path, entries, requests, uses, run, runs):
     """A session; run, for a subagent, is its (parent session ID, meta), and runs are the
     subagents the session started, for claude_reports.
     """
-    consumed = defaultdict(float)
-    for request in requests:
-        for parts in (request.parts, request.out):
-            for name, tokens in parts.items():
-                consumed[name] += tokens
-    consumed = dict(consumed)
+    size = size_parts(requests)
     boundaries = [
         e
         for e in entries
@@ -1189,7 +1232,7 @@ def claude_session(path, entries, requests, uses, run, runs):
     bytes_per_token = statistics.median(r.bytes / r.prompt for r in requests)
     lookups = claude_lookups(entries)
     counts, once = occurrences(
-        (claude_parts(e, lookups) for e in entries), consumed, 0, bytes_per_token
+        (claude_parts(e, lookups) for e in entries), size, 0, bytes_per_token
     )
     parent, meta = run or (None, {})
     stamps = [milliseconds(e["timestamp"]) for e in entries if "timestamp" in e]
@@ -1209,7 +1252,7 @@ def claude_session(path, entries, requests, uses, run, runs):
             key=milliseconds,
             default=requests[0].time,
         ),
-        consumed=consumed,
+        size=size,
         compactions=compactions,
         marks=[
             next((r.index for r in requests if r.time > b["timestamp"]), len(requests) - 1)
@@ -1371,10 +1414,6 @@ def pct(value):
     return f"%{numstr(float(100 * value), 1)}"
 
 
-def ratio(consumption, context):
-    return f"{numstr(consumption / context, 1)}x" if context else "-"
-
-
 def maybe(value, show):
     return show(value) if value is not None else "-"
 
@@ -1423,9 +1462,9 @@ def overview_figures(sessions):
     requests = [r for s in sessions for r in s.requests]
     return [
         ("sessions", numstr(sum(1 for s in sessions if s.agent == "main"))),
-        ("input", num(sum(r.prompt for r in requests))),
+        ("size", num(sum(s.total_size for s in sessions))),
         ("output", num(sum(r.output for r in requests))),
-        ("cost", money(sum(r.cost for r in requests))),
+        ("cost", money(sum(s.cost for s in sessions))),
         ("active time", duration(sum(s.active for s in sessions))),
         ("wait/turn", wait_per_turn(sessions)),
     ]
@@ -1444,9 +1483,9 @@ def harness_rows(sessions):
                 label,
                 numstr(sum(1 for s in items if not s.child)),
                 numstr(len(requests)),
-                num(sum(r.prompt for r in requests)),
+                num(sum(s.total_size for s in items)),
                 num(sum(r.output for r in requests)),
-                money(sum(r.cost for r in requests)),
+                money(sum(s.cost for s in items)),
                 duration(sum(s.active for s in items)),
                 wait_per_turn(items),
             ]
@@ -1455,7 +1494,7 @@ def harness_rows(sessions):
         "Agent",
         "Sessions",
         "Requests",
-        "Input",
+        "Size",
         "Output",
         "Cost",
         "Active",
@@ -1482,14 +1521,14 @@ def model_rows(sessions):
             [
                 model,
                 numstr(len(items)),
-                num(tokens),
+                num(sum(r.added for r in items)),
                 num(sum(r.output for r in items)),
                 money(sum(r.cost for r in items)),
                 f"%{numstr(100 * sum(r.cache for r in items) / tokens, 0)}",
                 numstr(sum(r.output for r in timed) / seconds, 1) if seconds else "-",
             ]
         )
-    return ["Model", "Requests", "Input", "Output", "Cost", "Cache", "Tok/s"], rows
+    return ["Model", "Requests", "Size", "Output", "Cost", "Cache", "Tok/s"], rows
 
 
 def ema(values):
@@ -1509,16 +1548,17 @@ def ema(values):
 
 
 def daily_series(sessions):
-    """Calendar days with tokens per day and moving averages of tokens, active hours, and
-    your wait per turn in minutes.
+    """Calendar days with size per day and moving averages of size, active hours, and your
+    wait per turn in minutes.
 
-    Days without sessions count as zero tokens and hours; waits carry over them. A session's
-    active time counts on the day it started; a wait on the day of its prompt.
+    Each request's share of its session's size counts on its day. Days without sessions count
+    as zero tokens and hours; waits carry over them. A session's active time counts on the
+    day it started; a wait on the day of its prompt.
     """
-    tokens, active, waits = defaultdict(int), defaultdict(float), defaultdict(list)
+    tokens, active, waits = defaultdict(float), defaultdict(float), defaultdict(list)
     for session in sessions:
         for request in session.requests:
-            tokens[request.time[:10]] += request.prompt + request.output
+            tokens[request.time[:10]] += request.added
         active[session.time[:10]] += session.active / 3_600_000
         for stamp, wait in session.waits:
             day = datetime.fromtimestamp(stamp / 1000).date().isoformat()
@@ -1580,9 +1620,9 @@ def cache_hit(items):
 
 
 def subagent_share(items):
-    # The subagent runs' share of the tokens of the sessions and their runs together.
-    children = sum(d.consumed or 0 for s in items for d in s.delegations)
-    own = sum(s.total for s in items)
+    # The subagent runs' share of the size of the sessions and their runs together.
+    children = sum(d.size or 0 for s in items for d in s.delegations)
+    own = sum(s.total_size for s in items)
     return pct(children / (own + children)) if children else "-"
 
 
@@ -1592,14 +1632,15 @@ def session_figures(items, average):
         return statistics.mean(values) if average else values[0]
 
     return [
-        ("requests", numstr(mean([len(s.requests) for s in items]), 0)),
-        ("peak context", num(mean([s.peak.prompt for s in items]))),
-        ("consumed", num(mean([s.total for s in items]))),
-        ("cache hit", cache_hit(items)),
+        ("size", num(mean([s.total_size for s in items]))),
+        ("with subagents", num(mean([s.family_size for s in items]))),
         ("output", num(mean([sum(r.output for r in s.requests) for s in items]))),
         ("cost", money(mean([s.cost for s in items]))),
         ("active time", duration(mean([s.active for s in items]))),
         ("wait/turn", wait_per_turn(items)),
+        ("peak context", num(mean([s.peak.prompt for s in items]))),
+        ("requests", numstr(mean([len(s.requests) for s in items]), 0)),
+        ("cache hit", cache_hit(items)),
         *startup_figures(items),
         ("subagents", trimmed(mean([len(s.delegations) for s in items]))),
         ("subagent share", subagent_share(items)),
@@ -1614,7 +1655,7 @@ def context_columns(session):
 
 def history_columns(items):
     # Columns follow the supplied session order; day labels remain the stable start day.
-    return [s.time[:10] for s in items], [grouped(s.consumed) for s in items]
+    return [s.time[:10] for s in items], [grouped(s.size) for s in items]
 
 
 def startup_segments(items):
@@ -1631,11 +1672,11 @@ def startup_segments(items):
     ]
 
 
-def parts_rows(context, consumed, sizes, counts, sessions=None, context_shares=None):
+def parts_rows(context, size, sizes, counts, sessions=None, context_shares=None):
     """Every part, nested in SECTIONS (startup in STARTUP_SECTIONS), as table rows.
 
-    context: part -> tokens in the context; consumed: part -> tokens over the session;
-    sizes: part -> bytes; counts: part -> how many times it occurred (per session in
+    context: part -> tokens in the context; size: part -> tokens in the session's size;
+    sizes: part -> bytes in the context; counts: part -> how many times it occurred (per session in
     averages); sessions, for averages: each session's set of parts, counted for every row;
     context_shares, for averages: part -> its context share averaged over the requests, so
     each request weighs the same, instead of its share of the mean tokens.
@@ -1646,20 +1687,19 @@ def parts_rows(context, consumed, sizes, counts, sessions=None, context_shares=N
     ctx_total = sum(context.values()) or 1
     if context_shares is None:
         context_shares = {name: tokens / ctx_total for name, tokens in context.items()}
-    cons_total = sum(consumed.values()) or 1
+    size_total = sum(size.values()) or 1
     ids = count()
 
     def cells(label, members):
         ctx = sum(context.get(n, 0) for n in members)
         share = sum(context_shares.get(n, 0) for n in members)
-        cons = sum(consumed.get(n, 0) for n in members)
+        tokens = sum(size.get(n, 0) for n in members)
         row = [
             label,
             num(ctx),
             pct(share),
-            num(cons),
-            pct(cons / cons_total),
-            ratio(cons / cons_total, share),
+            num(tokens),
+            pct(tokens / size_total),
             kib(sum(sizes.get(n, 0) for n in members)),
             numstr(
                 float(sum(counts.get(n, 0) for n in members)), 1 if sessions is not None else 0
@@ -1694,13 +1734,13 @@ def parts_rows(context, consumed, sizes, counts, sessions=None, context_shares=N
         names = (
             [n for n in fixed if n in members]
             if fixed
-            else sorted(members, key=lambda n: -consumed.get(n, 0))
+            else sorted(members, key=lambda n: -size.get(n, 0))
         )
         for name in names:
             add(node, depth + 1, False, None, cells(name.split(":", 1)[1], [name]))
 
     by_section = defaultdict(list)
-    for name in set(context) | set(consumed):
+    for name in set(context) | set(size):
         by_section[section_of(name)].append(name)
     for section in SECTIONS:
         if section == "startup":
@@ -1710,7 +1750,7 @@ def parts_rows(context, consumed, sizes, counts, sessions=None, context_shares=N
         else:
             fixed = CONVERSATION_PARTS if section == "conversation" else None
             nest(section, by_section[(section, None)], None, 0, fixed)
-    headers = ["Part", "Context", "Context %", "Consumed", "Consumed %", "Ratio", "KiB"]
+    headers = ["Part", "Context", "Context %", "Size", "Size %", "KiB"]
     headers.append("Count/session" if sessions is not None else "Count")
     if sessions is not None:
         headers.append(f"Sessions/{numstr(len(sessions))}")
@@ -1718,24 +1758,20 @@ def parts_rows(context, consumed, sizes, counts, sessions=None, context_shares=N
 
 
 def session_parts(session):
-    # The parts at the session's peak context, with its consumption and counts.
+    # The parts at the session's peak context, with its size and counts.
     peak = session.peak
-    return parts_rows(peak.parts, session.consumed, peak.sizes, session.counts)
+    return parts_rows(peak.parts, session.size, peak.sizes, session.counts)
 
 
 def average_parts(items):
-    # Each part's mean context, size, consumption, and count over the sessions.
+    # Each part's mean context, bytes, size, and count over the sessions.
     requests = [r for s in items for r in s.requests]
-    consumed = defaultdict(float)
-    for session in items:
-        for name, tokens in session.consumed.items():
-            consumed[name] += tokens
     return parts_rows(
         mean_dict([r.parts for r in requests]),
-        {name: tokens / len(items) for name, tokens in consumed.items()},
+        mean_dict([s.size for s in items]),
         mean_dict([r.sizes for r in requests]),
         {n: c / len(items) for n, c in sum((s.counts for s in items), Counter()).items()},
-        [set(s.consumed) for s in items],
+        [set(s.size) for s in items],
         mean_shares(requests),
     )
 
@@ -1773,10 +1809,10 @@ def compaction_figures(items):
 
 
 def compression(row):
-    # Tokens of the child's work per token of report, when both are known.
-    if not (row.consumed and row.tokens):
+    # Tokens of the child's size per token of report, when both are known.
+    if not (row.size and row.tokens):
         return "-"
-    return f"{numstr(row.consumed / row.tokens, 0)}x"
+    return f"{numstr(row.size / row.tokens, 0)}x"
 
 
 def parallelism(rows):
@@ -1800,8 +1836,8 @@ def delegations_figures(session):
 
 
 def delegation_rows(session):
-    # One row per subagent run of a parent, most tokens first.
-    headers = ["Agent", "Task", "Runs", "Requests", "Consumed", "Active", "Overhead"]
+    # One row per subagent run of a parent, largest first.
+    headers = ["Agent", "Task", "Runs", "Requests", "Size", "Active", "Overhead"]
     headers += [
         "Report",
         "Compression",
@@ -1817,7 +1853,7 @@ def delegation_rows(session):
             preview(row.task),
             numstr(row.runs),
             maybe(row.requests, numstr),
-            maybe(row.consumed, num),
+            maybe(row.size, num),
             maybe(row.active, duration),
             maybe(row.overhead, pct),
             num(row.tokens),
@@ -1828,7 +1864,7 @@ def delegation_rows(session):
             maybe(row.notes, numstr),
             OUTCOMES.get(row.state, "-"),
         ]
-        for row in sorted(session.delegations, key=lambda r: -(r.consumed or 0))
+        for row in sorted(session.delegations, key=lambda r: -(r.size or 0))
     ]
     return headers, rows
 
@@ -1859,7 +1895,7 @@ def efficiency_figures(items):
     rows = [s.delegation for s in items if s.delegation]
     if not rows:
         return None
-    ratios = [r.consumed / r.tokens for r in rows if r.consumed and r.tokens]
+    ratios = [r.size / r.tokens for r in rows if r.size and r.tokens]
     overheads = [r.overhead for r in rows if r.overhead is not None]
     kept = [r.kept for r in rows if r.kept is not None]
     ends = sum((s.outcomes for s in items), Counter())
@@ -2015,15 +2051,15 @@ def line(name, values, key, axis, formatter=None):
 
 
 def daily_options(series):
-    # Tokens per day as columns with their average on the same axis, and the averages of
+    # Size per day as columns with its average on the same axis, and the averages of
     # active hours and your wait per turn on their own axes, the wait's hidden.
     return column_options(
         series["days"],
         "Day",
-        [value_axis("Tokens"), value_axis("Hours", tokens=False), value_axis(show=False)],
+        [value_axis("Size tokens"), value_axis("Hours", tokens=False), value_axis(show=False)],
         [
-            {"type": "bar", "name": "Tokens", "data": series["tokens"], "color": color("o")},
-            line("Tokens EMA", series["tokens_ema"], "m", 0),
+            {"type": "bar", "name": "Size", "data": series["tokens"], "color": color("o")},
+            line("Size EMA", series["tokens_ema"], "m", 0),
             line("Active hours EMA", series["hours_ema"], "p", 1, DECIMAL),
             line("Wait/turn minutes EMA", series["wait_ema"], "s", 2, DECIMAL),
         ],
@@ -2260,7 +2296,7 @@ def average_page(agent: str):
         days, columns = history_columns(items)
         titles = [session_title(s) for s in items]
         chart(
-            stacked_options(titles, columns, "Consumed tokens", "Session", ticks=days),
+            stacked_options(titles, columns, "Size tokens", "Session", ticks=days),
             420,
             on_click=lambda e: ui.navigate.to(f"/session/{items[e.data_index].id}"),
         )
