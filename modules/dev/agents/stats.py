@@ -1530,8 +1530,6 @@ def usage_rows(sessions):
                 cache_hit(items),
                 num(sum(r.output for r in requests)),
                 money(sum(s.cost for s in items)),
-                duration(sum(s.active for s in items)),
-                wait_per_turn(items),
                 speed(requests),
             ],
         )
@@ -1557,17 +1555,14 @@ def usage_rows(sessions):
                     cache_share(group),
                     num(sum(r.output for r in group)),
                     money(sum(r.cost for r in group)),
-                    "-",
-                    "-",
                     speed(group),
                 ],
             )
         if compacted := sum(c.cost for s in items for c in s.compactions):
-            cells = ["compaction runs", *["-"] * 7, money(compacted), "-", "-", "-"]
+            cells = ["compaction runs", *["-"] * 7, money(compacted), "-"]
             add(agent, 1, False, None, cells)
-    headers = ["Agent"]
-    headers += ["Sessions", "Requests", "Size", "Size %", "Input", "Cache", "Output", "Cost"]
-    headers += ["Active", "Wait/turn", "Tok/s"]
+    headers = ["Agent", "Sessions", "Requests", "Size", "Size %", "Input", "Cache", "Output"]
+    headers += ["Cost", "Tok/s"]
     return headers, rows
 
 
@@ -2009,11 +2004,6 @@ def color(key):
     return f"#{store.theme['colors'][key]}"
 
 
-def paint(value):
-    # A theme color key, or a color already in hex.
-    return value if value.startswith("#") else color(value)
-
-
 def px(points):
     return points * 96 / 72
 
@@ -2036,9 +2026,9 @@ PLAIN_NUMBER = (
 DENSE_COLUMNS = 60
 # The usage donut's width and height, in pixels.
 DONUT = 300
-# Shades of an agent's color for its models in order: the share toward the foreground
-# (positive) or the background (negative).
-MODEL_SHADES = [0, 0.45, -0.45, 0.7, -0.7]
+# Theme colors of an agent's models in order, as the context chart stacks its groups from the
+# top; overlay is left out, as it is nearly the background.
+MODEL_COLORS = ["f", "s", "p", "m"]
 BAR_GAP = "28%"
 
 
@@ -2219,27 +2209,14 @@ def usage_sizes(sessions):
     return sizes
 
 
-def mix(key, toward, share):
-    # A theme color moved share of the way to another theme color, as hex.
-    start, end = (store.theme["colors"][k] for k in (key, toward))
-    channels = (
-        round(int(start[i : i + 2], 16) * (1 - share) + int(end[i : i + 2], 16) * share)
-        for i in (0, 2, 4)
-    )
-    return "#" + "".join(f"{c:02x}" for c in channels)
-
-
 def model_colors(sizes):
-    """(agent, model) -> color: each model in its agent's color, the models after the first
-    in MODEL_SHADES, alternately lighter and darker so neighbors stand apart.
-    """
-    colors = {}
-    for harness, models in sizes.items():
-        key = HARNESS_COLORS[harness]
-        for i, model in enumerate(models):
-            share = MODEL_SHADES[i % len(MODEL_SHADES)]
-            colors[harness, model] = mix(key, "f" if share > 0 else "b", abs(share))
-    return colors
+    # (agent, model) -> theme color: each agent's models take MODEL_COLORS in order, most
+    # requests first, cycling after the last.
+    return {
+        (harness, model): MODEL_COLORS[i % len(MODEL_COLORS)]
+        for harness, models in sizes.items()
+        for i, model in enumerate(models)
+    }
 
 
 def donut_options(sessions):
@@ -2256,7 +2233,7 @@ def donut_options(sessions):
     ]
     outer = [
         {"name": f"{HARNESSES[h]} · {model}", "value": size}
-        | {"itemStyle": {"color": colors[h, model]} | edge}
+        | {"itemStyle": {"color": color(colors[h, model])} | edge}
         for h, models in sizes.items()
         for model, size in models.items()
     ]
@@ -2365,7 +2342,7 @@ def nested_table(headers, rows, opened=False):
                         "depth": row["depth"],
                         "branch": row["branch"],
                         "open": row["id"] in opened,
-                        "color": row["color"] and paint(row["color"]),
+                        "color": row["color"] and color(row["color"]),
                     }
                     | {f"c{i}": cell for i, cell in enumerate(row["cells"])}
                 )
