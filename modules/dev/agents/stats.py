@@ -72,6 +72,9 @@ CLAUDE_SKILL_LINE = "\n- "
 # Bytes per token assumed for thinking, whose text Claude Code does not keep: about Pi's
 # median over its sessions.
 CLAUDE_THINKING_BYTES = 4
+# Claude Code's tools that ask you a question and that start a subagent.
+CLAUDE_QUESTION_TOOL = "AskUserQuestion"
+CLAUDE_AGENT_TOOL = "Agent"
 # Image blocks carry base64 data; count each as a fixed size instead.
 IMAGE_BYTES = 6000
 CONTEXT_FILE = re.compile(
@@ -1033,6 +1036,69 @@ def claude_requests(entries, rates):
         )
 
 
+def claude_prompt(entry):
+    # A prompt you sent, rather than a tool result, reminder, or system message.
+    return entry.get("type") == "user" and (entry.get("origin") or {}).get("kind") == "human"
+
+
+def claude_timing(entries, requests):
+    """Milliseconds per TIME_PARTS category, and each counted wait as (prompt time, wait).
+
+    Model time is each request's duration. A response's tool time is its longest tool call,
+    from the call to its result, since the calls of one response run in parallel; it counts as
+    subagent waits when one of them starts a subagent, and the question tool's time is yours.
+    Permission prompts are not recorded, so their time counts as tool time. Compaction time is
+    recorded with each compaction. Your time is the wait from the end of a finished run to your
+    next prompt; gaps longer than BREAK_MS are breaks.
+    """
+    spent, waits = defaultdict(float), []
+    spent["model"] = sum(r.duration or 0 for r in requests)
+    # Tool use ID -> (tool name, call time, response ID); response ID -> its longest call,
+    # and whether it waited for a subagent.
+    calls, turns = {}, defaultdict(lambda: [0.0, False])
+    ended = None
+    for entry in entries:
+        kind = entry.get("type")
+        if kind == "system" and entry.get("subtype") == "compact_boundary":
+            spent["compaction"] += (entry.get("compactMetadata") or {}).get("durationMs") or 0
+        if kind not in ("user", "assistant"):
+            continue
+        stamp = milliseconds(entry["timestamp"])
+        message = entry["message"]
+        if kind == "assistant":
+            for block in message.get("content") or []:
+                if block.get("type") == "tool_use":
+                    calls[block["id"]] = (block["name"], stamp, message["id"])
+            reason = message.get("stop_reason")
+            if reason:
+                ended = stamp if reason != "tool_use" else None
+            continue
+        if claude_prompt(entry):
+            if ended is not None and stamp - ended <= BREAK_MS:
+                spent["you"] += stamp - ended
+                waits.append((stamp, stamp - ended))
+            ended = None
+        content = message.get("content")
+        for block in content if isinstance(content, list) else []:
+            call = (
+                calls.get(block.get("tool_use_id"))
+                if block.get("type") == "tool_result"
+                else None
+            )
+            if not call:
+                continue
+            name, start, response = call
+            if name == CLAUDE_QUESTION_TOOL:
+                spent["you"] += stamp - start
+            else:
+                turn = turns[response]
+                turn[0] = max(turn[0], stamp - start)
+                turn[1] |= name == CLAUDE_AGENT_TOOL
+    for longest, waited in turns.values():
+        spent["subagent waits" if waited else "tools"] += longest
+    return dict(spent), waits
+
+
 def claude_session(path, entries, requests, child):
     consumed = defaultdict(float)
     for request in requests:
@@ -1067,6 +1133,7 @@ def claude_session(path, entries, requests, child):
     # A name you gave wins over Claude Code's generated title.
     given = [e["agentName"] for e in entries if e.get("type") == "agent-name"]
     titles = [e["aiTitle"] for e in entries if e.get("type") == "ai-title"]
+    spent, waits = claude_timing(entries, requests)
     return Session(
         id=path.stem,
         harness="claude",
@@ -1075,11 +1142,7 @@ def claude_session(path, entries, requests, child):
         child=child,
         requests=requests,
         last_prompt_time=max(
-            (
-                e["timestamp"]
-                for e in entries
-                if e.get("type") == "user" and (e.get("origin") or {}).get("kind") == "human"
-            ),
+            (e["timestamp"] for e in entries if claude_prompt(e)),
             key=milliseconds,
             default=requests[0].time,
         ),
@@ -1089,8 +1152,8 @@ def claude_session(path, entries, requests, child):
             next((r.index for r in requests if r.time > b["timestamp"]), len(requests) - 1)
             for b in boundaries
         ],
-        spent={},
-        waits=[],
+        spent=spent,
+        waits=waits,
         start=min(stamps),
         end=max(stamps),
         notes=0,
