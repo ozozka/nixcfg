@@ -2024,6 +2024,8 @@ PLAIN_NUMBER = (
     "v => v.toLocaleString('tr-TR', {useGrouping: 'always', maximumFractionDigits: 3})"
 )
 DENSE_COLUMNS = 60
+# The usage donut's width and height, in pixels.
+DONUT = 300
 BAR_GAP = "28%"
 
 
@@ -2190,6 +2192,58 @@ def bar_options(segments, xlabel, tokens=True, legend=False):
     }
 
 
+def usage_costs(sessions):
+    # Agent -> model -> cost, models by most requests, with compaction runs as their own
+    # entry; the entries of an agent add up to its cost.
+    costs = {}
+    for harness in HARNESSES:
+        items = [s for s in sessions if s.harness == harness]
+        models, counts = defaultdict(float), Counter()
+        for request in (r for s in items for r in s.requests):
+            models[request.model or "unknown"] += request.cost
+            counts[request.model or "unknown"] += 1
+        ordered = {m: models[m] for m, _ in counts.most_common()}
+        if compacted := sum(c.cost for s in items for c in s.compactions):
+            ordered["compaction runs"] = compacted
+        if ordered:
+            costs[harness] = ordered
+    return costs
+
+
+def donut_options(sessions):
+    """Cost as two rings: agents inside, their models outside in the agent's color, each
+    lighter than the one before, separated by thin lines in the background color.
+    """
+    costs = usage_costs(sessions)
+    edge = {"borderColor": color("b"), "borderWidth": 1}
+    inner = [
+        {"name": HARNESSES[h], "value": sum(m.values())}
+        | {"itemStyle": {"color": color(HARNESS_COLORS[h])} | edge}
+        for h, m in costs.items()
+    ]
+    outer = [
+        {"name": f"{HARNESSES[h]} · {model}", "value": cost}
+        | {
+            "itemStyle": {"color": color(HARNESS_COLORS[h]), "opacity": max(0.3, 1 - i * 0.2)}
+            | edge
+        }
+        for h, models in costs.items()
+        for i, (model, cost) in enumerate(models.items())
+    ]
+    ring = {"type": "pie", "label": {"show": False}, "startAngle": 90}
+    return {
+        "tooltip": {
+            "trigger": "item",
+            ":formatter": f"""p => p.name + ': $' + ({NUMSTR})(p.value, 2)
+              + ' · %' + ({NUMSTR})(p.percent, 1)""",
+        },
+        "series": [
+            ring | {"name": "Agents", "radius": ["28%", "52%"], "data": inner},
+            ring | {"name": "Models", "radius": ["56%", "80%"], "data": outer},
+        ],
+    }
+
+
 def growth_options(running, average):
     # The sessions that reached each request number as columns, and their average context.
     return column_options(
@@ -2309,7 +2363,12 @@ def overview_page():
     with ui.column().classes("page"):
         kpis(overview_figures(sessions))
         chart(daily_options(daily_series(sessions)), 420)
-        nested_table(*usage_rows(sessions), opened=True)
+        # The usage table beside its cost donut.
+        with ui.row().classes("w-full no-wrap items-start"):
+            with ui.element("div").classes("col"):
+                nested_table(*usage_rows(sessions), opened=True)
+            element = ui.echart(donut_options(sessions), theme=chart_theme())
+            element.style(f"width:{DONUT}px; height:{DONUT}px")
         if store.main:
             average_section(store.main)
         headers, rows = agent_type_rows(sessions)
