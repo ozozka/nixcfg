@@ -30,8 +30,10 @@ active time on the session's first day.
 A session's size is the tokens that entered it, each counted once: its first prompt, each later
 prompt's growth beyond the previous prompt and output, and all output, from the recorded token
 counts. Cache misses and compactions do not change it, and a subagent run's size is its own;
-compaction runs count in cost, where recorded, but not in size. Peak context and requests are
-details of a session page.
+compaction runs count in cost, where recorded, but not in size. Input and output are what
+providers bill, for comparison with their dashboards: every request's prompt tokens, cached or
+not, with the share read from cache, and its output tokens; compaction runs are not included.
+Peak context and requests are details of a session page.
 
 Each session page shows figures (size, size with subagents, cost, and the startup's tokens, KiB,
 tools, context files, and skills), the context per request stacked by section, the startup's

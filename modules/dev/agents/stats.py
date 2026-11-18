@@ -398,6 +398,11 @@ class Session:
         return sum(r.cost for r in self.requests) + sum(c.cost for c in self.compactions)
 
     @property
+    def input(self):
+        # Every request's prompt tokens, cached or not: what a provider bills as input.
+        return sum(r.prompt for r in self.requests)
+
+    @property
     def total_size(self):
         return sum(self.size.values())
 
@@ -1463,6 +1468,8 @@ def overview_figures(sessions):
     return [
         ("sessions", numstr(sum(1 for s in sessions if s.agent == "main"))),
         ("size", num(sum(s.total_size for s in sessions))),
+        ("input", num(sum(s.input for s in sessions))),
+        ("cache hit", cache_hit(sessions)),
         ("output", num(sum(r.output for r in requests))),
         ("cost", money(sum(s.cost for s in sessions))),
         ("active time", duration(sum(s.active for s in sessions))),
@@ -1484,6 +1491,8 @@ def harness_rows(sessions):
                 numstr(sum(1 for s in items if not s.child)),
                 numstr(len(requests)),
                 num(sum(s.total_size for s in items)),
+                num(sum(s.input for s in items)),
+                cache_hit(items),
                 num(sum(r.output for r in requests)),
                 money(sum(s.cost for s in items)),
                 duration(sum(s.active for s in items)),
@@ -1495,6 +1504,8 @@ def harness_rows(sessions):
         "Sessions",
         "Requests",
         "Size",
+        "Input",
+        "Cache",
         "Output",
         "Cost",
         "Active",
@@ -1522,13 +1533,15 @@ def model_rows(sessions):
                 model,
                 numstr(len(items)),
                 num(sum(r.added for r in items)),
+                num(tokens),
+                f"%{numstr(100 * sum(r.cache for r in items) / tokens, 0)}",
                 num(sum(r.output for r in items)),
                 money(sum(r.cost for r in items)),
-                f"%{numstr(100 * sum(r.cache for r in items) / tokens, 0)}",
                 numstr(sum(r.output for r in timed) / seconds, 1) if seconds else "-",
             ]
         )
-    return ["Model", "Requests", "Size", "Output", "Cost", "Cache", "Tok/s"], rows
+    headers = ["Model", "Requests", "Size", "Input", "Cache", "Output", "Cost", "Tok/s"]
+    return headers, rows
 
 
 def ema(values):
@@ -1634,13 +1647,14 @@ def session_figures(items, average):
     return [
         ("size", num(mean([s.total_size for s in items]))),
         ("with subagents", num(mean([s.family_size for s in items]))),
+        ("input", num(mean([s.input for s in items]))),
+        ("cache hit", cache_hit(items)),
         ("output", num(mean([sum(r.output for r in s.requests) for s in items]))),
         ("cost", money(mean([s.cost for s in items]))),
         ("active time", duration(mean([s.active for s in items]))),
         ("wait/turn", wait_per_turn(items)),
         ("peak context", num(mean([s.peak.prompt for s in items]))),
         ("requests", numstr(mean([len(s.requests) for s in items]), 0)),
-        ("cache hit", cache_hit(items)),
         *startup_figures(items),
         ("subagents", trimmed(mean([len(s.delegations) for s in items]))),
         ("subagent share", subagent_share(items)),
