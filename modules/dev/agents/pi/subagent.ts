@@ -506,7 +506,7 @@ const view = (job: Job): JobView => ({ ...job.result, id: job.id, state: jobStat
 
 interface SubagentDetails {
   action: "start" | "send" | "wait" | "stop" | "event";
-  // `results` keeps the session IDs pi-stats reads.
+  // `results` keeps the session IDs agent-stats reads.
   results: JobView[];
   // The note of a note event.
   note?: string;

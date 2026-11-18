@@ -1836,7 +1836,7 @@ def main():
         root,
         host="127.0.0.1",
         port=port,
-        title="Pi stats",
+        title="Agent stats",
         dark=store.theme["dark"],
         show=False,
         reload=False,

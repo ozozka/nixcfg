@@ -11,18 +11,6 @@ let
   cfg = config.ozozka;
   agents = cfg.mod.dev.agents;
   settingsFormat = pkgs.formats.json { };
-  statsPython = pkgs.python3.withPackages (p: [ p.nicegui ]);
-  # The browser pi-stats opens its app in.
-  statsBrowser = "${self.packages.${pkgs.stdenv.hostPlatform.system}.zen-browser}/bin/zen";
-  statsTheme = settingsFormat.generate "pi-stats-theme.json" {
-    dark = cfg.col.isDark;
-    colors = lib.mapAttrs (_: color: color.hex) (lib.removeAttrs cfg.col [ "isDark" ]);
-    fonts = {
-      sans = cfg.font.sans.name;
-      mono = cfg.font.mono.name;
-    };
-    inherit (cfg) fontSize dim;
-  };
 in
 {
   imports = with self.nixosModules; [
@@ -35,8 +23,6 @@ in
     # Pi with the personal workflow appended to its system prompt and the project docs loaded;
     # `wpi --subagents` also enables subagents.
     (pkgs.writeShellScriptBin "wpi" ''exec ${pkgs.pi-coding-agent}/bin/pi --append-system-prompt ${agents.workflow} --docs "$@"'')
-    # A local app of what Pi's model requests contained, styled with the system theme.
-    (pkgs.writeShellScriptBin "pi-stats" "exec ${statsPython}/bin/python3 ${./stats.py} ${statsTheme} ${statsBrowser}")
   ];
 
   ozozka.home.profiles.pi.files = {

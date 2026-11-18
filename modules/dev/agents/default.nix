@@ -1,9 +1,27 @@
 self:
 
-{ lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   inherit (lib) mkOption types;
+  cfg = config.ozozka;
+  statsPython = pkgs.python3.withPackages (p: [ p.nicegui ]);
+  # The browser agent-stats opens its app in.
+  statsBrowser = "${self.packages.${pkgs.stdenv.hostPlatform.system}.zen-browser}/bin/zen";
+  statsTheme = (pkgs.formats.json { }).generate "agent-stats-theme.json" {
+    dark = cfg.col.isDark;
+    colors = lib.mapAttrs (_: color: color.hex) (lib.removeAttrs cfg.col [ "isDark" ]);
+    fonts = {
+      sans = cfg.font.sans.name;
+      mono = cfg.font.mono.name;
+    };
+    inherit (cfg) fontSize dim;
+  };
   # Each entry of a directory as its own path, so consumers can link entries
   # individually beside files the agents create themselves.
   entries = dir: lib.mapAttrs (name: _: dir + "/${name}") (builtins.readDir dir);
@@ -37,4 +55,9 @@ in
       description = "Agent Skills directories by skill name.";
     };
   };
+
+  # A local app of what the agents' model requests contained, styled with the system theme.
+  config.environment.systemPackages = [
+    (pkgs.writeShellScriptBin "agent-stats" "exec ${statsPython}/bin/python3 ${./stats.py} ${statsTheme} ${statsBrowser}")
+  ];
 }
