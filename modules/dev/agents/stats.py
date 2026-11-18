@@ -2359,7 +2359,8 @@ def compactions_section(items):
 
 
 def navigation():
-    """The drawer's tree: overview, every agent's sessions by newest prompt, unlinked children.
+    """The drawer's tree: overview, every agent's sessions by newest prompt, then the group
+    of unlinked children.
 
     Nested subagent runs retain their start-time order, oldest first.
 
@@ -2392,7 +2393,7 @@ def navigation():
     unlinked = [s for s in newest if s.child and s.parent not in store.by_id]
     return [
         {"id": "/", "label": "Overview"},
-        *group("sessions", "Sessions", [node(s) for s in newest if not s.child]),
+        *(node(s) for s in newest if not s.child),
         *group("unlinked", "Unlinked subagents", [node(s) for s in unlinked]),
     ]
 
@@ -2414,7 +2415,7 @@ def root():
               <span v-if="props.node.caption" class="caption">{{ props.node.caption }}</span>
             </div>""",
         )
-        tree.expand(["sessions", "unlinked"])
+        tree.expand(["unlinked"])
     ui.sub_pages(
         {
             "/": overview_page,

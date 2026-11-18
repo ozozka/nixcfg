@@ -16,10 +16,10 @@ session files again. A tree on the left opens each page, with its own URL:
   them, the average over the sessions you started, of both agents, with subagent runs counted
   within their parents, and an agent types table of each subagent type's efficiency (median
   compression, startup overhead, kept out, budget stops).
-- One list of every session, of both agents, captioned with its agent, size, and cost, ordered
-  by latest user prompt, newest first, with the subagent runs it started nested in start-time
-  order (oldest first), then subagent runs whose parent is missing. A parent's position uses
-  only its own prompts.
+- Every session, of both agents, directly below the overview, captioned with its agent, size,
+  and cost, ordered by latest user prompt, newest first, with the subagent runs it started
+  nested in start-time order (oldest first), then a group of subagent runs whose parent is
+  missing. A parent's position uses only its own prompts.
 
 The average's session chart uses latest-prompt order, oldest first. Sessions without user
 prompts fall back to their first counted model request. Displayed dates keep using the first
