@@ -6,16 +6,17 @@ shared instructions, workflow, prompts, and skills that [Pi](pi/README.md) and
 
 ## agent-stats
 
-`agent-stats` rebuilds every model request from the session files, then serves a NiceGUI app on
-`127.0.0.1` and opens it in Zen; Ctrl+C stops it. It is styled with the system theme, and the
-reload button reads the session files again. A tree on the left opens each page, with its own
-URL:
+`agent-stats` rebuilds every model request from the session files of Pi (`~/.pi/agent`) and
+Claude Code (`~/.claude/projects`), then serves a NiceGUI app on `127.0.0.1` and opens it in
+Zen; Ctrl+C stops it. It is styled with the system theme, and the reload button reads the
+session files again. A tree on the left opens each page, with its own URL:
 
-- The overview: totals of your usage and tokens per calendar day with moving averages (weight
-  1/12) of tokens, active hours, and your wait per turn.
-- An average per agent, then sessions ordered by their latest user prompt, newest first, with
-  the subagent runs they started nested in start-time order (oldest first), then subagent runs
-  whose parent is missing. A parent's position uses only its own prompts.
+- The overview: totals of your usage, tokens per calendar day with moving averages (weight 1/12)
+  of tokens, active hours, and your wait per turn, then totals per agent and per model.
+- An average per agent type of each agent (`Pi · main`, `Claude Code · web-fetch`), then each
+  agent's sessions ordered by their latest user prompt, newest first, with the subagent runs
+  they started nested in start-time order (oldest first), then subagent runs whose parent is
+  missing. A parent's position uses only its own prompts.
 
 The average page's session chart uses latest-prompt order, oldest first. Sessions without user
 prompts fall back to their first counted model request. Displayed dates and daily accounting
@@ -30,3 +31,15 @@ occurred, and, for averages, how many sessions it appeared in. Then where time g
 compaction summaries. A parent shows its subagent runs (cost, report, compression, kept out,
 parent re-send, ending, parallelism), a run shows its delegation, and an agent's average shows
 its efficiency (median compression, startup overhead, budget stops).
+
+Figures an agent does not record show `-`. Claude Code's figures are approximate where its
+transcripts lack detail:
+
+- The context is the transcript path plus the recorded system prompt and tools; the server's
+  context edits are not recorded.
+- Thinking text is not kept; its context size is estimated from its tokens.
+- Cost is the API-equivalent price: each request's tokens at per-model rates derived from the
+  session cost totals Claude Code records.
+- Compaction runs' tokens, subagent notes and corrections, and permission prompt waits are not
+  recorded; the latter count as tool time.
+- `claude -p` (SDK) runs are left out.

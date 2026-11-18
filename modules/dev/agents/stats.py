@@ -46,6 +46,8 @@ from pathlib import Path
 from nicegui import app, run, ui
 
 PI_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
+# The coding agents whose sessions are read, by harness, in display order.
+HARNESSES = {"pi": "Pi", "claude": "Claude Code"}
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 # Claude Code request sources counted: the main thread and subagents; print mode (sdk) runs
 # are left out.
@@ -1391,10 +1393,20 @@ def session_title(session):
     return f"{session.time[:16].replace('T', ' ')} · {Path(session.cwd).name}"
 
 
+def agent_key(session):
+    # An agent type of one harness, such as pi:main; averages and their URLs use it.
+    return f"{session.harness}:{session.agent}"
+
+
+def agent_label(key):
+    harness, agent = key.split(":", 1)
+    return f"{HARNESSES[harness]} · {agent}"
+
+
 def session_label(session):
     return (
         f"{session.time[:16].replace('T', ' ')} · {Path(session.cwd).name}"
-        f" · {session.agent} · {numstr(len(session.requests))} requests"
+        f" · {agent_label(agent_key(session))} · {numstr(len(session.requests))} requests"
         f" · peak {num(session.peak.prompt)}"
     )
 
@@ -1406,7 +1418,7 @@ def wait_per_turn(items):
 
 
 def overview_figures(sessions):
-    # Your usage of Pi over every session: volume, cost, time, and rhythm.
+    # Your usage of the agents over every session: volume, cost, time, and rhythm.
     requests = [r for s in sessions for r in s.requests]
     return [
         ("sessions", numstr(sum(1 for s in sessions if s.agent == "main"))),
@@ -1416,6 +1428,39 @@ def overview_figures(sessions):
         ("active time", duration(sum(s.active for s in sessions))),
         ("wait/turn", wait_per_turn(sessions)),
     ]
+
+
+def harness_rows(sessions):
+    # One row per agent, in HARNESSES order.
+    rows = []
+    for harness, label in HARNESSES.items():
+        items = [s for s in sessions if s.harness == harness]
+        requests = [r for s in items for r in s.requests]
+        if not items:
+            continue
+        rows.append(
+            [
+                label,
+                numstr(sum(1 for s in items if not s.child)),
+                numstr(len(requests)),
+                num(sum(r.prompt for r in requests)),
+                num(sum(r.output for r in requests)),
+                money(sum(r.cost for r in requests)),
+                duration(sum(s.active for s in items)),
+                wait_per_turn(items),
+            ]
+        )
+    headers = [
+        "Agent",
+        "Sessions",
+        "Requests",
+        "Input",
+        "Output",
+        "Cost",
+        "Active",
+        "Wait/turn",
+    ]
+    return headers, rows
 
 
 def model_rows(sessions):
@@ -1850,7 +1895,7 @@ class Store:
     theme: dict = field(default_factory=dict)
     sessions: list[Session] = field(default_factory=list)
     by_id: dict[str, Session] = field(default_factory=dict)
-    # Agent -> its sessions, oldest last prompt first.
+    # Agent key -> its sessions, oldest last prompt first.
     by_agent: dict[str, list[Session]] = field(default_factory=dict)
 
     def load(self, sessions):
@@ -1858,7 +1903,7 @@ class Store:
         self.by_id = {s.id: s for s in sessions}
         self.by_agent = defaultdict(list)
         for session in sorted(sessions, key=session_order):
-            self.by_agent[session.agent].append(session)
+            self.by_agent[agent_key(session)].append(session)
 
 
 store = Store()
@@ -2173,6 +2218,7 @@ def overview_page():
     with ui.column().classes("page"):
         kpis(overview_figures(sessions))
         chart(daily_options(daily_series(sessions)), 420)
+        table(*harness_rows(sessions))
         table(*model_rows(sessions))
 
 
@@ -2207,7 +2253,7 @@ def average_page(agent: str):
         if not items:
             ui.label("No such agent.")
             return
-        ui.label(f"{agent} · {numstr(len(items))} sessions").classes("title")
+        ui.label(f"{agent_label(agent)} · {numstr(len(items))} sessions").classes("title")
         kpis(session_figures(items, True))
         # Each session's column is labeled with its day, shows its title, and opens its page.
         days, columns = history_columns(items)
@@ -2249,7 +2295,8 @@ def compactions_section(items):
 
 
 def navigation():
-    """The drawer's tree: overview, averages, sessions by newest prompt, unlinked children.
+    """The drawer's tree: overview, averages, each agent's sessions by newest prompt, unlinked
+    children.
 
     Nested subagent runs retain their start-time order, oldest first.
 
@@ -2278,16 +2325,31 @@ def navigation():
             else []
         )
 
-    agents = sorted(store.by_agent.items(), key=lambda kv: (kv[0] != "main", kv[0]))
+    def order(key):
+        harness, agent = key.split(":", 1)
+        return list(HARNESSES).index(harness), agent != "main", agent
+
     averages = [
-        {"id": f"/average/{agent}", "label": agent, "caption": f"{numstr(len(items))} sessions"}
-        for agent, items in agents
+        {
+            "id": f"/average/{key}",
+            "label": agent_label(key),
+            "caption": f"{numstr(len(store.by_agent[key]))} sessions",
+        }
+        for key in sorted(store.by_agent, key=order)
     ]
     unlinked = [s for s in newest if s.child and s.parent not in store.by_id]
     return [
         {"id": "/", "label": "Overview"},
         *group("averages", "Averages", averages),
-        *group("sessions", "Sessions", [node(s) for s in newest if not s.child]),
+        *(
+            item
+            for harness, label in HARNESSES.items()
+            for item in group(
+                f"sessions-{harness}",
+                f"{label} sessions",
+                [node(s) for s in newest if s.harness == harness and not s.child],
+            )
+        ),
         *group("unlinked", "Unlinked subagents", [node(s) for s in unlinked]),
     ]
 
@@ -2309,7 +2371,7 @@ def root():
               <span v-if="props.node.caption" class="caption">{{ props.node.caption }}</span>
             </div>""",
         )
-        tree.expand(["averages", "sessions", "unlinked"])
+        tree.expand(["averages", *(f"sessions-{h}" for h in HARNESSES), "unlinked"])
     ui.sub_pages(
         {
             "/": overview_page,
