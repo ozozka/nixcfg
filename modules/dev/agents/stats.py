@@ -316,8 +316,9 @@ class Session:
     # Wall-clock span, for the parallelism of a parent's subagent runs.
     start: float
     end: float
-    notes: int
-    parent_messages: int
+    # None when the agent does not record them.
+    notes: int | None
+    parent_messages: int | None
     # Part -> how many times it occurred.
     counts: Counter
     # The tool results the session read, each counted once, for delegation's kept out.
