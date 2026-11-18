@@ -1446,8 +1446,8 @@ def agent_label(key):
 def session_label(session):
     return (
         f"{session.time[:16].replace('T', ' ')} · {Path(session.cwd).name}"
-        f" · {agent_label(agent_key(session))} · {numstr(len(session.requests))} requests"
-        f" · peak {num(session.peak.prompt)}"
+        f" · {agent_label(agent_key(session))} · {num(session.total_size)}"
+        f" · {money(session.cost)}"
     )
 
 
@@ -2345,7 +2345,7 @@ def compactions_section(items):
 
 
 def navigation():
-    """The drawer's tree: overview, each agent's sessions by newest prompt, unlinked children.
+    """The drawer's tree: overview, every agent's sessions by newest prompt, unlinked children.
 
     Nested subagent runs retain their start-time order, oldest first.
 
@@ -2358,8 +2358,9 @@ def navigation():
             children[session.parent].append(session)
 
     def node(session):
-        size = f"{numstr(len(session.requests))} requests · peak {num(session.peak.prompt)}"
-        caption = size if session.child else f"{session.agent} · {size}"
+        figures = f"{num(session.total_size)} · {money(session.cost)}"
+        who = session.agent if session.child else HARNESSES[session.harness]
+        caption = f"{who} · {figures}"
         runs = [node(child) for child in children[session.id]]
         return (
             {"id": f"/session/{session.id}", "label": session_title(session)}
@@ -2377,15 +2378,7 @@ def navigation():
     unlinked = [s for s in newest if s.child and s.parent not in store.by_id]
     return [
         {"id": "/", "label": "Overview"},
-        *(
-            item
-            for harness, label in HARNESSES.items()
-            for item in group(
-                f"sessions-{harness}",
-                f"{label} sessions",
-                [node(s) for s in newest if s.harness == harness and not s.child],
-            )
-        ),
+        *group("sessions", "Sessions", [node(s) for s in newest if not s.child]),
         *group("unlinked", "Unlinked subagents", [node(s) for s in unlinked]),
     ]
 
@@ -2407,7 +2400,7 @@ def root():
               <span v-if="props.node.caption" class="caption">{{ props.node.caption }}</span>
             </div>""",
         )
-        tree.expand([*(f"sessions-{h}" for h in HARNESSES), "unlinked"])
+        tree.expand(["sessions", "unlinked"])
     ui.sub_pages(
         {
             "/": overview_page,
