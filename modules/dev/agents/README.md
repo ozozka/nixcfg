@@ -12,13 +12,15 @@ Zen; Ctrl+C stops it. It is styled with the system theme, and the reload button 
 session files again. A tree on the left opens each page, with its own URL:
 
 - The overview: totals of your usage, size per calendar day with moving averages (weight 1/12)
-  of size, active hours, and your wait per turn, then totals per agent and per model.
-- An average per agent type of each agent (`Pi · main`, `Claude Code · web-fetch`), then each
-  agent's sessions ordered by their latest user prompt, newest first, with the subagent runs
-  they started nested in start-time order (oldest first), then subagent runs whose parent is
-  missing. A parent's position uses only its own prompts.
+  of size, active hours, and your wait per turn, then totals per agent and per model. Below
+  them, the average over the sessions you started, of both agents, with subagent runs counted
+  within their parents, and an agent types table of each subagent type's efficiency (median
+  compression, startup overhead, kept out, budget stops).
+- Each agent's sessions ordered by their latest user prompt, newest first, with the subagent
+  runs they started nested in start-time order (oldest first), then subagent runs whose parent
+  is missing. A parent's position uses only its own prompts.
 
-The average page's session chart uses latest-prompt order, oldest first. Sessions without user
+The average's session chart uses latest-prompt order, oldest first. Sessions without user
 prompts fall back to their first counted model request. Displayed dates and daily accounting
 keep using the first counted model request, independently of ordering; assistant responses, tool
 results, and metadata do not move a session.
@@ -35,8 +37,7 @@ parts as one bar, and a parts table nested by section (startup, conversation, to
 results, other) that opens on click, with context and size tokens, their shares, KiB, how many
 times each part occurred, and, for averages, how many sessions it appeared in. Then where time
 goes, and compaction summaries. A parent shows its subagent runs (cost, report, compression,
-kept out, parent re-send, ending, parallelism), a run shows its delegation, and an agent's
-average shows its efficiency (median compression, startup overhead, budget stops).
+kept out, parent re-send, ending, parallelism), and a run shows its delegation.
 
 Figures an agent does not record show `-`. Claude Code's figures are approximate where its
 transcripts lack detail:

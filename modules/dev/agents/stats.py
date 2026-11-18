@@ -1434,7 +1434,7 @@ def session_title(session):
 
 
 def agent_key(session):
-    # An agent type of one harness, such as pi:main; averages and their URLs use it.
+    # An agent type of one harness, such as pi:main, for labels and the agent types table.
     return f"{session.harness}:{session.agent}"
 
 
@@ -1911,6 +1911,21 @@ def efficiency_figures(items):
     ]
 
 
+def agent_type_rows(sessions):
+    # One row of efficiency figures per subagent type with linked runs, agents in HARNESSES
+    # order.
+    types = defaultdict(list)
+    for session in sessions:
+        if session.child:
+            types[agent_key(session)].append(session)
+    headers, rows = ["Agent"], []
+    for key in sorted(types, key=lambda k: (list(HARNESSES).index(k.split(":")[0]), k)):
+        if figures := efficiency_figures(types[key]):
+            headers = ["Agent", *(label.capitalize() for label, _ in figures)]
+            rows.append([agent_label(key), *(value for _, value in figures)])
+    return headers, rows
+
+
 def growth_series(items):
     # The average context at each request number over the sessions that reached it, while
     # at least GROWTH_MIN_SESSIONS did, with their number.
@@ -1932,15 +1947,14 @@ class Store:
     theme: dict = field(default_factory=dict)
     sessions: list[Session] = field(default_factory=list)
     by_id: dict[str, Session] = field(default_factory=dict)
-    # Agent key -> its sessions, oldest last prompt first.
-    by_agent: dict[str, list[Session]] = field(default_factory=dict)
+    # The sessions you started, of every agent, oldest last prompt first; the overview's
+    # average is over them, with subagent runs counted within their parents.
+    main: list[Session] = field(default_factory=list)
 
     def load(self, sessions):
         self.sessions = sessions
         self.by_id = {s.id: s for s in sessions}
-        self.by_agent = defaultdict(list)
-        for session in sorted(sessions, key=session_order):
-            self.by_agent[agent_key(session)].append(session)
+        self.main = [s for s in sorted(sessions, key=session_order) if not s.child]
 
 
 store = Store()
@@ -2257,6 +2271,33 @@ def overview_page():
         chart(daily_options(daily_series(sessions)), 420)
         table(*harness_rows(sessions))
         table(*model_rows(sessions))
+        if store.main:
+            average_section(store.main)
+        headers, rows = agent_type_rows(sessions)
+        if rows:
+            section("Agent types")
+            table(headers, rows)
+
+
+def average_section(items):
+    # The averages over your sessions; each session's column is labeled with its day, shows
+    # its title, and opens its page.
+    section(f"Average of {numstr(len(items))} sessions")
+    kpis(session_figures(items, True))
+    days, columns = history_columns(items)
+    titles = [session_title(s) for s in items]
+    chart(
+        stacked_options(titles, columns, "Size tokens", "Session", ticks=days),
+        420,
+        on_click=lambda e: ui.navigate.to(f"/session/{items[e.data_index].id}"),
+    )
+    chart(bar_options(startup_segments(items), "Tokens"), 96)
+    parts_table(*average_parts(items))
+    time_section(items)
+    compactions_section(items)
+    running, average = growth_series(items)
+    if running:
+        chart(growth_options(running, average), 420)
 
 
 def session_page(session_id: str):
@@ -2284,34 +2325,6 @@ def session_page(session_id: str):
             kpis(delegation_figures(row))
 
 
-def average_page(agent: str):
-    items = store.by_agent.get(agent)
-    with ui.column().classes("page"):
-        if not items:
-            ui.label("No such agent.")
-            return
-        ui.label(f"{agent_label(agent)} · {numstr(len(items))} sessions").classes("title")
-        kpis(session_figures(items, True))
-        # Each session's column is labeled with its day, shows its title, and opens its page.
-        days, columns = history_columns(items)
-        titles = [session_title(s) for s in items]
-        chart(
-            stacked_options(titles, columns, "Size tokens", "Session", ticks=days),
-            420,
-            on_click=lambda e: ui.navigate.to(f"/session/{items[e.data_index].id}"),
-        )
-        chart(bar_options(startup_segments(items), "Tokens"), 96)
-        parts_table(*average_parts(items))
-        time_section(items)
-        compactions_section(items)
-        if figures := efficiency_figures(items):
-            section("Efficiency")
-            kpis(figures)
-        running, average = growth_series(items)
-        if running:
-            chart(growth_options(running, average), 420)
-
-
 def section(title):
     ui.label(title).classes("section")
 
@@ -2332,8 +2345,7 @@ def compactions_section(items):
 
 
 def navigation():
-    """The drawer's tree: overview, averages, each agent's sessions by newest prompt, unlinked
-    children.
+    """The drawer's tree: overview, each agent's sessions by newest prompt, unlinked children.
 
     Nested subagent runs retain their start-time order, oldest first.
 
@@ -2362,22 +2374,9 @@ def navigation():
             else []
         )
 
-    def order(key):
-        harness, agent = key.split(":", 1)
-        return list(HARNESSES).index(harness), agent != "main", agent
-
-    averages = [
-        {
-            "id": f"/average/{key}",
-            "label": agent_label(key),
-            "caption": f"{numstr(len(store.by_agent[key]))} sessions",
-        }
-        for key in sorted(store.by_agent, key=order)
-    ]
     unlinked = [s for s in newest if s.child and s.parent not in store.by_id]
     return [
         {"id": "/", "label": "Overview"},
-        *group("averages", "Averages", averages),
         *(
             item
             for harness, label in HARNESSES.items()
@@ -2408,12 +2407,11 @@ def root():
               <span v-if="props.node.caption" class="caption">{{ props.node.caption }}</span>
             </div>""",
         )
-        tree.expand(["averages", *(f"sessions-{h}" for h in HARNESSES), "unlinked"])
+        tree.expand([*(f"sessions-{h}" for h in HARNESSES), "unlinked"])
     ui.sub_pages(
         {
             "/": overview_page,
             "/session/{session_id}": session_page,
-            "/average/{agent}": average_page,
         }
     )
 
