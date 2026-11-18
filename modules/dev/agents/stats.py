@@ -1,19 +1,25 @@
-"""Pi context statistics: what each model request contained, rebuilt from Pi's session files
-and shown as a local NiceGUI app.
+"""Agent context statistics: what each model request of Pi and Claude Code contained, rebuilt
+from their session files and shown as a local NiceGUI app.
 
 Usage: stats.py THEME BROWSER
 
-Each assistant message is one model request. Its context is the path from the session root to
-that message: system messages patch the prompt sections and tool declarations, the latest
+Parts are measured in UTF-8 bytes; their tokens are the part's share of the request's real
+prompt tokens (input + cache read + cache write) from the response usage. Output tokens are
+split over the response's own text, thinking, and tool calls the same way; reported reasoning
+tokens go to thinking. A session's consumption is the sum of its requests' prompt and output
+parts, so a part sent with every request weighs more than its context share.
+
+Pi: each assistant message is one model request. Its context is the path from the session root
+to that message: system messages patch the prompt sections and tool declarations, the latest
 compaction replaces older entries with its summary and prompt checkpoint, and context edits
-replace or drop entries. Parts are measured in UTF-8 bytes; their tokens are the part's share
-of the request's real prompt tokens (input + cache read + cache write) from the response usage.
+replace or drop entries.
 
-Output tokens are split over the response's own text, thinking, and tool calls the same way;
-reported reasoning tokens go to thinking. A session's consumption is the sum of its requests'
-prompt and output parts, so a part sent with every request weighs more than its context share.
+Claude Code: each response, written as one entry per content block, is one model request. Its
+context is the system prompt and tools of its recorded request shape, and the transcript path
+to it, which a compaction boundary starts; attachments carry the instructions, skills, and
+reminders sent. The server's context edits are not recorded, so the context is approximate.
 
-Subagent sessions live in subagent-sessions/; the parent's subagent results and messages
+Pi subagent sessions live in subagent-sessions/; the parent's subagent results and messages
 record their session IDs, and how each run of a child ended. A child's notes are its
 send_message calls; parent messages (steers and continuations) are its prompts that start
 with PARENT_MESSAGE.
@@ -40,6 +46,32 @@ from pathlib import Path
 from nicegui import app, run, ui
 
 PI_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
+CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
+# Claude Code request sources counted: the main thread and subagents; print mode (sdk) runs
+# are left out.
+CLAUDE_SOURCES = ("repl_main_thread", "agent:")
+# Claude's token prices relative to an input token, to split recorded costs over requests.
+CLAUDE_WEIGHTS = {"input": 1, "cache5m": 1.25, "cache1h": 2, "read": 0.1, "output": 5}
+# Attachments Claude Code sends as context at startup, counted as system prompt parts; the
+# instructions, hook context, skills, and deferred tools have parts of their own, and other
+# attachments are reminders in the conversation.
+CLAUDE_SYSTEM_ATTACHMENTS = {
+    "environment",
+    "model",
+    "date",
+    "session_context",
+    "mcp_instructions_delta",
+    "agent_listing_delta",
+    "auto_mode",
+    "sandbox_instructions",
+}
+# How Claude Code marks instruction files and the docs hook's files, and lists each skill.
+CLAUDE_INSTRUCTIONS = r"^Contents of (\S+) \(.*\):$"
+CLAUDE_HOOK_SOURCE = r"^# Source: (\S+)$"
+CLAUDE_SKILL_LINE = "\n- "
+# Bytes per token assumed for thinking, whose text Claude Code does not keep: about Pi's
+# median over its sessions.
+CLAUDE_THINKING_BYTES = 4
 # Image blocks carry base64 data; count each as a fixed size instead.
 IMAGE_BYTES = 6000
 CONTEXT_FILE = re.compile(
@@ -123,6 +155,41 @@ def section_of(part):
     return ("conversation" if part in CONVERSATION_PARTS else "other"), None
 
 
+def split_output(parts, output, reasoning):
+    # A response's output tokens split over its own (part, bytes); reasoning tokens go to
+    # thinking.
+    reasoning = min(reasoning or 0, output)
+    totals = defaultdict(int)
+    for name, length in parts:
+        totals[name] += length
+    length = sum(totals.values())
+    if not length:
+        return {"conversation:thinking": output} if output else {}
+    shares = {name: (output - reasoning) * value / length for name, value in totals.items()}
+    if reasoning:
+        shares["conversation:thinking"] = shares.get("conversation:thinking", 0) + reasoning
+    return shares
+
+
+def occurrences(entry_parts, consumed, compactions, bytes_per_token):
+    """How many times each part occurred, and its tokens with each occurrence counted once.
+
+    entry_parts holds each entry's (part, bytes): every message block, custom message, and
+    summary counts once however often later requests resend it; each compaction run counts
+    once; startup parts count 1. Tokens are bytes at the session's own bytes per token.
+    """
+    counts, once = Counter(), defaultdict(float)
+    for parts in entry_parts:
+        for name, length in parts:
+            counts[name] += 1
+            once[name] += length / bytes_per_token
+    counts["conversation:compaction runs"] = compactions
+    for name in consumed:
+        if section_of(name)[0] == "startup":
+            counts[name] = 1
+    return +counts, once
+
+
 @dataclass
 class Request:
     """One model request: an assistant message with real usage and a system prompt."""
@@ -135,7 +202,7 @@ class Request:
     output: int
     cache: int
     cost: float
-    # Pi's time for the whole response, from sending the request; None before Pi recorded it.
+    # The agent's time for the whole response, from sending the request; None when unknown.
     duration: float | None
     # Skills listed in the system prompt.
     skills: int
@@ -148,15 +215,15 @@ class Request:
 
 @dataclass
 class Compaction:
-    """One compaction: the context before it (Pi's count), the context of the first request
-    after it and the summary's tokens in that request (None when none followed), the tokens
-    of its own run, and its time from the entry before it (None above COMPACTION_MAX_MS).
+    """One compaction: the context before it (the agent's count), the context of the first
+    request after it and the summary's tokens in that request (None when none followed), the
+    tokens of its own run (None when not recorded), and its time (None when unknown).
     """
 
     before: int
     after: int | None
     summary: float | None
-    run: int
+    run: int | None
     time: float | None
 
 
@@ -360,20 +427,12 @@ def message_parts(entry, content=None):
 
 
 def output_parts(message):
-    # The response's output tokens split over its own blocks; reasoning tokens go to thinking.
     usage = message["usage"]
-    output = usage.get("output", 0)
-    reasoning = min(usage.get("reasoning", 0) or 0, output)
-    parts = defaultdict(int)
-    for name, length in message_parts({"type": "message", "message": message}):
-        parts[name] += length
-    length = sum(parts.values())
-    if not length:
-        return {"conversation:thinking": output} if output else {}
-    shares = {name: (output - reasoning) * value / length for name, value in parts.items()}
-    if reasoning:
-        shares["conversation:thinking"] = shares.get("conversation:thinking", 0) + reasoning
-    return shares
+    return split_output(
+        message_parts({"type": "message", "message": message}),
+        usage.get("output", 0),
+        usage.get("reasoning", 0),
+    )
 
 
 def apply_system(state, message):
@@ -563,6 +622,7 @@ def run_tokens(compaction):
 
 
 def compaction_of(entry, requests, previous):
+    # Its time runs from the entry before it, unknown above COMPACTION_MAX_MS.
     after = next((r for r in requests if r.time > entry["timestamp"]), None)
     gap = milliseconds(entry["timestamp"]) - milliseconds(previous["timestamp"])
     return Compaction(
@@ -572,25 +632,6 @@ def compaction_of(entry, requests, previous):
         run=run_tokens(entry),
         time=gap if gap <= COMPACTION_MAX_MS else None,
     )
-
-
-def occurrences(entries, consumed, compactions, bytes_per_token):
-    """How many times each part occurred, and its tokens with each occurrence counted once.
-
-    Every message block, custom message, and summary counts once however often later requests
-    resend it; each compaction run counts once; startup parts count 1. Tokens are bytes at the
-    session's own bytes per token.
-    """
-    counts, once = Counter(), defaultdict(float)
-    for entry in entries:
-        for name, length in message_parts(entry):
-            counts[name] += 1
-            once[name] += length / bytes_per_token
-    counts["conversation:compaction runs"] = compactions
-    for name in consumed:
-        if section_of(name)[0] == "startup":
-            counts[name] = 1
-    return +counts, once
 
 
 def reports_of(entries, bytes_per_token, uses):
@@ -639,7 +680,9 @@ def session_of(header, entries, requests, uses, links, child):
         consumed["conversation:compaction runs"] += run_tokens(compaction)
     consumed = dict(consumed)
     bytes_per_token = statistics.median(r.bytes / r.prompt for r in requests)
-    counts, once = occurrences(entries, consumed, len(compactions), bytes_per_token)
+    counts, once = occurrences(
+        map(message_parts, entries), consumed, len(compactions), bytes_per_token
+    )
     messages = [e.get("message") or {} for e in entries if e["type"] == "message"]
     spent, waits = timing(entries)
     return Session(
@@ -728,6 +771,354 @@ def pi_sessions():
     return sessions
 
 
+# Claude Code sessions
+
+
+def read_claude(path):
+    entries = []
+    for line in path.read_text().splitlines():
+        # A line cut off by an interrupted write is skipped.
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries
+
+
+def claude_weight(tokens):
+    # Price-weighted tokens of one model's usage, in units of an input token.
+    return sum(tokens.get(key, 0) * weight for key, weight in CLAUDE_WEIGHTS.items())
+
+
+def claude_rates(files):
+    """Dollars per price-weighted token for each model, from every session's latest cost
+    totals: Claude Code records cost per session and model, not per request.
+    """
+    cost, weight = defaultdict(float), defaultdict(float)
+    for entries in files:
+        state = next((e for e in reversed(entries) if e.get("type") == "cost-state"), None)
+        for model, usage in ((state or {}).get("modelUsage") or {}).items():
+            cost[model] += usage.get("costUSD", 0)
+            weight[model] += claude_weight(
+                {
+                    "input": usage.get("inputTokens", 0),
+                    "cache5m": usage.get("cacheCreationEphemeral5mInputTokens", 0),
+                    "cache1h": usage.get("cacheCreationEphemeral1hInputTokens", 0),
+                    "read": usage.get("cacheReadInputTokens", 0),
+                    "output": usage.get("outputTokens", 0),
+                }
+            )
+    return {model: cost[model] / weight[model] for model in cost if weight[model]}
+
+
+def claude_request_cost(usage, rate):
+    creation = usage.get("cache_creation") or {}
+    return rate * claude_weight(
+        {
+            "input": usage.get("input_tokens", 0),
+            # Older usage has no split; its cache writes count at the 5 minute price.
+            "cache5m": creation.get(
+                "ephemeral_5m_input_tokens", usage.get("cache_creation_input_tokens", 0)
+            ),
+            "cache1h": creation.get("ephemeral_1h_input_tokens", 0),
+            "read": usage.get("cache_read_input_tokens", 0),
+            "output": usage.get("output_tokens", 0),
+        }
+    )
+
+
+def split_files(text, pattern, wrapper, cwd):
+    # Context files marked by pattern's path group, each up to the next mark, as context
+    # parts; the text around them is the wrapper part.
+    marks = list(re.finditer(pattern, text, re.MULTILINE))
+    parts = []
+    for mark, following in pairwise([*marks, None]):
+        body = text[mark.end() : following.start() if following else len(text)]
+        parts.append((f"context:{context_file_name(mark[1], cwd)}", size(body)))
+    return [*parts, (wrapper, size(text) - sum(length for _, length in parts))]
+
+
+@cache
+def claude_attachment_parts(kind, text, cwd):
+    # (part, bytes) of an attachment Claude Code sent as context.
+    if kind == "instructions":
+        return split_files(text, CLAUDE_INSTRUCTIONS, "system:instructions", cwd)
+    if kind == "hook_additional_context":
+        return split_files(text, CLAUDE_HOOK_SOURCE, "system:hook context", cwd)
+    if kind == "skill_listing":
+        return [("system:skills", size(text))]
+    if kind == "deferred_tools_delta":
+        return [("tool:deferred tools", size(text))]
+    if kind in CLAUDE_SYSTEM_ATTACHMENTS:
+        return [(f"system:{kind.replace('_', ' ')}", size(text))]
+    return [(f"conversation:reminder {kind.replace('_', ' ')}", size(text))]
+
+
+def claude_parts(entry, lookups):
+    # (part, bytes) for one transcript entry, with the lookups of claude_lookups.
+    tools, thinking = lookups
+    kind = entry.get("type")
+    if kind == "attachment":
+        rendered = [
+            item
+            for key in ("rendered", "renderedInHumanTurn")
+            if isinstance(entry.get(key), list)
+            for item in entry[key]
+        ]
+        text = "".join(text_of(item.get("content")) for item in rendered)
+        if not text:
+            return []
+        kind = entry["attachment"].get("type")
+        return list(claude_attachment_parts(kind, text, entry.get("cwd")))
+    if kind not in ("user", "assistant"):
+        return []
+    content = entry["message"].get("content")
+    if kind == "user" and entry.get("isCompactSummary"):
+        return [("conversation:compaction summary", text_size(content))]
+    if isinstance(content, str):
+        return [(f"conversation:{kind}", size(content))]
+    parts = []
+    for block in content or []:
+        block_type = block.get("type")
+        if block_type == "text":
+            parts.append((f"conversation:{kind}", size(block["text"])))
+        elif block_type == "image":
+            parts.append(("conversation:user", IMAGE_BYTES))
+        elif block_type == "thinking":
+            length = size(block.get("thinking", ""))
+            parts.append(
+                ("conversation:thinking", length or thinking.get(entry.get("uuid"), 0))
+            )
+        elif block_type == "tool_use":
+            parts.append((f"call:{block['name']}", size(json.dumps(block.get("input")))))
+        elif block_type == "tool_result":
+            name = tools.get(block.get("tool_use_id"), "unknown")
+            parts.append((f"result:{name}", text_size(block.get("content") or "")))
+    return parts
+
+
+@cache
+def claude_shape_parts(shape_json):
+    """The system prompt split into its top-level sections, and each tool definition.
+
+    Text before a block's first heading belongs to the prompt part.
+    """
+    shape = json.loads(shape_json)
+    parts = defaultdict(int)
+    for block in shape.get("system") or []:
+        text = block.get("text", "")
+        sections = re.split(r"^# (.+)$", text, flags=re.MULTILINE)
+        parts["system:prompt"] += size(sections[0])
+        for heading, body in zip(sections[1::2], sections[2::2], strict=True):
+            parts[f"system:{heading.strip()}"] += size(f"# {heading}{body}")
+    for tool in shape.get("tools") or []:
+        parts[f"tool:{tool.get('name', '?')}"] += size(json.dumps(tool))
+    return list(parts.items())
+
+
+def claude_lookups(entries):
+    """Tool use ID -> tool name, for naming tool results, and entry UUID -> the estimated
+    bytes of its thinking block.
+
+    Claude Code keeps only the signature of thinking, which stays in the context; its size is
+    the response's thinking tokens at CLAUDE_THINKING_BYTES, split over its thinking blocks.
+    """
+    tools, blocks = {}, defaultdict(list)
+    for entry in entries:
+        if entry.get("type") != "assistant":
+            continue
+        for block in entry["message"].get("content") or []:
+            if block.get("type") == "tool_use":
+                tools[block["id"]] = block["name"]
+            elif block.get("type") == "thinking":
+                blocks[entry["message"]["id"]].append(entry)
+    thinking = {}
+    for response in blocks.values():
+        details = response[-1]["message"].get("usage", {}).get("output_tokens_details") or {}
+        share = (details.get("thinking_tokens") or 0) * CLAUDE_THINKING_BYTES / len(response)
+        for entry in response:
+            thinking[entry["uuid"]] = share
+    return tools, thinking
+
+
+def claude_requests(entries, rates):
+    """The session's model requests, each a response deduplicated by its message ID.
+
+    A request's context is the transcript path from the entry before its response to the
+    root, which a compaction boundary ends, plus the system prompt and tool definitions of
+    its recorded request shape, or of the latest shape before it when it has none.
+    """
+    by_uuid = {e["uuid"]: e for e in entries if "uuid" in e}
+    lookups = claude_lookups(entries)
+    sent = {e["id"]: e for e in entries if e.get("type") == "api-request"}
+    shapes = {
+        e["shapeHash"]: json.dumps(e["shape"])
+        for e in entries
+        if e.get("type") == "api-request-shape"
+    }
+    # Each response's block entries, in the order the responses began.
+    responses = defaultdict(list)
+    for entry in entries:
+        if entry.get("type") == "assistant":
+            responses[entry["message"]["id"]].append(entry)
+    measured = {}
+    shape = None
+    index = count()
+    for blocks in responses.values():
+        first, last = blocks[0], blocks[-1]
+        message = last["message"]
+        usage = message.get("usage") or {}
+        prompt = (
+            usage.get("input_tokens", 0)
+            + usage.get("cache_read_input_tokens", 0)
+            + usage.get("cache_creation_input_tokens", 0)
+        )
+        request = sent.get(first.get("requestRef"))
+        if request:
+            if not request.get("querySource", "").startswith(CLAUDE_SOURCES):
+                continue
+            shape = shapes.get(request.get("shapeHash"), shape)
+        if not prompt:
+            continue
+        path = []
+        parent = by_uuid.get(first.get("parentUuid"))
+        while parent:
+            path.append(parent)
+            parent = by_uuid.get(parent.get("parentUuid"))
+        path.reverse()
+        conversation = []
+        for item in path:
+            if item["uuid"] not in measured:
+                measured[item["uuid"]] = claude_parts(item, lookups)
+            conversation += measured[item["uuid"]]
+        parts = defaultdict(int)
+        for name, length in (claude_shape_parts(shape) if shape else []) + conversation:
+            parts[name] += length
+        skills = sum(
+            text_of(item.get("content")).count(CLAUDE_SKILL_LINE)
+            for e in path
+            if e.get("type") == "attachment" and e["attachment"].get("type") == "skill_listing"
+            for item in e.get("rendered") or []
+        )
+        # Thinking's output is its reported tokens; the rest is split over the other blocks.
+        response = [
+            part
+            for e in blocks
+            for part in claude_parts(e, lookups)
+            if part[0] != "conversation:thinking"
+        ]
+        total = sum(parts.values()) or 1
+        yield Request(
+            index=next(index),
+            time=last["timestamp"],
+            model=message.get("model"),
+            prompt=prompt,
+            output=usage.get("output_tokens", 0),
+            cache=usage.get("cache_read_input_tokens", 0),
+            cost=claude_request_cost(usage, rates.get(message.get("model"), 0)),
+            duration=(
+                milliseconds(last["timestamp"]) - milliseconds(request["timestamp"])
+                if request
+                else None
+            ),
+            skills=skills,
+            bytes=total,
+            sizes=dict(parts),
+            parts={name: value / total * prompt for name, value in parts.items()},
+            out=split_output(
+                response,
+                usage.get("output_tokens", 0),
+                (usage.get("output_tokens_details") or {}).get("thinking_tokens", 0),
+            ),
+        )
+
+
+def claude_session(path, entries, requests, child):
+    consumed = defaultdict(float)
+    for request in requests:
+        for parts in (request.parts, request.out):
+            for name, tokens in parts.items():
+                consumed[name] += tokens
+    consumed = dict(consumed)
+    boundaries = [
+        e
+        for e in entries
+        if e.get("type") == "system" and e.get("subtype") == "compact_boundary"
+    ]
+    compactions = []
+    for boundary in boundaries:
+        meta = boundary.get("compactMetadata") or {}
+        after = next((r for r in requests if r.time > boundary["timestamp"]), None)
+        compactions.append(
+            Compaction(
+                before=meta.get("preTokens", 0),
+                after=after.prompt if after else None,
+                summary=after.parts.get("conversation:compaction summary") if after else None,
+                run=None,
+                time=meta.get("durationMs"),
+            )
+        )
+    bytes_per_token = statistics.median(r.bytes / r.prompt for r in requests)
+    lookups = claude_lookups(entries)
+    counts, once = occurrences(
+        (claude_parts(e, lookups) for e in entries), consumed, 0, bytes_per_token
+    )
+    stamps = [milliseconds(e["timestamp"]) for e in entries if "timestamp" in e]
+    # A name you gave wins over Claude Code's generated title.
+    given = [e["agentName"] for e in entries if e.get("type") == "agent-name"]
+    titles = [e["aiTitle"] for e in entries if e.get("type") == "ai-title"]
+    return Session(
+        id=path.stem,
+        harness="claude",
+        agent="main",
+        cwd=next((e["cwd"] for e in entries if e.get("cwd")), ""),
+        child=child,
+        requests=requests,
+        last_prompt_time=max(
+            (
+                e["timestamp"]
+                for e in entries
+                if e.get("type") == "user" and (e.get("origin") or {}).get("kind") == "human"
+            ),
+            key=milliseconds,
+            default=requests[0].time,
+        ),
+        consumed=consumed,
+        compactions=compactions,
+        marks=[
+            next((r.index for r in requests if r.time > b["timestamp"]), len(requests) - 1)
+            for b in boundaries
+        ],
+        spent={},
+        waits=[],
+        start=min(stamps),
+        end=max(stamps),
+        notes=0,
+        parent_messages=0,
+        counts=counts,
+        material=sum(t for n, t in once.items() if n.startswith("result:")),
+        bytes_per_token=bytes_per_token,
+        reports=[],
+        parent=None,
+        task="",
+        outcomes=Counter(),
+        name=(given or titles or [None])[-1],
+    )
+
+
+def claude_sessions():
+    """Every Claude Code session with requests."""
+    paths = sorted(CLAUDE_DIR.glob("projects/*/*.jsonl"))
+    files = [read_claude(path) for path in paths]
+    rates = claude_rates(files)
+    sessions = []
+    for path, entries in zip(paths, files, strict=True):
+        requests = list(claude_requests(entries, rates))
+        if requests:
+            sessions.append(claude_session(path, entries, requests, False))
+    return sessions
+
+
 # Sessions
 
 
@@ -755,7 +1146,7 @@ def delegations_of(session, children):
 
 def collect():
     """Every session of every agent, children linked to their parents."""
-    sessions = pi_sessions()
+    sessions = pi_sessions() + claude_sessions()
     # Each parent's subagent runs, with the child sessions' own totals; each child keeps its
     # delegation, which knows its parent.
     children = {s.id: s for s in sessions if s.child}
@@ -1169,7 +1560,12 @@ def compaction_figures(items):
         ("context before", num(statistics.mean(c.before for c in every))),
         ("context after", num(statistics.mean(c.after for c in done)) if done else "-"),
         ("summary", num(statistics.mean(c.summary for c in done)) if done else "-"),
-        ("run tokens", num(statistics.mean(c.run for c in every))),
+        (
+            "run tokens",
+            num(statistics.mean(runs))
+            if (runs := [c.run for c in every if c.run is not None])
+            else "-",
+        ),
         ("compaction time", mean_duration([c.time for c in every])),
     ]
 
