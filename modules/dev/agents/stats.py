@@ -49,6 +49,8 @@ from nicegui import app, run, ui
 PI_DIR = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi/agent"))
 # The coding agents whose sessions are read, by harness, in display order.
 HARNESSES = {"pi": "Pi", "claude": "Claude Code"}
+# Each agent's theme color in the usage table and donut.
+HARNESS_COLORS = {"pi": "p", "claude": "s"}
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 # Claude Code request sources counted: the main thread and subagents; print mode (sdk) runs
 # are left out.
@@ -1477,15 +1479,44 @@ def overview_figures(sessions):
     ]
 
 
-def harness_rows(sessions):
-    # One row per agent, in HARNESSES order.
+def speed(requests):
+    # Output tokens over response time, for the responses with a duration; it includes the
+    # time before the first token, so it compares models rather than measuring raw
+    # generation speed.
+    timed = [r for r in requests if r.duration]
+    seconds = sum(r.duration for r in timed) / 1000
+    return numstr(sum(r.output for r in timed) / seconds, 1) if seconds else "-"
+
+
+def usage_rows(sessions):
+    """Usage per agent, in HARNESSES order, each opening to its models (most requests
+    first) and, when the agent records them, its compaction runs' cost, so an agent's
+    children add up to it.
+
+    A model's sessions are the sessions you started that used it, directly or through their
+    subagent runs. Returns the headers and the rows of nested_table.
+    """
+    ids = count()
     rows = []
+
+    def add(parent, depth, branch, key, cells):
+        node = next(ids)
+        rows.append(
+            {"id": node, "parent": parent, "depth": depth, "branch": branch, "color": key}
+            | {"cells": cells}
+        )
+        return node
+
     for harness, label in HARNESSES.items():
         items = [s for s in sessions if s.harness == harness]
-        requests = [r for s in items for r in s.requests]
         if not items:
             continue
-        rows.append(
+        requests = [r for s in items for r in s.requests]
+        agent = add(
+            None,
+            0,
+            True,
+            HARNESS_COLORS[harness],
             [
                 label,
                 numstr(sum(1 for s in items if not s.child)),
@@ -1497,50 +1528,41 @@ def harness_rows(sessions):
                 money(sum(s.cost for s in items)),
                 duration(sum(s.active for s in items)),
                 wait_per_turn(items),
-            ]
+                speed(requests),
+            ],
         )
-    headers = [
-        "Agent",
-        "Sessions",
-        "Requests",
-        "Size",
-        "Input",
-        "Cache",
-        "Output",
-        "Cost",
-        "Active",
-        "Wait/turn",
-    ]
-    return headers, rows
-
-
-def model_rows(sessions):
-    # One row per model, most requests first.
-    models = defaultdict(list)
-    for session in sessions:
-        for request in session.requests:
-            models[request.model].append(request)
-    rows = []
-    for model, items in sorted(models.items(), key=lambda m: -len(m[1])):
-        tokens = sum(r.prompt for r in items)
-        # Output tokens over response time, for the responses with a duration; it includes
-        # the time before the first token, so it compares models rather than measuring raw
-        # generation speed.
-        timed = [r for r in items if r.duration]
-        seconds = sum(r.duration for r in timed) / 1000
-        rows.append(
-            [
-                model,
-                numstr(len(items)),
-                num(sum(r.added for r in items)),
-                num(tokens),
-                f"%{numstr(100 * sum(r.cache for r in items) / tokens, 0)}",
-                num(sum(r.output for r in items)),
-                money(sum(r.cost for r in items)),
-                numstr(sum(r.output for r in timed) / seconds, 1) if seconds else "-",
-            ]
-        )
-    headers = ["Model", "Requests", "Size", "Input", "Cache", "Output", "Cost", "Tok/s"]
+        models, used = defaultdict(list), defaultdict(set)
+        for session in items:
+            owner = session.parent if session.child and session.parent else session.id
+            for request in session.requests:
+                models[request.model].append(request)
+                used[request.model].add(owner)
+        for model, group in sorted(models.items(), key=lambda m: -len(m[1])):
+            add(
+                agent,
+                1,
+                False,
+                None,
+                [
+                    model or "unknown",
+                    numstr(len(used[model])),
+                    numstr(len(group)),
+                    num(sum(r.added for r in group)),
+                    num(sum(r.prompt for r in group)),
+                    cache_share(group),
+                    num(sum(r.output for r in group)),
+                    money(sum(r.cost for r in group)),
+                    "-",
+                    "-",
+                    speed(group),
+                ],
+            )
+        if compacted := sum(c.cost for s in items for c in s.compactions):
+            cells = ["compaction runs", *["-"] * 6, money(compacted), "-", "-", "-"]
+            add(agent, 1, False, None, cells)
+    headers = ["Agent"]
+    headers += ["Sessions", "Requests", "Size", "Input", "Cache", "Output", "Cost"]
+    headers += ["Active", "Wait/turn", "Tok/s"]
     return headers, rows
 
 
@@ -1625,11 +1647,15 @@ def startup_figures(items):
     ]
 
 
-def cache_hit(items):
-    # The share of the sessions' input read from the provider's cache, over all requests.
-    requests = [r for s in items for r in s.requests]
+def cache_share(requests):
+    # The share of the requests' input read from the provider's cache.
     prompt = sum(r.prompt for r in requests)
     return pct(sum(r.cache for r in requests) / prompt) if prompt else "-"
+
+
+def cache_hit(items):
+    # The share of the sessions' input read from the provider's cache, over all requests.
+    return cache_share([r for s in items for r in s.requests])
 
 
 def subagent_share(items):
@@ -2211,9 +2237,9 @@ def table(headers, rows, wrap=None):
     ui.table(columns=columns, rows=data).props("flat dense square").classes("w-full")
 
 
-# A row of the parts table: an arrow on the rows that open, the section's color, and the
+# A row of a nested table: an arrow on the rows that open, the top row's color, and the
 # part name indented by depth; the rows that open emit toggle with their ID.
-PARTS_ROW = """
+NESTED_ROW = """
 <q-tr :props="props" :class="props.row.branch ? 'branch' : ''"
       @click="() => props.row.branch && $parent.$emit('toggle', props.row.id)">
   <q-td v-for="col in props.cols" :key="col.name" :props="props">
@@ -2229,11 +2255,11 @@ PARTS_ROW = """
 """
 
 
-def parts_table(headers, rows):
-    """The parts table, collapsed to its sections; a section row opens its direct children
-    and closes all its descendants.
+def nested_table(headers, rows, opened=False):
+    """A table of nested rows (as parts_rows returns them), collapsed to its top rows or,
+    when opened, fully open; a row opens its direct children and closes all its descendants.
     """
-    opened = set()
+    opened = {row["id"] for row in rows if row["branch"]} if opened else set()
     children = defaultdict(list)
     for row in rows:
         children[row["parent"]].append(row["id"])
@@ -2274,7 +2300,7 @@ def parts_table(headers, rows):
         for i, h in enumerate(headers)
     ]
     grid = ui.table(columns=columns, rows=shown()).props("flat dense square").classes("w-full")
-    grid.add_slot("body", PARTS_ROW.replace("INDENT", str(store.theme["dim"]["m"])))
+    grid.add_slot("body", NESTED_ROW.replace("INDENT", str(store.theme["dim"]["m"])))
     grid.on("toggle", toggle)
 
 
@@ -2283,8 +2309,7 @@ def overview_page():
     with ui.column().classes("page"):
         kpis(overview_figures(sessions))
         chart(daily_options(daily_series(sessions)), 420)
-        table(*harness_rows(sessions))
-        table(*model_rows(sessions))
+        nested_table(*usage_rows(sessions), opened=True)
         if store.main:
             average_section(store.main)
         headers, rows = agent_type_rows(sessions)
@@ -2306,7 +2331,7 @@ def average_section(items):
         on_click=lambda e: ui.navigate.to(f"/session/{items[e.data_index].id}"),
     )
     chart(bar_options(startup_segments(items), "Tokens"), 96)
-    parts_table(*average_parts(items))
+    nested_table(*average_parts(items))
     time_section(items)
     compactions_section(items)
     running, average = growth_series(items)
@@ -2325,7 +2350,7 @@ def session_page(session_id: str):
         labels, columns, marks = context_columns(session)
         chart(stacked_options(labels, columns, "Context tokens", "Request", marks), 420)
         chart(bar_options(startup_segments([session]), "Tokens"), 96)
-        parts_table(*session_parts(session))
+        nested_table(*session_parts(session))
         time_section([session])
         compactions_section([session])
         if session.delegations:

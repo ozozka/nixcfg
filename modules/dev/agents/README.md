@@ -12,10 +12,11 @@ Zen; Ctrl+C stops it. It is styled with the system theme, and the reload button 
 session files again. A tree on the left opens each page, with its own URL:
 
 - The overview: totals of your usage, size per calendar day with moving averages (weight 1/12)
-  of size, active hours, and your wait per turn, then totals per agent and per model. Below
-  them, the average over the sessions you started, of both agents, with subagent runs counted
-  within their parents, and an agent types table of each subagent type's efficiency (median
-  compression, startup overhead, kept out, budget stops).
+  of size, active hours, and your wait per turn, then a usage table that opens each agent to its
+  models (and Pi's compaction runs, which record no model). Below them, the average over the
+  sessions you started, of both agents, with subagent runs counted within their parents, and an
+  agent types table of each subagent type's efficiency (median compression, startup overhead,
+  kept out, budget stops).
 - Every session, of both agents, directly below the overview, captioned with its agent, size,
   and cost, ordered by latest user prompt, newest first, with the subagent runs it started
   nested in start-time order (oldest first), then a group of subagent runs whose parent is
