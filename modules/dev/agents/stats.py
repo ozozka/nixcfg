@@ -2058,7 +2058,8 @@ def chart_theme():
             "backgroundColor": color("o"),
             "borderWidth": 0,
             "axisPointer": pointer,
-            "textStyle": {"color": color("f")},
+            # Tooltips hold exact values, read at the body size.
+            "textStyle": {"color": color("f"), "fontSize": px(store.theme["fontSize"]["m"])},
         },
     }
 
@@ -2372,7 +2373,7 @@ def overview_page():
         chart(daily_options(daily_series(sessions)), 420)
         # The usage table beside its cost donut.
         with ui.row().classes("w-full no-wrap items-start"):
-            with ui.element("div").classes("col small"):
+            with ui.element("div").classes("col"):
                 nested_table(*usage_rows(sessions), opened=True)
             element = ui.echart(donut_options(sessions), theme=chart_theme())
             element.style(f"width:{DONUT}px; height:{DONUT}px")
@@ -2529,7 +2530,9 @@ def root():
 
 def style():
     # The page in the theme's colors, fonts, and sizes: 12 px between blocks, 24 px before
-    # a section.
+    # a section. Three font sizes: m for what you read (tables, names, titles, tooltips), s
+    # for labels (figure labels, sections, captions, chart axes and legends), and x for the
+    # figures' values.
     theme = store.theme
     c, size, dim, fonts = theme["colors"], theme["fontSize"], theme["dim"], theme["fonts"]
     return f"""
@@ -2547,11 +2550,10 @@ a.title {{ text-decoration:none; }}
 .kpis {{ width:100%; display:grid; grid-template-columns:repeat(6, minmax(0, 1fr));
   row-gap:{dim["s"]}px; text-align:center; }}
 .kpi-label {{ color:var(--m); font-size:{px(size["s"])}px; }}
-.kpi-value {{ font:{px(size["h"])}px "{fonts["mono"]}"; }}
+.kpi-value {{ font:{px(size["x"])}px "{fonts["mono"]}"; }}
 .q-table__card, .q-table {{ background:transparent; color:var(--f); box-shadow:none; }}
-.q-table {{ font:{px(size["l"])}px "{fonts["mono"]}"; }}
-.q-table th {{ font:{px(size["l"])}px "{fonts["sans"]}"; color:var(--m); }}
-.small .q-table, .small .q-table th {{ font-size:{px(size["m"])}px; }}
+.q-table {{ font:{px(size["m"])}px "{fonts["mono"]}"; }}
+.q-table th {{ font:{px(size["m"])}px "{fonts["sans"]}"; color:var(--m); }}
 .q-table th, .q-table td {{ padding:{dim["t"]}px {dim["s"]}px; height:auto;
   font-size:inherit; white-space:nowrap; border-color:var(--o); }}
 .q-table td.wrap {{ white-space:normal; color:var(--m); font:{px(size["m"])}px "{fonts["sans"]}"; }}
