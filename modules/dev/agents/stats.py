@@ -1498,6 +1498,8 @@ def usage_rows(sessions):
     """
     ids = count()
     rows = []
+    size_total = sum(s.total_size for s in sessions) or 1
+    input_total = sum(s.input for s in sessions) or 1
 
     def add(parent, depth, branch, key, cells):
         node = next(ids)
@@ -1522,7 +1524,9 @@ def usage_rows(sessions):
                 numstr(sum(1 for s in items if not s.child)),
                 numstr(len(requests)),
                 num(sum(s.total_size for s in items)),
+                pct(sum(s.total_size for s in items) / size_total),
                 num(sum(s.input for s in items)),
+                pct(sum(s.input for s in items) / input_total),
                 cache_hit(items),
                 num(sum(r.output for r in requests)),
                 money(sum(s.cost for s in items)),
@@ -1548,7 +1552,9 @@ def usage_rows(sessions):
                     numstr(len(used[model])),
                     numstr(len(group)),
                     num(sum(r.added for r in group)),
+                    pct(sum(r.added for r in group) / size_total),
                     num(sum(r.prompt for r in group)),
+                    pct(sum(r.prompt for r in group) / input_total),
                     cache_share(group),
                     num(sum(r.output for r in group)),
                     money(sum(r.cost for r in group)),
@@ -1558,10 +1564,11 @@ def usage_rows(sessions):
                 ],
             )
         if compacted := sum(c.cost for s in items for c in s.compactions):
-            cells = ["compaction runs", *["-"] * 6, money(compacted), "-", "-", "-"]
+            cells = ["compaction runs", *["-"] * 8, money(compacted), "-", "-", "-"]
             add(agent, 1, False, None, cells)
     headers = ["Agent"]
-    headers += ["Sessions", "Requests", "Size", "Input", "Cache", "Output", "Cost"]
+    headers += ["Sessions", "Requests", "Size", "Size %", "Input", "Input %", "Cache"]
+    headers += ["Output", "Cost"]
     headers += ["Active", "Wait/turn", "Tok/s"]
     return headers, rows
 
@@ -2024,8 +2031,9 @@ PLAIN_NUMBER = (
     "v => v.toLocaleString('tr-TR', {useGrouping: 'always', maximumFractionDigits: 3})"
 )
 DENSE_COLUMNS = 60
-# The usage donut's width and height, in pixels.
+# The usage donut's width and height, in pixels, and what it shows: "size" or "input".
 DONUT = 300
+DONUT_METRIC = "size"
 BAR_GAP = "28%"
 
 
@@ -2192,29 +2200,28 @@ def bar_options(segments, xlabel, tokens=True, legend=False):
     }
 
 
-def usage_costs(sessions):
-    # Agent -> model -> cost, models by most requests, with compaction runs as their own
-    # entry; the entries of an agent add up to its cost.
-    costs = {}
+def usage_tokens(sessions, metric):
+    """Agent -> model -> tokens of metric (size or input), models by most requests; the
+    models of an agent add up to it.
+    """
+    tokens = {}
     for harness in HARNESSES:
-        items = [s for s in sessions if s.harness == harness]
         models, counts = defaultdict(float), Counter()
-        for request in (r for s in items for r in s.requests):
-            models[request.model or "unknown"] += request.cost
-            counts[request.model or "unknown"] += 1
-        ordered = {m: models[m] for m, _ in counts.most_common()}
-        if compacted := sum(c.cost for s in items for c in s.compactions):
-            ordered["compaction runs"] = compacted
-        if ordered:
-            costs[harness] = ordered
-    return costs
+        for session in (s for s in sessions if s.harness == harness):
+            for request in session.requests:
+                model = request.model or "unknown"
+                models[model] += request.added if metric == "size" else request.prompt
+                counts[model] += 1
+        if counts:
+            tokens[harness] = {m: models[m] for m, _ in counts.most_common()}
+    return tokens
 
 
 def donut_options(sessions):
-    """Cost as two rings: agents inside, their models outside in the agent's color, each
-    lighter than the one before, separated by thin lines in the background color.
+    """DONUT_METRIC as two rings: agents inside, their models outside in the agent's color,
+    each lighter than the one before, separated by thin lines in the background color.
     """
-    costs = usage_costs(sessions)
+    costs = usage_tokens(sessions, DONUT_METRIC)
     edge = {"borderColor": color("b"), "borderWidth": 1}
     inner = [
         {"name": HARNESSES[h], "value": sum(m.values())}
@@ -2234,7 +2241,7 @@ def donut_options(sessions):
     return {
         "tooltip": {
             "trigger": "item",
-            ":formatter": f"""p => p.name + ': $' + ({NUMSTR})(p.value, 2)
+            ":formatter": f"""p => p.name + ': ' + ({NUMSTR})(p.value, 0)
               + ' · %' + ({NUMSTR})(p.percent, 1)""",
         },
         "series": [
@@ -2365,7 +2372,7 @@ def overview_page():
         chart(daily_options(daily_series(sessions)), 420)
         # The usage table beside its cost donut.
         with ui.row().classes("w-full no-wrap items-start"):
-            with ui.element("div").classes("col"):
+            with ui.element("div").classes("col small"):
                 nested_table(*usage_rows(sessions), opened=True)
             element = ui.echart(donut_options(sessions), theme=chart_theme())
             element.style(f"width:{DONUT}px; height:{DONUT}px")
@@ -2544,6 +2551,7 @@ a.title {{ text-decoration:none; }}
 .q-table__card, .q-table {{ background:transparent; color:var(--f); box-shadow:none; }}
 .q-table {{ font:{px(size["l"])}px "{fonts["mono"]}"; }}
 .q-table th {{ font:{px(size["l"])}px "{fonts["sans"]}"; color:var(--m); }}
+.small .q-table, .small .q-table th {{ font-size:{px(size["m"])}px; }}
 .q-table th, .q-table td {{ padding:{dim["t"]}px {dim["s"]}px; height:auto;
   font-size:inherit; white-space:nowrap; border-color:var(--o); }}
 .q-table td.wrap {{ white-space:normal; color:var(--m); font:{px(size["m"])}px "{fonts["sans"]}"; }}
