@@ -22,9 +22,10 @@ session files again. A tree on the left opens each page, with its own URL:
   only its own prompts.
 
 The average's session chart uses latest-prompt order, oldest first. Sessions without user
-prompts fall back to their first counted model request. Displayed dates and daily accounting
-keep using the first counted model request, independently of ordering; assistant responses, tool
-results, and metadata do not move a session.
+prompts fall back to their first counted model request. Displayed dates keep using the first
+counted model request, independently of ordering; assistant responses, tool results, and
+metadata do not move a session. Daily size counts each request's share on its own day, and
+active time on the session's first day.
 
 A session's size is the tokens that entered it, each counted once: its first prompt, each later
 prompt's growth beyond the previous prompt and output, and all output, from the recorded token
@@ -37,7 +38,7 @@ tools, context files, and skills), the context per request stacked by section, t
 parts as one bar, and a parts table nested by section (startup, conversation, tool calls, tool
 results, other) that opens on click, with context and size tokens, their shares, KiB, how many
 times each part occurred, and, for averages, how many sessions it appeared in. Then where time
-goes, and compaction summaries. A parent shows its subagent runs (cost, report, compression,
+goes, and compaction summaries. A parent shows its subagent runs (size, report, compression,
 kept out, parent re-send, ending, parallelism), and a run shows its delegation.
 
 Figures an agent does not record show `-`. Claude Code's figures are approximate where its
