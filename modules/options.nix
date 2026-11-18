@@ -74,7 +74,7 @@ in
     };
 
     dim = {
-      t = mkOpt lib.types.int 3 "Tiny";
+      t = mkOpt lib.types.int 2 "Tiny";
       s = mkOpt lib.types.int 12 "Small";
       m = mkOpt lib.types.int 24 "Medium";
       l = mkOpt lib.types.int 72 "Large";
