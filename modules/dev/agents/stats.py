@@ -75,6 +75,8 @@ CLAUDE_THINKING_BYTES = 4
 # Claude Code's tools that ask you a question and that start a subagent.
 CLAUDE_QUESTION_TOOL = "AskUserQuestion"
 CLAUDE_AGENT_TOOL = "Agent"
+# Claude Code's subagent run states, as the run endings of OUTCOMES; others are unknown.
+CLAUDE_STATES = {"completed": "idle"}
 # Image blocks carry base64 data; count each as a fixed size instead.
 IMAGE_BYTES = 6000
 CONTEXT_FILE = re.compile(
@@ -857,18 +859,22 @@ def claude_attachment_parts(kind, text, cwd):
     return [(f"conversation:reminder {kind.replace('_', ' ')}", size(text))]
 
 
+def claude_rendered(entry):
+    # The text an attachment sent to the model; empty when it sent none.
+    return "".join(
+        text_of(item.get("content"))
+        for key in ("rendered", "renderedInHumanTurn")
+        if isinstance(entry.get(key), list)
+        for item in entry[key]
+    )
+
+
 def claude_parts(entry, lookups):
     # (part, bytes) for one transcript entry, with the lookups of claude_lookups.
     tools, thinking = lookups
     kind = entry.get("type")
     if kind == "attachment":
-        rendered = [
-            item
-            for key in ("rendered", "renderedInHumanTurn")
-            if isinstance(entry.get(key), list)
-            for item in entry[key]
-        ]
-        text = "".join(text_of(item.get("content")) for item in rendered)
+        text = claude_rendered(entry)
         if not text:
             return []
         kind = entry["attachment"].get("type")
@@ -944,8 +950,9 @@ def claude_lookups(entries):
     return tools, thinking
 
 
-def claude_requests(entries, rates):
-    """The session's model requests, each a response deduplicated by its message ID.
+def claude_requests(entries, rates, uses):
+    """The session's model requests, each a response deduplicated by its message ID; uses
+    counts for each entry UUID the requests whose context included it.
 
     A request's context is the transcript path from the entry before its response to the
     root, which a compaction boundary ends, plus the system prompt and tool definitions of
@@ -989,6 +996,7 @@ def claude_requests(entries, rates):
             path.append(parent)
             parent = by_uuid.get(parent.get("parentUuid"))
         path.reverse()
+        uses.update(item["uuid"] for item in path)
         conversation = []
         for item in path:
             if item["uuid"] not in measured:
@@ -1099,7 +1107,58 @@ def claude_timing(entries, requests):
     return dict(spent), waits
 
 
-def claude_session(path, entries, requests, child):
+def claude_reports(entries, runs, bytes_per_token, uses, lookups):
+    """The reports subagents returned to this parent: one per Agent call.
+
+    runs: (child session ID, agent ID, meta) for each subagent the session started. A report
+    is the call's tool result and the messages that deliver the agent's hand-back or its task
+    notification (attachments, or user messages for background runs); its tokens are their
+    bytes at the parent's bytes per token, and its re-sent tokens count every later request
+    that carried them.
+    """
+    reports = []
+    for child, agent_id, meta in runs:
+        tokens, resent, state = 0.0, 0.0, None
+        marks = (f'<agent-message from="{agent_id}"', f"<task-id>{agent_id}</task-id>")
+        for entry in entries:
+            kind = entry.get("type")
+            content = (entry.get("message") or {}).get("content")
+            result = kind == "user" and any(
+                block.get("tool_use_id") == meta.get("toolUseId")
+                for block in (content if isinstance(content, list) else [])
+            )
+            if result:
+                state = CLAUDE_STATES.get((entry.get("toolUseResult") or {}).get("status"))
+            text = claude_rendered(entry) if kind == "attachment" else ""
+            if kind == "user" and not result:
+                text = text_of(content)
+            if result or any(mark in text for mark in marks):
+                length = sum(
+                    n
+                    for name, n in claude_parts(entry, lookups)
+                    if not result or name.startswith("result:")
+                )
+                tokens += length / bytes_per_token
+                resent += length / bytes_per_token * uses[entry["uuid"]]
+        if state is None and meta.get("finished"):
+            state = "idle"
+        reports.append(
+            RunReport(
+                child=child,
+                agent=meta.get("agentType", "subagent"),
+                task=meta.get("description", ""),
+                state=state,
+                tokens=tokens,
+                resent=resent,
+            )
+        )
+    return reports
+
+
+def claude_session(path, entries, requests, uses, run, runs):
+    """A session; run, for a subagent, is its (parent session ID, meta), and runs are the
+    subagents the session started, for claude_reports.
+    """
     consumed = defaultdict(float)
     for request in requests:
         for parts in (request.parts, request.out):
@@ -1129,6 +1188,7 @@ def claude_session(path, entries, requests, child):
     counts, once = occurrences(
         (claude_parts(e, lookups) for e in entries), consumed, 0, bytes_per_token
     )
+    parent, meta = run or (None, {})
     stamps = [milliseconds(e["timestamp"]) for e in entries if "timestamp" in e]
     # A name you gave wins over Claude Code's generated title.
     given = [e["agentName"] for e in entries if e.get("type") == "agent-name"]
@@ -1137,9 +1197,9 @@ def claude_session(path, entries, requests, child):
     return Session(
         id=path.stem,
         harness="claude",
-        agent="main",
+        agent=meta.get("agentType", "subagent") if run else "main",
         cwd=next((e["cwd"] for e in entries if e.get("cwd")), ""),
-        child=child,
+        child=run is not None,
         requests=requests,
         last_prompt_time=max(
             (e["timestamp"] for e in entries if claude_prompt(e)),
@@ -1156,29 +1216,62 @@ def claude_session(path, entries, requests, child):
         waits=waits,
         start=min(stamps),
         end=max(stamps),
-        notes=0,
-        parent_messages=0,
+        # Claude Code's subagents have no notes, and messages to them are not marked.
+        notes=None,
+        parent_messages=None,
         counts=counts,
         material=sum(t for n, t in once.items() if n.startswith("result:")),
         bytes_per_token=bytes_per_token,
-        reports=[],
-        parent=None,
-        task="",
+        reports=claude_reports(entries, runs, bytes_per_token, uses, lookups),
+        parent=parent,
+        task=meta.get("description", ""),
         outcomes=Counter(),
         name=(given or titles or [None])[-1],
     )
 
 
 def claude_sessions():
-    """Every Claude Code session with requests."""
+    """Every Claude Code session with requests.
+
+    A subagent's transcript is <session>/subagents/agent-<ID>.jsonl beside its meta file, whose
+    toolUseId is the Agent call that started it, in the main transcript or another subagent's.
+    """
     paths = sorted(CLAUDE_DIR.glob("projects/*/*.jsonl"))
+    paths += sorted(CLAUDE_DIR.glob("projects/*/*/subagents/agent-*.jsonl"))
     files = [read_claude(path) for path in paths]
     rates = claude_rates(files)
+    # Agent call ID -> the session that made it.
+    callers = {
+        tool_id: path.stem
+        for path, entries in zip(paths, files, strict=True)
+        for tool_id, name in claude_lookups(entries)[0].items()
+        if name == CLAUDE_AGENT_TOOL
+    }
+    # Child session ID -> (parent session ID, meta); parent session ID -> its runs.
+    links, runs = {}, defaultdict(list)
+    for path in paths:
+        meta_path = path.with_suffix(".meta.json")
+        if path.parent.name != "subagents" or not meta_path.exists():
+            continue
+        meta = json.loads(meta_path.read_text())
+        parent = callers.get(meta.get("toolUseId"))
+        links[path.stem] = (parent, meta)
+        if parent:
+            runs[parent].append((path.stem, path.stem.removeprefix("agent-"), meta))
     sessions = []
     for path, entries in zip(paths, files, strict=True):
-        requests = list(claude_requests(entries, rates))
+        uses = Counter()
+        requests = list(claude_requests(entries, rates, uses))
         if requests:
-            sessions.append(claude_session(path, entries, requests, False))
+            child = path.parent.name == "subagents"
+            run = links.get(path.stem, (None, {})) if child else None
+            sessions.append(claude_session(path, entries, requests, uses, run, runs[path.stem]))
+    # How each run ended, as its parent recorded it.
+    by_id = {s.id: s for s in sessions}
+    for session in sessions:
+        for report in session.reports:
+            if report.child in by_id and report.state in OUTCOMES:
+                by_id[report.child].outcomes[report.state] += 1
     return sessions
 
 
@@ -1709,6 +1802,12 @@ def delegation_figures(row):
     ]
 
 
+def per_run(values, runs):
+    # The recorded values summed per run, "-" when the agent records none.
+    known = [v for v in values if v is not None]
+    return numstr(sum(known) / runs, 1) if known else "-"
+
+
 def efficiency_figures(items):
     # An agent type's runs: how much each returned token stands for, and how runs went.
     rows = [s.delegation for s in items if s.delegation]
@@ -1725,8 +1824,8 @@ def efficiency_figures(items):
         ("overhead", pct(statistics.mean(overheads)) if overheads else "-"),
         ("kept out/run", num(sum(kept) / runs) if kept else "-"),
         ("budget stops", pct(ends["budget"] / sum(ends.values())) if ends else "-"),
-        ("corrections/run", numstr(sum(r.corrections or 0 for r in rows) / runs, 1)),
-        ("notes/run", numstr(sum(r.notes or 0 for r in rows) / runs, 1)),
+        ("corrections/run", per_run([r.corrections for r in rows], runs)),
+        ("notes/run", per_run([r.notes for r in rows], runs)),
     ]
 
 
