@@ -1494,12 +1494,13 @@ def usage_rows(sessions):
     children add up to it.
 
     A model's sessions are the sessions you started that used it, directly or through their
-    subagent runs. Returns the headers and the rows of nested_table.
+    subagent runs. Rows are colored as in the donut. Returns the headers and the rows of
+    nested_table.
     """
     ids = count()
     rows = []
     size_total = sum(s.total_size for s in sessions) or 1
-    input_total = sum(s.input for s in sessions) or 1
+    colors = model_colors(usage_sizes(sessions))
 
     def add(parent, depth, branch, key, cells):
         node = next(ids)
@@ -1526,7 +1527,6 @@ def usage_rows(sessions):
                 num(sum(s.total_size for s in items)),
                 pct(sum(s.total_size for s in items) / size_total),
                 num(sum(s.input for s in items)),
-                pct(sum(s.input for s in items) / input_total),
                 cache_hit(items),
                 num(sum(r.output for r in requests)),
                 money(sum(s.cost for s in items)),
@@ -1546,7 +1546,7 @@ def usage_rows(sessions):
                 agent,
                 1,
                 False,
-                None,
+                colors[harness, model or "unknown"],
                 [
                     model or "unknown",
                     numstr(len(used[model])),
@@ -1554,7 +1554,6 @@ def usage_rows(sessions):
                     num(sum(r.added for r in group)),
                     pct(sum(r.added for r in group) / size_total),
                     num(sum(r.prompt for r in group)),
-                    pct(sum(r.prompt for r in group) / input_total),
                     cache_share(group),
                     num(sum(r.output for r in group)),
                     money(sum(r.cost for r in group)),
@@ -1564,11 +1563,10 @@ def usage_rows(sessions):
                 ],
             )
         if compacted := sum(c.cost for s in items for c in s.compactions):
-            cells = ["compaction runs", *["-"] * 8, money(compacted), "-", "-", "-"]
+            cells = ["compaction runs", *["-"] * 7, money(compacted), "-", "-", "-"]
             add(agent, 1, False, None, cells)
     headers = ["Agent"]
-    headers += ["Sessions", "Requests", "Size", "Size %", "Input", "Input %", "Cache"]
-    headers += ["Output", "Cost"]
+    headers += ["Sessions", "Requests", "Size", "Size %", "Input", "Cache", "Output", "Cost"]
     headers += ["Active", "Wait/turn", "Tok/s"]
     return headers, rows
 
@@ -2011,6 +2009,11 @@ def color(key):
     return f"#{store.theme['colors'][key]}"
 
 
+def paint(value):
+    # A theme color key, or a color already in hex.
+    return value if value.startswith("#") else color(value)
+
+
 def px(points):
     return points * 96 / 72
 
@@ -2031,9 +2034,11 @@ PLAIN_NUMBER = (
     "v => v.toLocaleString('tr-TR', {useGrouping: 'always', maximumFractionDigits: 3})"
 )
 DENSE_COLUMNS = 60
-# The usage donut's width and height, in pixels, and what it shows: "size" or "input".
+# The usage donut's width and height, in pixels.
 DONUT = 300
-DONUT_METRIC = "size"
+# Shades of an agent's color for its models in order: the share toward the foreground
+# (positive) or the background (negative).
+MODEL_SHADES = [0, 0.45, -0.45, 0.7, -0.7]
 BAR_GAP = "28%"
 
 
@@ -2200,42 +2205,60 @@ def bar_options(segments, xlabel, tokens=True, legend=False):
     }
 
 
-def usage_tokens(sessions, metric):
-    """Agent -> model -> tokens of metric (size or input), models by most requests; the
-    models of an agent add up to it.
-    """
-    tokens = {}
+def usage_sizes(sessions):
+    # Agent -> model -> size, models by most requests; the models of an agent add up to it.
+    sizes = {}
     for harness in HARNESSES:
         models, counts = defaultdict(float), Counter()
         for session in (s for s in sessions if s.harness == harness):
             for request in session.requests:
-                model = request.model or "unknown"
-                models[model] += request.added if metric == "size" else request.prompt
-                counts[model] += 1
+                models[request.model or "unknown"] += request.added
+                counts[request.model or "unknown"] += 1
         if counts:
-            tokens[harness] = {m: models[m] for m, _ in counts.most_common()}
-    return tokens
+            sizes[harness] = {m: models[m] for m, _ in counts.most_common()}
+    return sizes
+
+
+def mix(key, toward, share):
+    # A theme color moved share of the way to another theme color, as hex.
+    start, end = (store.theme["colors"][k] for k in (key, toward))
+    channels = (
+        round(int(start[i : i + 2], 16) * (1 - share) + int(end[i : i + 2], 16) * share)
+        for i in (0, 2, 4)
+    )
+    return "#" + "".join(f"{c:02x}" for c in channels)
+
+
+def model_colors(sizes):
+    """(agent, model) -> color: each model in its agent's color, the models after the first
+    in MODEL_SHADES, alternately lighter and darker so neighbors stand apart.
+    """
+    colors = {}
+    for harness, models in sizes.items():
+        key = HARNESS_COLORS[harness]
+        for i, model in enumerate(models):
+            share = MODEL_SHADES[i % len(MODEL_SHADES)]
+            colors[harness, model] = mix(key, "f" if share > 0 else "b", abs(share))
+    return colors
 
 
 def donut_options(sessions):
-    """DONUT_METRIC as two rings: agents inside, their models outside in the agent's color,
-    each lighter than the one before, separated by thin lines in the background color.
+    """Size as two rings: agents inside, their models outside in model_colors, separated by
+    thin lines in the background color.
     """
-    costs = usage_tokens(sessions, DONUT_METRIC)
+    sizes = usage_sizes(sessions)
+    colors = model_colors(sizes)
     edge = {"borderColor": color("b"), "borderWidth": 1}
     inner = [
         {"name": HARNESSES[h], "value": sum(m.values())}
         | {"itemStyle": {"color": color(HARNESS_COLORS[h])} | edge}
-        for h, m in costs.items()
+        for h, m in sizes.items()
     ]
     outer = [
-        {"name": f"{HARNESSES[h]} · {model}", "value": cost}
-        | {
-            "itemStyle": {"color": color(HARNESS_COLORS[h]), "opacity": max(0.3, 1 - i * 0.2)}
-            | edge
-        }
-        for h, models in costs.items()
-        for i, (model, cost) in enumerate(models.items())
+        {"name": f"{HARNESSES[h]} · {model}", "value": size}
+        | {"itemStyle": {"color": colors[h, model]} | edge}
+        for h, models in sizes.items()
+        for model, size in models.items()
     ]
     ring = {"type": "pie", "label": {"show": False}, "startAngle": 90}
     return {
@@ -2342,7 +2365,7 @@ def nested_table(headers, rows, opened=False):
                         "depth": row["depth"],
                         "branch": row["branch"],
                         "open": row["id"] in opened,
-                        "color": row["color"] and color(row["color"]),
+                        "color": row["color"] and paint(row["color"]),
                     }
                     | {f"c{i}": cell for i, cell in enumerate(row["cells"])}
                 )

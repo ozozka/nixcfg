@@ -13,11 +13,12 @@ session files again. A tree on the left opens each page, with its own URL:
 
 - The overview: totals of your usage, size per calendar day with moving averages (weight 1/12)
   of size, active hours, and your wait per turn, then a usage table that opens each agent to its
-  models (and Pi's compaction runs, which record no model), with each one's share of size and
-  input, beside a donut of size (or input, by `DONUT_METRIC` in `stats.py`) by agent (inside)
-  and model (outside). Below them, the average over the sessions you started, of both agents,
-  with subagent runs counted within their parents, and an agent types table of each subagent
-  type's efficiency (median compression, startup overhead, kept out, budget stops).
+  models (and Pi's compaction runs, which record no model), with each one's share of size,
+  beside a donut of size by agent (inside) and model (outside), each model in a shade of its
+  agent's color that the table's rows share. Below them, the average over the sessions you
+  started, of both agents, with subagent runs counted within their parents, and an agent types
+  table of each subagent type's efficiency (median compression, startup overhead, kept out,
+  budget stops).
 - Every session, of both agents, directly below the overview, captioned with its agent, size,
   and cost, ordered by latest user prompt, newest first, with the subagent runs it started
   nested in start-time order (oldest first), then a group of subagent runs whose parent is
